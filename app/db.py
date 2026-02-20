@@ -254,6 +254,13 @@ async def get_buffered_messages(
         return [dict(r) for r in rows]
 
 
+async def get_active_users() -> list[DbUser]:
+    db = get_db()
+    async with db.execute("SELECT * FROM users WHERE is_active = 1") as cur:
+        rows = await cur.fetchall()
+        return [dict(r) for r in rows]
+
+
 async def cleanup_old_messages(days: int = 7) -> int:
     db = get_db()
     cutoff = (datetime.now(UTC) - timedelta(days=days)).isoformat()
