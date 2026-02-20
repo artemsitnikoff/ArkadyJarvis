@@ -53,6 +53,8 @@ async def init_db() -> aiosqlite.Connection:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     _db = await aiosqlite.connect(str(db_path))
     _db.row_factory = aiosqlite.Row
+    await _db.execute("PRAGMA journal_mode=WAL")
+    await _db.execute("PRAGMA busy_timeout=5000")
     await _db.executescript(SCHEMA)
     await _db.commit()
     logger.info("Database initialized: %s", db_path)

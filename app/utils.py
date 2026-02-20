@@ -95,6 +95,62 @@ def parse_bitrix_dt(s: str) -> datetime:
     raise ValueError(f"Cannot parse Bitrix datetime: {s}")
 
 
+def md_to_telegram_html(text: str) -> str:
+    """Convert Markdown to Telegram-compatible HTML."""
+    import html as html_mod
+
+    lines = text.split("\n")
+    result: list[str] = []
+    in_code_block = False
+    code_lines: list[str] = []
+
+    for line in lines:
+        # Code block toggle
+        if line.strip().startswith("```"):
+            if in_code_block:
+                result.append("<pre>" + html_mod.escape("\n".join(code_lines)) + "</pre>")
+                code_lines = []
+                in_code_block = False
+            else:
+                in_code_block = True
+            continue
+
+        if in_code_block:
+            code_lines.append(line)
+            continue
+
+        # Headers → bold
+        header = re.match(r"^(#{1,6})\s+(.*)", line)
+        if header:
+            result.append(f"\n<b>{html_mod.escape(header.group(2))}</b>\n")
+            continue
+
+        # Escape HTML in normal lines first, then apply formatting
+        escaped = html_mod.escape(line)
+
+        # Inline code (before bold/italic to avoid conflicts)
+        escaped = re.sub(r"`([^`]+)`", r"<code>\1</code>", escaped)
+
+        # Bold **text** or __text__
+        escaped = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", escaped)
+        escaped = re.sub(r"__(.+?)__", r"<b>\1</b>", escaped)
+
+        # Italic *text* or _text_ (but not inside words like some_var_name)
+        escaped = re.sub(r"(?<!\w)\*([^*]+?)\*(?!\w)", r"<i>\1</i>", escaped)
+        escaped = re.sub(r"(?<!\w)_([^_]+?)_(?!\w)", r"<i>\1</i>", escaped)
+
+        # List markers
+        escaped = re.sub(r"^(\s*)[-*]\s", r"\1• ", escaped)
+
+        result.append(escaped)
+
+    # Close unclosed code block
+    if in_code_block and code_lines:
+        result.append("<pre>" + html_mod.escape("\n".join(code_lines)) + "</pre>")
+
+    return "\n".join(result).strip()
+
+
 def merge_intervals(intervals: list[tuple[datetime, datetime]]) -> list[tuple[datetime, datetime]]:
     """Merge overlapping/adjacent intervals. Returns sorted, non-overlapping list."""
     if not intervals:

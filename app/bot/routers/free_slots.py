@@ -8,7 +8,6 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 
 from app.bot.routers.start import MENU_KB
 from app.config import settings
-from app.services.bitrix_client import BitrixClient
 from app.utils import DAY_NAMES_RU, merge_intervals, parse_attendees, parse_bitrix_dt
 
 logger = logging.getLogger("arkadyjarvis")
@@ -110,7 +109,7 @@ def _compute_free_slots_for_day(
 # ── Handlers ──────────────────────────────────────────────────
 
 @router.message(F.text.regexp(r"(?i)^найди\s+время"))
-async def handle_find_time(message: Message, state: FSMContext, db_user: dict):
+async def handle_find_time(message: Message, state: FSMContext, db_user: dict, bitrix):
     text = message.text or ""
     logger.info("*** TRIGGER: 'найди время' in chat=%s from user=%s", message.chat.id, message.from_user.id)
     try:
@@ -118,8 +117,6 @@ async def handle_find_time(message: Message, state: FSMContext, db_user: dict):
         if not nicknames:
             await message.reply("Укажи участников: Найди время @nick1 @nick2")
             return
-
-        bitrix = BitrixClient.get()
 
         user_ids: list[int] = []
         user_names: list[str] = []
@@ -230,7 +227,7 @@ async def handle_slot_selected(callback: CallbackQuery, state: FSMContext):
 
 
 @router.message(BookSlot.waiting_for_topic)
-async def handle_topic_input(message: Message, state: FSMContext, db_user: dict):
+async def handle_topic_input(message: Message, state: FSMContext, db_user: dict, bitrix):
     topic = (message.text or "").strip()
     if not topic:
         await message.reply("Напиши тему встречи текстом")
@@ -244,7 +241,6 @@ async def handle_topic_input(message: Message, state: FSMContext, db_user: dict)
     label = data.get("slot_label", "")
 
     try:
-        bitrix = BitrixClient.get()
         owner_user_id = db_user["bitrix_user_id"]
 
         result = await bitrix.create_meeting(

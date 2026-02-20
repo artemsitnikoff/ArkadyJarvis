@@ -2,17 +2,18 @@ import logging
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
+from aiogram import Bot
+
 from app import db
 from app.config import settings
+from app.services.ai_client import AIClient
 from app.summarizer import build_daily_overview, summarize_messages
 
 logger = logging.getLogger("arkadyjarvis")
 
 
-async def daily_summary_job():
+async def daily_summary_job(bot: Bot, ai_client: AIClient):
     """Summarize each group chat and send the result to the group."""
-    from app.main import bot
-
     tz = ZoneInfo(settings.timezone)
     start_of_day = datetime.now(tz).replace(hour=0, minute=0, second=0, microsecond=0)
 
@@ -32,7 +33,7 @@ async def daily_summary_job():
                 logger.info("=== No messages today in %s", chat_title)
                 continue
 
-            summary = await summarize_messages(msgs)
+            summary = await summarize_messages(msgs, ai_client=ai_client)
             await bot.send_message(chat_id, f"#summary\n📋 <b>{chat_title}</b>\n\n{summary}")
             chat_summaries.append((chat_title, summary))
             logger.info("=== Summarized group: %s (%d messages)", chat_title, len(msgs))
@@ -42,7 +43,7 @@ async def daily_summary_job():
     # Daily overview if multiple groups
     if len(chat_summaries) > 1:
         try:
-            overview = await build_daily_overview(chat_summaries)
+            overview = await build_daily_overview(chat_summaries, ai_client=ai_client)
             # Send overview to all groups
             for group in groups:
                 try:

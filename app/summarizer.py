@@ -1,8 +1,12 @@
+from __future__ import annotations
+
 import logging
 import re
 from datetime import datetime
+from typing import TYPE_CHECKING
 
-from app.services.ai_client import AIClient
+if TYPE_CHECKING:
+    from app.services.ai_client import AIClient
 
 logger = logging.getLogger("arkadyjarvis")
 
@@ -54,15 +58,28 @@ def _format_messages(msgs: list[dict]) -> str:
     )
 
 
-async def summarize_messages(msgs: list[dict], max_tokens: int = 1024) -> str:
+MAX_INPUT_CHARS = 100_000  # ~25K tokens, safe for GPT context window
+
+
+async def summarize_messages(
+    msgs: list[dict], *, ai_client: AIClient, max_tokens: int = 1024,
+) -> str:
     """Run GPT summarization on a list of message dicts."""
     conversation = _format_messages(msgs)
-    ai = AIClient.get()
-    result = await ai.complete(TASK_SUMMARY_PROMPT + conversation, max_tokens=max_tokens)
+    if len(conversation) > MAX_INPUT_CHARS:
+        conversation = conversation[-MAX_INPUT_CHARS:]
+        # Trim to nearest complete message line
+        nl = conversation.find("\n")
+        if nl != -1:
+            conversation = conversation[nl + 1:]
+        logger.warning("Truncated conversation to %d chars for summarization", len(conversation))
+    result = await ai_client.complete(TASK_SUMMARY_PROMPT + conversation, max_tokens=max_tokens)
     return clean_html_for_telegram(result)
 
 
-async def summarize_from_buffer(chat_id: int, since: datetime | None = None) -> str:
+async def summarize_from_buffer(
+    chat_id: int, *, ai_client: AIClient, since: datetime | None = None,
+) -> str:
     """Summarize messages from the SQLite buffer."""
     from app import db
 
@@ -71,12 +88,14 @@ async def summarize_from_buffer(chat_id: int, since: datetime | None = None) -> 
         return "Нет сообщений для суммаризации."
 
     logger.info(">>> SUMMARIZE: chat=%s, messages=%d", chat_id, len(msgs))
-    result = await summarize_messages(msgs)
+    result = await summarize_messages(msgs, ai_client=ai_client)
     logger.info("<<< SUMMARIZE RESPONSE:\n%s", result)
     return result
 
 
-async def build_daily_overview(chat_summaries: list[tuple[str, str]]) -> str:
+async def build_daily_overview(
+    chat_summaries: list[tuple[str, str]], *, ai_client: AIClient,
+) -> str:
     parts = []
     for name, summary in chat_summaries:
         short = summary[:500] + "..." if len(summary) > 500 else summary
@@ -85,8 +104,7 @@ async def build_daily_overview(chat_summaries: list[tuple[str, str]]) -> str:
     full_text = "\n\n".join(parts)
     logger.info(">>> DAILY OVERVIEW: %d chats, input length: %d chars", len(chat_summaries), len(full_text))
 
-    ai = AIClient.get()
-    result = await ai.complete(DAILY_OVERVIEW_PROMPT + full_text, max_tokens=1500)
+    result = await ai_client.complete(DAILY_OVERVIEW_PROMPT + full_text, max_tokens=1500)
     result = clean_html_for_telegram(result)
     logger.info("<<< DAILY OVERVIEW RESPONSE:\n%s", result)
     return result

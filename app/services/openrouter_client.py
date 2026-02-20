@@ -12,9 +12,7 @@ BASE_URL = "https://openrouter.ai/api/v1/chat/completions"
 
 
 class OpenRouterClient:
-    """Singleton OpenRouter client for image generation and Opus queries."""
-
-    _instance: "OpenRouterClient | None" = None
+    """OpenRouter client for image generation and Opus queries."""
 
     def __init__(self):
         self._client = httpx.AsyncClient(
@@ -24,12 +22,6 @@ class OpenRouterClient:
                 "Content-Type": "application/json",
             },
         )
-
-    @classmethod
-    def get(cls) -> "OpenRouterClient":
-        if cls._instance is None:
-            cls._instance = cls()
-        return cls._instance
 
     async def close(self):
         await self._client.aclose()

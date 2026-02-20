@@ -12,7 +12,7 @@ router = Router()
 
 @router.message(Command("summary"))
 @router.message(F.text.lower() == "суммаризация")
-async def handle_summarize(message: Message):
+async def handle_summarize(message: Message, ai_client):
     chat_id = message.chat.id
     logger.info("*** TRIGGER: суммаризация in chat=%s from user=%s", chat_id, message.from_user.id)
     try:
@@ -23,7 +23,7 @@ async def handle_summarize(message: Message):
 
         tz = ZoneInfo(settings.timezone)
         start_of_day = datetime.now(tz).replace(hour=0, minute=0, second=0, microsecond=0)
-        summary = await summarize_from_buffer(chat_id, since=start_of_day)
+        summary = await summarize_from_buffer(chat_id, ai_client=ai_client, since=start_of_day)
         await message.reply(f"📊 #summary\n\n{summary}", reply_markup=MENU_KB)
         logger.info("*** SENT summary reply to chat=%s", chat_id)
     except Exception as e:

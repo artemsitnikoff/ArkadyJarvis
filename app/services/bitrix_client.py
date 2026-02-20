@@ -17,21 +17,13 @@ OAUTH_URL = "https://oauth.bitrix24.tech/oauth/token"
 
 
 class BitrixClient:
-    """Singleton Bitrix24 client with shared token (like SmartSummary)."""
-
-    _instance: "BitrixClient | None" = None
+    """Bitrix24 client with shared token."""
 
     def __init__(self):
         self._http = httpx.AsyncClient()
         self._token_lock = asyncio.Lock()
         self._email_guests_cache: dict[str, tuple[int, str]] = {}
         self._email_guests_loaded = False
-
-    @classmethod
-    def get(cls) -> "BitrixClient":
-        if cls._instance is None:
-            cls._instance = cls()
-        return cls._instance
 
     async def close(self):
         await self._http.aclose()

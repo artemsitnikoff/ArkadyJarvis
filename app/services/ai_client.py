@@ -8,18 +8,10 @@ logger = logging.getLogger("arkadyjarvis")
 
 
 class AIClient:
-    """Singleton OpenAI client wrapper."""
-
-    _instance: "AIClient | None" = None
+    """OpenAI client wrapper."""
 
     def __init__(self):
         self._client = AsyncOpenAI(api_key=settings.openai_api_key.get_secret_value())
-
-    @classmethod
-    def get(cls) -> "AIClient":
-        if cls._instance is None:
-            cls._instance = cls()
-        return cls._instance
 
     async def complete(
         self, prompt: str, max_tokens: int = 1024, temperature: float = 1.0
@@ -42,6 +34,9 @@ class AIClient:
             messages=messages,
         )
         return response.choices[0].message.content.strip()
+
+    async def close(self):
+        await self._client.close()
 
     @property
     def raw(self) -> AsyncOpenAI:

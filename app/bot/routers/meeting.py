@@ -5,7 +5,6 @@ from aiogram.types import Message
 
 from app.bot.routers.start import MENU_KB
 from app.config import settings
-from app.services.bitrix_client import BitrixClient
 from app.utils import parse_attendees, parse_meeting_time
 
 logger = logging.getLogger("arkadyjarvis")
@@ -13,7 +12,7 @@ router = Router()
 
 
 @router.message(F.text.regexp(r"(?i)^(сделай|создай)\s+встречу"))
-async def handle_create_meeting(message: Message, db_user: dict):
+async def handle_create_meeting(message: Message, db_user: dict, bitrix):
     text = message.text or ""
     logger.info("*** TRIGGER: 'сделай встречу' in chat=%s from user=%s", message.chat.id, message.from_user.id)
     try:
@@ -27,7 +26,6 @@ async def handle_create_meeting(message: Message, db_user: dict):
             context = message.reply_to_message.text
 
         nicknames, emails = parse_attendees(text)
-        bitrix = BitrixClient.get()
 
         attendee_ids: list[int] = []
         found_names: list[str] = []

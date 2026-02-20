@@ -11,6 +11,10 @@ from app.bot.create import create_bot, create_dispatcher
 from app.bot.middlewares import AuthMiddleware
 from app.config import settings
 from app.db import close_db, init_db
+from app.scheduler.jobs import daily_summary_job
+from app.services.ai_client import AIClient
+from app.services.bitrix_client import BitrixClient
+from app.services.openrouter_client import OpenRouterClient
 
 logging.basicConfig(
     level=logging.INFO,
@@ -30,6 +34,15 @@ async def lifespan(app: FastAPI):
     await init_db()
     logger.info("Database ready")
 
+    # Create service instances and inject into dispatcher
+    ai_client = AIClient()
+    bitrix = BitrixClient()
+    openrouter = OpenRouterClient()
+
+    dp["ai_client"] = ai_client
+    dp["bitrix"] = bitrix
+    dp["openrouter"] = openrouter
+
     # Register auth middleware on the dispatcher
     dp.message.outer_middleware(AuthMiddleware())
 
@@ -39,9 +52,7 @@ async def lifespan(app: FastAPI):
     )
     logger.info("Bot polling started")
 
-    # Start scheduler
-    from app.scheduler.jobs import daily_summary_job
-
+    # Start scheduler — pass bot and ai_client via args (no circular import)
     scheduler.add_job(
         daily_summary_job,
         CronTrigger(
@@ -50,6 +61,7 @@ async def lifespan(app: FastAPI):
             timezone=settings.timezone,
         ),
         id="daily_summary",
+        args=[bot, ai_client],
     )
     scheduler.start()
     logger.info(
@@ -69,8 +81,9 @@ async def lifespan(app: FastAPI):
     except asyncio.CancelledError:
         pass
     await bot.session.close()
-    from app.services.bitrix_client import BitrixClient
-    await BitrixClient.get().close()
+    await ai_client.close()
+    await bitrix.close()
+    await openrouter.close()
     await close_db()
     logger.info("Shutdown complete")
 

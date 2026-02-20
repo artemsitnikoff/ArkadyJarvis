@@ -4,7 +4,6 @@ import random
 from aiogram import F, Router
 from aiogram.types import Message
 
-from app.services.ai_client import AIClient
 from app.utils import strip_numbered_item
 
 logger = logging.getLogger("arkadyjarvis")
@@ -28,12 +27,11 @@ def _pick_one(text: str) -> str:
     return strip_numbered_item(random.choice(lines))
 
 
-@router.message(F.text.func(lambda t: "ситников" in t.lower()))
-async def handle_sitnikov(message: Message):
+@router.message(F.text, F.text.func(lambda t: "ситников" in t.lower()))
+async def handle_sitnikov(message: Message, ai_client):
     logger.info("*** TRIGGER: 'ситников' in chat=%s from user=%s", message.chat.id, message.from_user.id)
     try:
-        ai = AIClient.get()
-        text = await ai.complete(SENECA_PROMPT, max_tokens=500, temperature=1.2)
+        text = await ai_client.complete(SENECA_PROMPT, max_tokens=500, temperature=1.2)
         quote = _pick_one(text)
         await message.reply(quote)
     except Exception as e:

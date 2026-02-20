@@ -7,8 +7,6 @@ from aiogram.types import Message
 
 from app.bot.routers.start import MENU_KB
 from app.config import settings
-from app.services.ai_client import AIClient
-from app.services.bitrix_client import BitrixClient
 
 logger = logging.getLogger("arkadyjarvis")
 router = Router()
@@ -32,7 +30,7 @@ EXTRACT_PROMPT = """\
 
 
 @router.message(F.text.regexp(r"(?i)^(сделай|создай)\s+лид"))
-async def handle_create_lead(message: Message):
+async def handle_create_lead(message: Message, ai_client, bitrix):
     text = message.text or ""
     logger.info("*** TRIGGER: 'создай лид' in chat=%s from user=%s", message.chat.id, message.from_user.id)
 
@@ -48,8 +46,7 @@ async def handle_create_lead(message: Message):
             await message.reply("Напиши данные лида или реплайни на сообщение с информацией.")
             return
 
-        ai = AIClient.get()
-        raw = await ai.complete(EXTRACT_PROMPT.format(text=combined), max_tokens=512, temperature=0.2)
+        raw = await ai_client.complete(EXTRACT_PROMPT.format(text=combined), max_tokens=512, temperature=0.2)
 
         raw = re.sub(r"^```(?:json)?\s*", "", raw.strip())
         raw = re.sub(r"\s*```$", "", raw)
@@ -71,7 +68,6 @@ async def handle_create_lead(message: Message):
         if parsed.get("COMMENTS"):
             fields["COMMENTS"] = parsed["COMMENTS"]
 
-        bitrix = BitrixClient.get()
         result = await bitrix.create_lead(fields)
 
         lead_id = result.get("id", "?")
