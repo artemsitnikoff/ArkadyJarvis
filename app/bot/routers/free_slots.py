@@ -1,6 +1,7 @@
 import asyncio
 import logging
 from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
@@ -140,7 +141,7 @@ async def handle_find_time(message: Message, state: FSMContext, db_user: DbUser,
         await message.reply(msg)
         return
 
-    today = datetime.now().date()
+    today = datetime.now(ZoneInfo(settings.timezone)).date()
     work_days: list[date] = []
     d = today
     while len(work_days) < 5:
@@ -203,7 +204,7 @@ async def handle_slot_selected(callback: CallbackQuery, state: FSMContext):
 
     _, day_str, start_str, end_str = parts
     data = await state.get_data()
-    year = data.get("year", datetime.now().year)
+    year = data.get("year", datetime.now(ZoneInfo(settings.timezone)).year)
 
     day = int(day_str[:2])
     month = int(day_str[2:])

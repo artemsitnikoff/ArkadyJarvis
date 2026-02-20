@@ -1,5 +1,8 @@
 import re
 from datetime import datetime
+from zoneinfo import ZoneInfo
+
+from app.config import settings
 
 MONTHS_RU = {
     "января": 1, "февраля": 2, "марта": 3, "апреля": 4,
@@ -42,7 +45,7 @@ def parse_meeting_time(text: str) -> tuple[datetime | None, str | None]:
     if not (0 <= hour <= 23 and 0 <= minute <= 59):
         return None, f"Некорректное время: {hour:02d}{minute:02d}"
 
-    now = datetime.now()
+    now = datetime.now(ZoneInfo(settings.timezone)).replace(tzinfo=None)
     date_match = re.search(
         r"(\d{1,2})\s+(" + "|".join(MONTHS_RU.keys()) + r")",
         body.lower(),

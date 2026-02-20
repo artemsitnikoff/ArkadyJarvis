@@ -1,5 +1,6 @@
 import logging
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from app.config import settings
 
@@ -65,7 +66,7 @@ class _BitrixCalendarMixin:
 
     async def get_user_events(self, user_id: int) -> list[dict]:
         """Fetch user's calendar events for today."""
-        now = datetime.now()
+        now = datetime.now(ZoneInfo(settings.timezone))
         date_from = now.strftime("%Y-%m-%dT%H:%M:%S")
         date_to = now.replace(hour=23, minute=59, second=59).strftime("%Y-%m-%dT%H:%M:%S")
 

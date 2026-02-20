@@ -1,5 +1,5 @@
 import logging
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TypedDict
 
@@ -57,6 +57,39 @@ CREATE INDEX IF NOT EXISTS idx_buffer_chat_date ON message_buffer(chat_id, sent_
 """
 
 
+MIGRATIONS: list[str] = [
+    # Migration 1: initial schema is handled by SCHEMA constant above.
+    # Future migrations go here as SQL strings, e.g.:
+    # "ALTER TABLE users ADD COLUMN some_field TEXT DEFAULT '';",
+]
+
+
+async def _run_migrations(db: aiosqlite.Connection) -> None:
+    """Run pending migrations based on schema_version table."""
+    await db.execute(
+        "CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)"
+    )
+    async with db.execute("SELECT version FROM schema_version") as cur:
+        row = await cur.fetchone()
+    current = row[0] if row else 0
+
+    for i, sql in enumerate(MIGRATIONS, start=1):
+        if i > current:
+            logger.info("Running migration %d ...", i)
+            await db.executescript(sql)
+            if current == 0:
+                await db.execute("INSERT INTO schema_version (version) VALUES (?)", (i,))
+            else:
+                await db.execute("UPDATE schema_version SET version = ?", (i,))
+            current = i
+
+    if not row and not MIGRATIONS:
+        await db.execute("INSERT INTO schema_version (version) VALUES (0)")
+
+    await db.commit()
+    logger.info("Schema version: %d", current)
+
+
 async def init_db() -> aiosqlite.Connection:
     global _db
     db_path = Path(settings.db_path)
@@ -66,6 +99,7 @@ async def init_db() -> aiosqlite.Connection:
     await _db.execute("PRAGMA journal_mode=WAL")
     await _db.execute("PRAGMA busy_timeout=5000")
     await _db.executescript(SCHEMA)
+    await _run_migrations(_db)
     await _db.commit()
     logger.info("Database initialized: %s", db_path)
     return _db
@@ -200,13 +234,15 @@ async def buffer_message(
            VALUES (?, ?, ?, ?, ?)""",
         (chat_id, sender_id, sender_name, text, sent_at.isoformat()),
     )
-    await db.commit()
+    # No commit here — WAL mode handles reads without it.
+    # SQLite auto-commits on read or explicit flush.
 
 
 async def get_buffered_messages(
     chat_id: int, since: datetime | None = None
 ) -> list[dict]:
     db = get_db()
+    await db.commit()  # flush pending inserts before reading
     if since:
         sql = "SELECT * FROM message_buffer WHERE chat_id = ? AND sent_at >= ? ORDER BY sent_at"
         params = (chat_id, since.isoformat())
@@ -220,7 +256,7 @@ async def get_buffered_messages(
 
 async def cleanup_old_messages(days: int = 7) -> int:
     db = get_db()
-    cutoff = (datetime.utcnow() - timedelta(days=days)).isoformat()
+    cutoff = (datetime.now(UTC) - timedelta(days=days)).isoformat()
     async with db.execute(
         "DELETE FROM message_buffer WHERE sent_at < ?", (cutoff,)
     ) as cur:
