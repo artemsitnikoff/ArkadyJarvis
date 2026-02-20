@@ -13,7 +13,7 @@ class AIClient:
     _instance: "AIClient | None" = None
 
     def __init__(self):
-        self._client = AsyncOpenAI(api_key=settings.openai_api_key)
+        self._client = AsyncOpenAI(api_key=settings.openai_api_key.get_secret_value())
 
     @classmethod
     def get(cls) -> "AIClient":

@@ -39,12 +39,17 @@ async def jira_username(message: Message, state: FSMContext):
 
 @router.message(StateFilter(JiraSetup.password))
 async def jira_password(message: Message, state: FSMContext):
+    password = message.text.strip()
+    try:
+        await message.delete()
+    except Exception:
+        logger.warning("Could not delete password message for user %s", message.from_user.id)
     data = await state.get_data()
     await db.save_jira_credentials(
         telegram_id=message.from_user.id,
         jira_url=settings.jira_url,
         jira_username=data["jira_username"],
-        jira_password=message.text.strip(),
+        jira_password=password,
     )
     await state.clear()
     await message.answer("Jira настроена! Теперь можешь создавать задачи.")

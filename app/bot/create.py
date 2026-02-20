@@ -7,7 +7,7 @@ from app.config import settings
 
 def create_bot() -> Bot:
     return Bot(
-        token=settings.bot_token,
+        token=settings.bot_token.get_secret_value(),
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
 
@@ -23,6 +23,8 @@ def create_dispatcher() -> Dispatcher:
     from app.bot.routers.free_slots import router as free_slots_router
     from app.bot.routers.jira_task import router as jira_task_router
     from app.bot.routers.lead import router as lead_router
+    from app.bot.routers.image import router as image_router
+    from app.bot.routers.ask_ai import router as ask_ai_router
     from app.bot.routers.auto_reply import router as auto_reply_router
     from app.bot.routers.group import router as group_router
     from app.bot.routers.buffer import router as buffer_router
@@ -35,6 +37,8 @@ def create_dispatcher() -> Dispatcher:
         free_slots_router,
         jira_task_router,
         lead_router,
+        image_router,
+        ask_ai_router,
         auto_reply_router,
         group_router,
         buffer_router,  # catch-all — must be last

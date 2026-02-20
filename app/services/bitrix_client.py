@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import re
@@ -22,6 +23,7 @@ class BitrixClient:
 
     def __init__(self):
         self._http = httpx.AsyncClient()
+        self._token_lock = asyncio.Lock()
         self._email_guests_cache: dict[str, tuple[int, str]] = {}
         self._email_guests_loaded = False
 
@@ -62,7 +64,7 @@ class BitrixClient:
             params={
                 "grant_type": "refresh_token",
                 "client_id": settings.bitrix_client_id,
-                "client_secret": settings.bitrix_client_secret,
+                "client_secret": settings.bitrix_client_secret.get_secret_value(),
                 "refresh_token": refresh_token,
             },
         )
@@ -78,19 +80,20 @@ class BitrixClient:
         return self._load_tokens()
 
     async def _get_tokens(self) -> dict:
-        tokens = self._load_tokens()
+        async with self._token_lock:
+            tokens = self._load_tokens()
 
-        if tokens is None:
-            if not settings.bitrix_refresh_token:
-                raise RuntimeError("BITRIX_REFRESH_TOKEN не задан в .env")
-            logger.info("Bitrix: first run, refreshing from .env token...")
-            return await self._refresh_access_token(settings.bitrix_refresh_token)
+            if tokens is None:
+                if not settings.bitrix_refresh_token:
+                    raise RuntimeError("BITRIX_REFRESH_TOKEN не задан в .env")
+                logger.info("Bitrix: first run, refreshing from .env token...")
+                return await self._refresh_access_token(settings.bitrix_refresh_token)
 
-        if time.time() < tokens["expires_at"] - 60:
-            return tokens
+            if time.time() < tokens["expires_at"] - 60:
+                return tokens
 
-        logger.info("Bitrix access_token expired, refreshing...")
-        return await self._refresh_access_token(tokens["refresh_token"])
+            logger.info("Bitrix access_token expired, refreshing...")
+            return await self._refresh_access_token(tokens["refresh_token"])
 
     async def _request(self, method: str, params: dict | None = None) -> dict:
         tokens = await self._get_tokens()
@@ -245,6 +248,37 @@ class BitrixClient:
             event_id, title, date_from, attendee_ids,
         )
         return {"status": "ok", "id": event_id, "user_id": owner_user_id}
+
+    async def get_user_events(self, user_id: int) -> list[dict]:
+        """Fetch user's calendar events for today."""
+        now = datetime.now()
+        date_from = now.strftime("%Y-%m-%dT%H:%M:%S")
+        date_to = now.replace(hour=23, minute=59, second=59).strftime("%Y-%m-%dT%H:%M:%S")
+
+        result = await self._request("calendar.event.get", {
+            "type": "user",
+            "ownerId": user_id,
+            "from": date_from,
+            "to": date_to,
+        })
+        events = result.get("result", [])
+
+        # Filter: only future, not deleted
+        filtered = []
+        for ev in events:
+            if ev.get("DELETED") == "Y":
+                continue
+            filtered.append({
+                "id": ev["ID"],
+                "name": ev.get("NAME", ""),
+                "date_from": ev.get("DATE_FROM", ""),
+                "date_to": ev.get("DATE_TO", ""),
+                "owner_id": ev.get("OWNER_ID"),
+            })
+
+        # Sort by date_from
+        filtered.sort(key=lambda e: e["date_from"])
+        return filtered
 
     async def create_lead(self, fields: dict) -> dict:
         result = await self._request("crm.lead.add", {"fields": fields})
