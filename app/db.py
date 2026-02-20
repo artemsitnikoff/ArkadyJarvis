@@ -1,10 +1,20 @@
 import logging
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import TypedDict
 
 import aiosqlite
 
 from app.config import settings
+
+
+class DbUser(TypedDict):
+    telegram_id: int
+    bitrix_user_id: int
+    bitrix_domain: str | None
+    display_name: str | None
+    is_active: int
+    created_at: str
 
 logger = logging.getLogger("arkadyjarvis")
 
@@ -94,7 +104,7 @@ async def upsert_user(
     await db.commit()
 
 
-async def get_user(telegram_id: int) -> dict | None:
+async def get_user(telegram_id: int) -> DbUser | None:
     db = get_db()
     async with db.execute(
         "SELECT * FROM users WHERE telegram_id = ?", (telegram_id,)

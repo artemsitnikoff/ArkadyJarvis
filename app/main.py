@@ -8,7 +8,7 @@ from fastapi import FastAPI
 
 from app.api.routes import router as api_router
 from app.bot.create import create_bot, create_dispatcher
-from app.bot.middlewares import AuthMiddleware
+from app.bot.middlewares import AuthMiddleware, ErrorMiddleware
 from app.config import settings
 from app.db import close_db, init_db
 from app.scheduler.jobs import daily_summary_job
@@ -43,7 +43,8 @@ async def lifespan(app: FastAPI):
     dp["bitrix"] = bitrix
     dp["openrouter"] = openrouter
 
-    # Register auth middleware on the dispatcher
+    # Register middlewares on the dispatcher (order: error wraps auth wraps handler)
+    dp.message.outer_middleware(ErrorMiddleware())
     dp.message.outer_middleware(AuthMiddleware())
 
     # Start aiogram polling as a background task

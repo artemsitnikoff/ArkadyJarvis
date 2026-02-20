@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from datetime import date, datetime, timedelta
 
@@ -8,6 +9,7 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 
 from app.bot.routers.start import MENU_KB
 from app.config import settings
+from app.db import DbUser
 from app.utils import DAY_NAMES_RU, merge_intervals, parse_attendees, parse_bitrix_dt
 
 logger = logging.getLogger("arkadyjarvis")
@@ -109,82 +111,81 @@ def _compute_free_slots_for_day(
 # ── Handlers ──────────────────────────────────────────────────
 
 @router.message(F.text.regexp(r"(?i)^найди\s+время"))
-async def handle_find_time(message: Message, state: FSMContext, db_user: dict, bitrix):
+async def handle_find_time(message: Message, state: FSMContext, db_user: DbUser, bitrix):
     text = message.text or ""
     logger.info("*** TRIGGER: 'найди время' in chat=%s from user=%s", message.chat.id, message.from_user.id)
-    try:
-        nicknames, _ = parse_attendees(text)
-        if not nicknames:
-            await message.reply("Укажи участников: Найди время @nick1 @nick2")
-            return
 
-        user_ids: list[int] = []
-        user_names: list[str] = []
-        not_found: list[str] = []
-        for nick in nicknames:
-            uid, full_name = await bitrix.find_user_by_nickname(nick)
-            if uid:
-                user_ids.append(uid)
-                user_names.append(f"@{nick}")
-            else:
-                not_found.append(f"@{nick}")
+    nicknames, _ = parse_attendees(text)
+    if not nicknames:
+        await message.reply("Укажи участников: Найди время @nick1 @nick2")
+        return
 
-        if not user_ids:
-            msg = "❌ Никого не удалось найти в Bitrix"
-            if not_found:
-                msg += f"\n⚠️ Не найден: {', '.join(not_found)}"
-            await message.reply(msg)
-            return
-
-        today = datetime.now().date()
-        work_days: list[date] = []
-        d = today
-        while len(work_days) < 5:
-            if d.weekday() < 5:
-                work_days.append(d)
-            d += timedelta(days=1)
-
-        date_from = work_days[0].strftime("%Y-%m-%d")
-        date_to = work_days[-1].strftime("%Y-%m-%d")
-
-        accessibility = await bitrix.get_users_accessibility(user_ids, date_from, date_to)
-
-        # Build text message + collect chunks for keyboard
-        lines: list[str] = []
-        lines.append(f"📅 Свободные слоты для {', '.join(user_names)}:")
-        if not_found:
-            lines.append(f"⚠️ Не найден: {', '.join(not_found)}")
-        lines.append("")
-
-        days_with_chunks: list[tuple[date, list[tuple[datetime, datetime]]]] = []
-
-        for day in work_days:
-            free_slots = _compute_free_slots_for_day(day, user_ids, accessibility)
-            chunks = split_into_hourly_chunks(free_slots)
-            days_with_chunks.append((day, chunks))
-
-        has_any_chunks = any(chunks for _, chunks in days_with_chunks)
-        if not has_any_chunks:
-            lines.append("Свободных слотов не найдено")
-            await message.reply("\n".join(lines).rstrip())
+    user_ids: list[int] = []
+    user_names: list[str] = []
+    not_found: list[str] = []
+    nick_results = await asyncio.gather(
+        *(bitrix.find_user_by_nickname(nick) for nick in nicknames)
+    )
+    for nick, (uid, full_name) in zip(nicknames, nick_results):
+        if uid:
+            user_ids.append(uid)
+            user_names.append(f"@{nick}")
         else:
-            keyboard = build_slot_keyboard(days_with_chunks)
-            header = "\n".join(lines).rstrip()
-            await message.reply(
-                f"{header}\n\nНажми на слот — создам встречу:",
-                reply_markup=keyboard,
-            )
-            await state.update_data(
-                attendee_ids=user_ids,
-                attendee_names=user_names,
-                year=work_days[0].year,
-            )
-            await state.set_state(BookSlot.waiting_for_slot)
+            not_found.append(f"@{nick}")
 
-        logger.info("*** SENT free slots for %s", user_names)
-    except Exception as e:
-        logger.error("*** ERROR finding free time: %s", e, exc_info=True)
-        await message.reply(f"❌ Не удалось найти свободное время: {e}")
+    if not user_ids:
+        msg = "❌ Никого не удалось найти в Bitrix"
+        if not_found:
+            msg += f"\n⚠️ Не найден: {', '.join(not_found)}"
+        await message.reply(msg)
+        return
+
+    today = datetime.now().date()
+    work_days: list[date] = []
+    d = today
+    while len(work_days) < 5:
+        if d.weekday() < 5:
+            work_days.append(d)
+        d += timedelta(days=1)
+
+    date_from = work_days[0].strftime("%Y-%m-%d")
+    date_to = work_days[-1].strftime("%Y-%m-%d")
+
+    accessibility = await bitrix.get_users_accessibility(user_ids, date_from, date_to)
+
+    # Build text message + collect chunks for keyboard
+    lines: list[str] = []
+    lines.append(f"📅 Свободные слоты для {', '.join(user_names)}:")
+    if not_found:
+        lines.append(f"⚠️ Не найден: {', '.join(not_found)}")
+    lines.append("")
+
+    days_with_chunks: list[tuple[date, list[tuple[datetime, datetime]]]] = []
+
+    for day in work_days:
+        free_slots = _compute_free_slots_for_day(day, user_ids, accessibility)
+        chunks = split_into_hourly_chunks(free_slots)
+        days_with_chunks.append((day, chunks))
+
+    has_any_chunks = any(chunks for _, chunks in days_with_chunks)
+    if not has_any_chunks:
+        lines.append("Свободных слотов не найдено")
+        await message.reply("\n".join(lines).rstrip())
+    else:
+        keyboard = build_slot_keyboard(days_with_chunks)
+        header = "\n".join(lines).rstrip()
+        await message.reply(
+            f"{header}\n\nНажми на слот — создам встречу:",
+            reply_markup=keyboard,
+        )
+        await state.update_data(
+            attendee_ids=user_ids,
+            attendee_names=user_names,
+            year=work_days[0].year,
+        )
+        await state.set_state(BookSlot.waiting_for_slot)
+
+    logger.info("*** SENT free slots for %s", user_names)
 
 
 @router.callback_query(F.data.startswith("day:"))
@@ -227,7 +228,7 @@ async def handle_slot_selected(callback: CallbackQuery, state: FSMContext):
 
 
 @router.message(BookSlot.waiting_for_topic)
-async def handle_topic_input(message: Message, state: FSMContext, db_user: dict, bitrix):
+async def handle_topic_input(message: Message, state: FSMContext, db_user: DbUser, bitrix):
     topic = (message.text or "").strip()
     if not topic:
         await message.reply("Напиши тему встречи текстом")
@@ -240,30 +241,25 @@ async def handle_topic_input(message: Message, state: FSMContext, db_user: dict,
     attendee_names = data.get("attendee_names", [])
     label = data.get("slot_label", "")
 
-    try:
-        owner_user_id = db_user["bitrix_user_id"]
+    owner_user_id = db_user["bitrix_user_id"]
 
-        result = await bitrix.create_meeting(
-            title=topic,
-            date=slot_start,
-            owner_user_id=owner_user_id,
-            duration_minutes=duration,
-            attendee_ids=attendee_ids,
-        )
+    result = await bitrix.create_meeting(
+        title=topic,
+        date=slot_start,
+        owner_user_id=owner_user_id,
+        duration_minutes=duration,
+        attendee_ids=attendee_ids,
+    )
 
-        event_id = result.get("id", "?")
-        bitrix_url = f"https://{settings.bitrix_domain}/company/personal/user/{owner_user_id}/calendar/?EVENT_ID={event_id}"
+    event_id = result.get("id", "?")
+    bitrix_url = f"https://{settings.bitrix_domain}/company/personal/user/{owner_user_id}/calendar/?EVENT_ID={event_id}"
 
-        reply = f"✅ Встреча «{topic}» создана: {label}\n🔗 {bitrix_url}"
-        if attendee_names:
-            reply += f"\n👥 Участники: {', '.join(attendee_names)}"
-        await message.reply(reply, reply_markup=MENU_KB)
-        logger.info("*** Meeting booked from free slots: %s %s attendees=%s", topic, label, attendee_ids)
-    except Exception as e:
-        logger.error("*** ERROR booking meeting from slot: %s", e, exc_info=True)
-        await message.reply(f"❌ Ошибка создания встречи: {e}")
-    finally:
-        await state.clear()
+    reply = f"✅ Встреча «{topic}» создана: {label}\n🔗 {bitrix_url}"
+    if attendee_names:
+        reply += f"\n👥 Участники: {', '.join(attendee_names)}"
+    await message.reply(reply, reply_markup=MENU_KB)
+    await state.clear()
+    logger.info("*** Meeting booked from free slots: %s %s attendees=%s", topic, label, attendee_ids)
 
 
 @router.callback_query(F.data.startswith("book:"))

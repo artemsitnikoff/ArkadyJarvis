@@ -30,9 +30,6 @@ def _pick_one(text: str) -> str:
 @router.message(F.text, F.text.func(lambda t: "ситников" in t.lower()))
 async def handle_sitnikov(message: Message, ai_client):
     logger.info("*** TRIGGER: 'ситников' in chat=%s from user=%s", message.chat.id, message.from_user.id)
-    try:
-        text = await ai_client.complete(SENECA_PROMPT, max_tokens=500, temperature=1.2)
-        quote = _pick_one(text)
-        await message.reply(quote)
-    except Exception as e:
-        logger.error("*** ERROR getting Seneca quote: %s", e, exc_info=True)
+    text = await ai_client.complete(SENECA_PROMPT, max_tokens=500, temperature=1.2)
+    quote = _pick_one(text)
+    await message.reply(quote)
