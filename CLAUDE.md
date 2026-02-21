@@ -94,11 +94,14 @@ Order matters — `buffer.py` must be last (catch-all):
 - Defined in `start.py` as `MENU_KB` — 6 buttons with `callback_data="hint:..."`
 - Re-sent after every successful action (summarize, meeting, task, lead, booking)
 - Imported by other routers: `from app.bot.routers.start import MENU_KB`
+- Every hint response includes `BACK_MENU_KB` ("◀️ Меню") button for navigation back to main menu
 
 ### Daily Summary Job (scheduler/jobs.py)
 - Runs at configured time (default 19:00 Novosibirsk)
-- Summarizes each enabled group chat separately
-- If ≥2 groups → builds combined daily overview
+- Summarizes each enabled group chat separately (summaries NOT sent to groups)
+- Builds personalized daily overview per user: filters groups by membership via `bot.get_chat_member()`
+- Sends overview **to each active user via DM** (not to group chats)
+- `db.get_active_users()` returns all users with `is_active=1`
 - Cleans up messages older than 7 days
 
 ### OpenAI
