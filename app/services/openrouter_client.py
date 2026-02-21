@@ -45,7 +45,14 @@ class OpenRouterClient:
             "modalities": ["image", "text"],
         }
         resp = await self._client.post(BASE_URL, json=payload)
-        resp.raise_for_status()
+        if resp.status_code >= 400:
+            try:
+                err = resp.json()
+                msg = err.get("error", {}).get("message", "") or resp.text[:200]
+            except Exception:
+                msg = resp.text[:200]
+            logger.error("OpenRouter HTTP %d: %s", resp.status_code, msg)
+            raise ValueError(f"OpenRouter {resp.status_code}: {msg}")
         data = resp.json()
 
         for choice in data.get("choices", []):
@@ -80,10 +87,26 @@ class OpenRouterClient:
                         if b64:
                             return base64.b64decode(b64)
 
-        # Log full keys for debugging
+        # Extract text reason from response (e.g. content policy refusal)
+        text_reason = ""
+        for choice in data.get("choices", []):
+            message = choice.get("message", {})
+            content = message.get("content")
+            if isinstance(content, str) and content.strip():
+                text_reason = content.strip()
+                break
+            if isinstance(content, list):
+                parts = [p.get("text", "") for p in content if p.get("type") == "text"]
+                if parts:
+                    text_reason = " ".join(parts).strip()
+                    break
+
         import json as _json
         snippet = _json.dumps(data, ensure_ascii=False)[:1000]
         logger.error("No image in response: %s", snippet)
+
+        if text_reason:
+            raise ValueError(text_reason)
         raise ValueError("No image data in OpenRouter response")
 
     async def ask_opus(self, prompt: str) -> str:
