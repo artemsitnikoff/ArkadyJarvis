@@ -107,7 +107,13 @@ class OpenRouterClient:
 
         if text_reason:
             raise ValueError(text_reason)
-        raise ValueError("No image data in OpenRouter response")
+
+        # Gemini silently refuses: empty content + 0 completion tokens = content policy
+        usage = data.get("usage", {})
+        if usage.get("completion_tokens", -1) == 0:
+            raise ValueError("Модель отказала — возможно, запрос нарушает контент-политику")
+
+        raise ValueError("Модель не вернула картинку, попробуй другой промпт")
 
     async def ask_opus(self, prompt: str) -> str:
         """Ask Claude Opus 4.6 via OpenRouter. Returns text response."""
