@@ -40,6 +40,10 @@ MENU_KB = InlineKeyboardMarkup(inline_keyboard=[
     ],
 ])
 
+BACK_MENU_KB = InlineKeyboardMarkup(inline_keyboard=[
+    [InlineKeyboardButton(text="◀️ Меню", callback_data="back:menu")],
+])
+
 COPY_TIP = "\n\n<i>👆 Нажми на команду — скопируется</i>"
 
 HINTS = {
@@ -166,14 +170,14 @@ async def handle_hint(callback: CallbackQuery, state: FSMContext, bitrix):
     if key == "image":
         from app.bot.routers.image import ImageGen
         await state.set_state(ImageGen.waiting_for_prompt)
-        await callback.message.answer("🎨 Напиши что нарисовать:")
+        await callback.message.answer("🎨 Напиши что нарисовать:", reply_markup=BACK_MENU_KB)
         await callback.answer()
         return
 
     if key == "askai":
         from app.bot.routers.ask_ai import AskAI
         await state.set_state(AskAI.waiting_for_question)
-        await callback.message.answer("🧠 Задай вопрос:")
+        await callback.message.answer("🧠 Задай вопрос:", reply_markup=BACK_MENU_KB)
         await callback.answer()
         return
 
@@ -185,7 +189,7 @@ async def handle_hint(callback: CallbackQuery, state: FSMContext, bitrix):
         text = HELP_TEXT
     else:
         text = HINTS.get(key, "🤷 Неизвестная команда")
-    await callback.message.answer(text)
+    await callback.message.answer(text, reply_markup=BACK_MENU_KB)
     await callback.answer()
 
 
