@@ -22,7 +22,8 @@ async def daily_summary_job(bot: Bot, ai_client: AIClient):
         logger.info("=== No group chats for daily summary")
         return
 
-    chat_summaries: list[tuple[str, str]] = []
+    # chat_id -> (title, summary)
+    chat_summaries: dict[int, tuple[str, str]] = {}
 
     for group in groups:
         chat_id = group["chat_id"]
@@ -34,30 +35,40 @@ async def daily_summary_job(bot: Bot, ai_client: AIClient):
                 continue
 
             summary = await summarize_messages(msgs, ai_client=ai_client)
-            chat_summaries.append((chat_title, summary))
+            chat_summaries[chat_id] = (chat_title, summary)
             logger.info("=== Summarized group: %s (%d messages)", chat_title, len(msgs))
         except Exception as e:
             logger.error("=== Error summarizing group %s: %s", chat_title, e, exc_info=True)
 
-    # Build daily overview and send to each active user via DM
+    # Build personalized overview per user (only groups they belong to)
     if chat_summaries:
-        try:
-            overview = await build_daily_overview(chat_summaries, ai_client=ai_client)
-            users = await db.get_active_users()
-            for user in users:
+        users = await db.get_active_users()
+        for user in users:
+            tg_id = user["telegram_id"]
+            # Filter summaries to groups this user is a member of
+            user_summaries: list[tuple[str, str]] = []
+            for chat_id, (title, summary) in chat_summaries.items():
                 try:
-                    await bot.send_message(
-                        user["telegram_id"],
-                        f"#summary\n📊 <b>Обзор дня</b>\n\n{overview}",
-                    )
-                except Exception as e:
-                    logger.warning(
-                        "=== Could not send overview to user %s: %s",
-                        user["telegram_id"], e,
-                    )
-            logger.info("=== Daily overview sent to %d users", len(users))
-        except Exception as e:
-            logger.error("=== Error building daily overview: %s", e, exc_info=True)
+                    member = await bot.get_chat_member(chat_id, tg_id)
+                    if member.status not in ("left", "kicked"):
+                        user_summaries.append((title, summary))
+                except Exception:
+                    pass  # bot can't check membership — skip this group
+
+            if not user_summaries:
+                continue
+
+            try:
+                overview = await build_daily_overview(user_summaries, ai_client=ai_client)
+                await bot.send_message(
+                    tg_id,
+                    f"#summary\n📊 <b>Обзор дня</b>\n\n{overview}",
+                )
+            except Exception as e:
+                logger.warning(
+                    "=== Could not send overview to user %s: %s", tg_id, e,
+                )
+        logger.info("=== Daily overview sent to users")
 
     # Cleanup old messages
     deleted = await db.cleanup_old_messages(days=7)
