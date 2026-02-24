@@ -3,6 +3,7 @@ import json
 import logging
 import time
 from pathlib import Path
+from urllib.parse import urlencode
 
 import httpx
 
@@ -75,11 +76,31 @@ class _BitrixBase:
                 raise RuntimeError("BITRIX_REFRESH_TOKEN не задан в .env")
             return await self._refresh_access_token(refresh)
 
-    async def _batch_request(self, commands: dict[str, str]) -> dict:
+    @staticmethod
+    def _flatten_params(params: dict, prefix: str = "") -> dict[str, str]:
+        """Flatten nested dicts/lists into Bitrix query-string keys.
+
+        {"filter": {"FIELD": "val"}} → {"filter[FIELD]": "val"}
+        {"ID": [1, 2]} → {"ID[0]": "1", "ID[1]": "2"}
+        """
+        flat: dict[str, str] = {}
+        for key, value in params.items():
+            full_key = f"{prefix}[{key}]" if prefix else key
+            if isinstance(value, dict):
+                flat.update(_BitrixBase._flatten_params(value, full_key))
+            elif isinstance(value, (list, tuple)):
+                for i, item in enumerate(value):
+                    flat[f"{full_key}[{i}]"] = str(item)
+            else:
+                flat[full_key] = str(value)
+        return flat
+
+    async def _batch_request(self, commands: dict[str, tuple[str, dict]]) -> dict:
         """Execute multiple Bitrix API calls in one HTTP request (up to 50).
 
         Args:
-            commands: {'label': 'method?param=val&...', ...}
+            commands: {'label': ('method', {params}), ...}
+                params are normal Python dicts, same format as _request().
 
         Returns:
             {'label': <result>, ...} — results keyed by the same labels.
@@ -87,7 +108,14 @@ class _BitrixBase:
         tokens = await self._get_tokens()
         url = f"{tokens['client_endpoint']}batch"
 
-        body = {"auth": tokens["access_token"], "cmd": commands}
+        cmd = {}
+        for label, (method, params) in commands.items():
+            if params:
+                cmd[label] = f"{method}?{urlencode(self._flatten_params(params))}"
+            else:
+                cmd[label] = method
+
+        body = {"auth": tokens["access_token"], "cmd": cmd}
         resp = await self._http.post(url, json=body)
         data = resp.json()
 

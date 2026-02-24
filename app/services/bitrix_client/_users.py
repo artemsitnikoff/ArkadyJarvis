@@ -1,6 +1,5 @@
 import logging
 import re
-from urllib.parse import urlencode
 
 logger = logging.getLogger("arkadyjarvis")
 
@@ -21,7 +20,7 @@ class _BitrixUsersMixin:
         for field in fields:
             for variant in variants:
                 key = f"{field}__{variant}"
-                commands[key] = "user.get?" + urlencode({f"filter[{field}]": variant})
+                commands[key] = ("user.get", {"filter": {field: variant}})
 
         results = await self._batch_request(commands)
 
@@ -44,7 +43,7 @@ class _BitrixUsersMixin:
         variants = [clean, f"@{clean}"]
 
         commands = {
-            v: "user.get?" + urlencode({"filter[UF_USR_1678964886664]": v})
+            v: ("user.get", {"filter": {"UF_USR_1678964886664": v}})
             for v in variants
         }
 
@@ -87,11 +86,10 @@ class _BitrixUsersMixin:
         batch_limit = 50
         for i in range(0, len(all_chunks), batch_limit):
             batch_chunks = all_chunks[i:i + batch_limit]
-            commands = {}
-            for ids in batch_chunks:
-                key = f"chunk_{ids[0]}"
-                id_params = "&".join(urlencode({f"ID[{j}]": v}) for j, v in enumerate(ids))
-                commands[key] = f"im.user.list.get?{id_params}"
+            commands = {
+                f"chunk_{ids[0]}": ("im.user.list.get", {"ID": ids})
+                for ids in batch_chunks
+            }
 
             try:
                 results = await self._batch_request(commands)

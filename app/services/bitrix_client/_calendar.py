@@ -67,8 +67,8 @@ class _BitrixCalendarMixin:
     async def get_user_events(self, user_id: int) -> list[dict]:
         """Fetch user's calendar events for today."""
         now = datetime.now(ZoneInfo(settings.timezone))
-        date_from = now.strftime("%Y-%m-%dT%H:%M:%S")
-        date_to = now.replace(hour=23, minute=59, second=59).strftime("%Y-%m-%dT%H:%M:%S")
+        date_from = now.strftime("%d.%m.%Y")
+        date_to = now.strftime("%d.%m.%Y")
 
         result = await self._request("calendar.event.get", {
             "type": "user",
