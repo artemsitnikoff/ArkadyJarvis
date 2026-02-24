@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-import re
 from datetime import datetime
 from typing import TYPE_CHECKING
 
@@ -9,15 +8,6 @@ if TYPE_CHECKING:
     from app.services.ai_client import AIClient
 
 logger = logging.getLogger("arkadyjarvis")
-
-ALLOWED_TAGS = re.compile(r"</?(?:b|i|u|s|code|pre|a(?:\s[^>]*)?)>")
-
-
-def clean_html_for_telegram(text: str) -> str:
-    """Remove HTML tags not supported by Telegram, keep only allowed ones."""
-    def _replace(m: re.Match) -> str:
-        return m.group(0) if ALLOWED_TAGS.match(m.group(0)) else ""
-    return re.sub(r"</?[a-zA-Z][^>]*>", _replace, text)
 
 TASK_SUMMARY_PROMPT = """\
 Проанализируй эту переписку из Telegram чата.
@@ -28,7 +18,8 @@ TASK_SUMMARY_PROMPT = """\
 Формат: "Имя — задача". Если задач нет — напиши "Явных задач не обнаружено."
 3. <b>Ключевые решения</b> — что было решено или согласовано
 
-Пиши на русском, кратко и по делу. Для выделения используй HTML-тег <b>...</b>, НЕ markdown.
+Пиши на русском, кратко и по делу.
+Используй ТОЛЬКО теги: <b>, <i>, <code>. НЕ используй markdown, <br>, <p>, <div> и другие HTML-теги.
 
 Переписка:
 """
@@ -45,7 +36,8 @@ DAILY_OVERVIEW_PROMPT = """\
 3. <b>⚠️ Требует внимания</b> — что может забыться или где есть риски/дедлайны. \
 Если нечего — пропусти.
 
-Пиши на русском. Кратко, по делу. Используй HTML-теги <b>...</b> для выделения важного.
+Пиши на русском. Кратко, по делу.
+Используй ТОЛЬКО теги: <b>, <i>, <code>. НЕ используй markdown, <br>, <p>, <div> и другие HTML-теги.
 
 Саммари чатов:
 """
@@ -74,7 +66,7 @@ async def summarize_messages(
             conversation = conversation[nl + 1:]
         logger.warning("Truncated conversation to %d chars for summarization", len(conversation))
     result = await ai_client.complete(TASK_SUMMARY_PROMPT + conversation, max_tokens=max_tokens)
-    return clean_html_for_telegram(result)
+    return result
 
 
 async def summarize_from_buffer(
@@ -105,6 +97,5 @@ async def build_daily_overview(
     logger.info(">>> DAILY OVERVIEW: %d chats, input length: %d chars", len(chat_summaries), len(full_text))
 
     result = await ai_client.complete(DAILY_OVERVIEW_PROMPT + full_text, max_tokens=1500)
-    result = clean_html_for_telegram(result)
     logger.info("<<< DAILY OVERVIEW RESPONSE:\n%s", result)
     return result

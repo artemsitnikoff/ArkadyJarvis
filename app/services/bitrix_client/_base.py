@@ -68,18 +68,35 @@ class _BitrixBase:
     async def _get_tokens(self) -> dict:
         async with self._token_lock:
             tokens = self._load_tokens()
-
-            if tokens is None:
-                if not settings.bitrix_refresh_token:
-                    raise RuntimeError("BITRIX_REFRESH_TOKEN не задан в .env")
-                logger.info("Bitrix: first run, refreshing from .env token...")
-                return await self._refresh_access_token(settings.bitrix_refresh_token)
-
-            if time.time() < tokens["expires_at"] - 60:
+            if tokens and time.time() < tokens["expires_at"] - 60:
                 return tokens
+            refresh = (tokens or {}).get("refresh_token") or settings.bitrix_refresh_token
+            if not refresh:
+                raise RuntimeError("BITRIX_REFRESH_TOKEN не задан в .env")
+            return await self._refresh_access_token(refresh)
 
-            logger.info("Bitrix access_token expired, refreshing...")
-            return await self._refresh_access_token(tokens["refresh_token"])
+    async def _batch_request(self, commands: dict[str, str]) -> dict:
+        """Execute multiple Bitrix API calls in one HTTP request (up to 50).
+
+        Args:
+            commands: {'label': 'method?param=val&...', ...}
+
+        Returns:
+            {'label': <result>, ...} — results keyed by the same labels.
+        """
+        tokens = await self._get_tokens()
+        url = f"{tokens['client_endpoint']}batch"
+
+        body = {"auth": tokens["access_token"], "cmd": commands}
+        resp = await self._http.post(url, json=body)
+        data = resp.json()
+
+        if not resp.is_success or "error" in data:
+            error = data.get("error", resp.status_code)
+            desc = data.get("error_description", resp.reason_phrase)
+            raise RuntimeError(f"Bitrix batch error: {error} — {desc}")
+
+        return data.get("result", {}).get("result", {})
 
     async def _request(self, method: str, params: dict | None = None) -> dict:
         tokens = await self._get_tokens()

@@ -138,34 +138,6 @@ class TestStripNumberedItem:
         assert strip_numbered_item("No number here") == "No number here"
 
 
-# ── clean_html_for_telegram ──────────────────────────────────
-
-class TestCleanHtml:
-    def test_keeps_allowed_tags(self):
-        from app.summarizer import clean_html_for_telegram
-        text = "<b>bold</b> and <i>italic</i>"
-        assert clean_html_for_telegram(text) == text
-
-    def test_strips_disallowed_tags(self):
-        from app.summarizer import clean_html_for_telegram
-        text = "<div>hello</div> <br/> <p>world</p>"
-        result = clean_html_for_telegram(text)
-        assert "<div>" not in result
-        assert "<br/>" not in result
-        assert "<p>" not in result
-        assert "hello" in result
-        assert "world" in result
-
-    def test_keeps_code_and_pre(self):
-        from app.summarizer import clean_html_for_telegram
-        text = "<code>x</code> <pre>y</pre>"
-        assert clean_html_for_telegram(text) == text
-
-    def test_keeps_links(self):
-        from app.summarizer import clean_html_for_telegram
-        text = '<a href="https://example.com">link</a>'
-        assert clean_html_for_telegram(text) == text
-
 
 # ── md_to_telegram_html ──────────────────────────────────────
 

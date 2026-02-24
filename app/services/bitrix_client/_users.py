@@ -1,5 +1,6 @@
 import logging
 import re
+from urllib.parse import urlencode
 
 logger = logging.getLogger("arkadyjarvis")
 
@@ -13,12 +14,21 @@ class _BitrixUsersMixin:
         if digits.startswith("8") and len(digits) == 11:
             digits = "7" + digits[1:]
 
-        for field in ("PERSONAL_MOBILE", "PERSONAL_PHONE", "WORK_PHONE"):
-            for variant in [phone, f"+{digits}", digits]:
-                result = await self._request("user.get", {
-                    "filter": {field: variant},
-                })
-                users = result.get("result", [])
+        fields = ("PERSONAL_MOBILE", "PERSONAL_PHONE", "WORK_PHONE")
+        variants = [phone, f"+{digits}", digits]
+
+        commands = {}
+        for field in fields:
+            for variant in variants:
+                key = f"{field}__{variant}"
+                commands[key] = "user.get?" + urlencode({f"filter[{field}]": variant})
+
+        results = await self._batch_request(commands)
+
+        for field in fields:
+            for variant in variants:
+                key = f"{field}__{variant}"
+                users = results.get(key, [])
                 if users:
                     user = users[0]
                     full_name = f"{user.get('NAME', '')} {user.get('LAST_NAME', '')}".strip()
@@ -31,11 +41,17 @@ class _BitrixUsersMixin:
 
     async def find_user_by_nickname(self, nickname: str) -> tuple[int | None, str | None]:
         clean = nickname.lstrip("@")
-        for variant in [clean, f"@{clean}"]:
-            result = await self._request("user.get", {
-                "filter": {"UF_USR_1678964886664": variant},
-            })
-            users = result.get("result", [])
+        variants = [clean, f"@{clean}"]
+
+        commands = {
+            v: "user.get?" + urlencode({"filter[UF_USR_1678964886664]": v})
+            for v in variants
+        }
+
+        results = await self._batch_request(commands)
+
+        for v in variants:
+            users = results.get(v, [])
             if users:
                 user = users[0]
                 full_name = f"{user.get('NAME', '')} {user.get('LAST_NAME', '')}".strip()
@@ -61,17 +77,34 @@ class _BitrixUsersMixin:
         total_regular = result.get("total", 0)
         max_id = max(total_regular * 3, 2000)
 
-        batch_size = 100
-        for start in range(1, max_id + 1, batch_size):
-            ids = list(range(start, min(start + batch_size, max_id + 1)))
+        chunk_size = 100
+        all_chunks = []
+        for start in range(1, max_id + 1, chunk_size):
+            ids = list(range(start, min(start + chunk_size, max_id + 1)))
+            all_chunks.append(ids)
+
+        # Group chunks into batches of 50 (Bitrix batch limit)
+        batch_limit = 50
+        for i in range(0, len(all_chunks), batch_limit):
+            batch_chunks = all_chunks[i:i + batch_limit]
+            commands = {}
+            for ids in batch_chunks:
+                key = f"chunk_{ids[0]}"
+                id_params = "&".join(urlencode({f"ID[{j}]": v}) for j, v in enumerate(ids))
+                commands[key] = f"im.user.list.get?{id_params}"
+
             try:
-                result = await self._request("im.user.list.get", {"ID": ids})
+                results = await self._batch_request(commands)
             except Exception:
                 continue
-            for uid_str, u in result.get("result", {}).items():
-                if u and u.get("external_auth_id") == "email" and u.get("email"):
-                    email = u["email"].lower()
-                    self._email_guests_cache[email] = (u["id"], u.get("name", ""))
+
+            for key, user_map in results.items():
+                if not isinstance(user_map, dict):
+                    continue
+                for uid_str, u in user_map.items():
+                    if u and u.get("external_auth_id") == "email" and u.get("email"):
+                        email = u["email"].lower()
+                        self._email_guests_cache[email] = (u["id"], u.get("name", ""))
 
         self._email_guests_loaded = True
         logger.info("Loaded %d email guests from Bitrix", len(self._email_guests_cache))
