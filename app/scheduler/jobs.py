@@ -59,7 +59,10 @@ async def daily_summary_job(bot: Bot, ai_client: AIClient):
                 continue
 
             try:
-                overview = await build_daily_overview(user_summaries, ai_client=ai_client)
+                overview = await build_daily_overview(
+                    user_summaries, ai_client=ai_client,
+                    user_name=user.get("display_name", ""),
+                )
                 await bot.send_message(
                     tg_id,
                     f"#summary\n📊 <b>Обзор дня</b>\n\n{overview}",

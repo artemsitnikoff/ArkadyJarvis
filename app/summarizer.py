@@ -17,6 +17,9 @@ TASK_SUMMARY_PROMPT = """\
 2. <b>Задачи и ответственные</b> — кто какие задачи взял на себя или кому что поручили. \
 Формат: "Имя — задача". Если задач нет — напиши "Явных задач не обнаружено."
 3. <b>Ключевые решения</b> — что было решено или согласовано
+4. <b>❓ Без ответа</b> — вопросы или просьбы, на которые НЕ последовал ответ в переписке. \
+Особенно если человека упомянули (@имя). Формат: "Кому → вопрос/просьба (от Кого)". \
+Если всё отвечено — пропусти этот блок.
 
 Пиши на русском, кратко и по делу.
 Используй ТОЛЬКО теги: <b>, <i>, <code>. НЕ используй markdown, <br>, <p>, <div> и другие HTML-теги.
@@ -35,6 +38,9 @@ DAILY_OVERVIEW_PROMPT = """\
 Если задач нет — пропусти этот блок.
 3. <b>⚠️ Требует внимания</b> — что может забыться или где есть риски/дедлайны. \
 Если нечего — пропусти.
+4. <b>❓ Без ответа</b> — неотвеченные вопросы/просьбы из всех чатов. \
+Особенно с упоминанием (@имя). Формат: "Кому → что (чат, от Кого)". \
+Если всё отвечено — пропусти.
 
 Пиши на русском. Кратко, по делу.
 Используй ТОЛЬКО теги: <b>, <i>, <code>. НЕ используй markdown, <br>, <p>, <div> и другие HTML-теги.
@@ -87,6 +93,7 @@ async def summarize_from_buffer(
 
 async def build_daily_overview(
     chat_summaries: list[tuple[str, str]], *, ai_client: AIClient,
+    user_name: str = "",
 ) -> str:
     parts = []
     for name, summary in chat_summaries:
@@ -96,6 +103,12 @@ async def build_daily_overview(
     full_text = "\n\n".join(parts)
     logger.info(">>> DAILY OVERVIEW: %d chats, input length: %d chars", len(chat_summaries), len(full_text))
 
-    result = await ai_client.complete(DAILY_OVERVIEW_PROMPT + full_text, max_tokens=1500)
+    prompt = DAILY_OVERVIEW_PROMPT
+    if user_name:
+        prompt += (
+            f"\nЭтот обзор для {user_name}. "
+            "Неотвеченные вопросы адресованные этому человеку — выдели ПЕРВЫМИ с пометкой ‼️.\n\n"
+        )
+    result = await ai_client.complete(prompt + full_text, max_tokens=1500)
     logger.info("<<< DAILY OVERVIEW RESPONSE:\n%s", result)
     return result
