@@ -13,6 +13,7 @@ dependencies = [
     "apscheduler>=3.10,<4",
     "pydantic-settings>=2.7,<3",
     "cryptography>=43,<44",
+    "Pillow>=10,<12",
 ]
 
 [project.optional-dependencies]
