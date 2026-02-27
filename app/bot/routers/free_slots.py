@@ -28,18 +28,25 @@ class BookSlot(StatesGroup):
 
 # ── Keyboards ────────────────────────────────────────────────
 
-CANCEL_KB = InlineKeyboardMarkup(inline_keyboard=[
-    [InlineKeyboardButton(text="❌ Отмена", callback_data="book:cancel")],
-])
+def _cancel_kb(show_add_me: bool = True) -> InlineKeyboardMarkup:
+    """Cancel keyboard, optionally with '+ Я' button."""
+    rows: list[list[InlineKeyboardButton]] = []
+    if show_add_me:
+        rows.append([InlineKeyboardButton(text="+ Я", callback_data="search:addme")])
+    rows.append([InlineKeyboardButton(text="❌ Отмена", callback_data="book:cancel")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def _search_status_kb(attendee_names: list[str]) -> InlineKeyboardMarkup:
+def _search_status_kb(attendee_names: list[str], show_add_me: bool = True) -> InlineKeyboardMarkup:
     """Keyboard shown after picking a user: add more / search slots / cancel."""
     rows: list[list[InlineKeyboardButton]] = []
-    rows.append([
+    first_row = [
         InlineKeyboardButton(text="+ Ещё участник", callback_data="search:more"),
         InlineKeyboardButton(text="🔍 Искать слоты", callback_data="search:done"),
-    ])
+    ]
+    if show_add_me:
+        first_row.insert(0, InlineKeyboardButton(text="+ Я", callback_data="search:addme"))
+    rows.append(first_row)
     rows.append([InlineKeyboardButton(text="❌ Отмена", callback_data="book:cancel")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -216,7 +223,7 @@ async def handle_find_time(message: Message, state: FSMContext, db_user: DbUser,
         # In DM — start interactive search
         await state.update_data(attendee_ids=[], attendee_names=[])
         await state.set_state(BookSlot.searching_attendee)
-        await message.reply("Напиши имя или фамилию коллеги:", reply_markup=CANCEL_KB)
+        await message.reply("Напиши имя или фамилию коллеги:", reply_markup=_cancel_kb(show_add_me=True))
         return
 
     user_ids: list[int] = []
@@ -253,17 +260,21 @@ async def handle_cancel_booking(callback: CallbackQuery, state: FSMContext):
 # ── Search attendee handlers (DM flow) ───────────────────────
 
 @router.message(BookSlot.searching_attendee, F.text)
-async def handle_search_input(message: Message, state: FSMContext, bitrix):
+async def handle_search_input(message: Message, state: FSMContext, db_user: DbUser, bitrix):
     query = (message.text or "").strip()
+    data = await state.get_data()
+    attendee_ids: list[int] = data.get("attendee_ids", [])
+    add_me = db_user["bitrix_user_id"] not in attendee_ids
+
     if not query:
-        await message.reply("Напиши имя или фамилию коллеги:", reply_markup=CANCEL_KB)
+        await message.reply("Напиши имя или фамилию коллеги:", reply_markup=_cancel_kb(show_add_me=add_me))
         return
 
     users = await bitrix.search_users(query)
     if not users:
         await message.reply(
             "Никого не нашёл, попробуй другое имя:",
-            reply_markup=CANCEL_KB,
+            reply_markup=_cancel_kb(show_add_me=add_me),
         )
         return
 
@@ -271,7 +282,7 @@ async def handle_search_input(message: Message, state: FSMContext, bitrix):
 
 
 @router.callback_query(F.data.startswith("pick:"), BookSlot.searching_attendee)
-async def handle_pick_user(callback: CallbackQuery, state: FSMContext):
+async def handle_pick_user(callback: CallbackQuery, state: FSMContext, db_user: DbUser):
     # pick:<bitrix_id>:<name>
     parts = callback.data.split(":", 2)
     if len(parts) < 3:
@@ -290,17 +301,43 @@ async def handle_pick_user(callback: CallbackQuery, state: FSMContext):
         attendee_names.append(name)
         await state.update_data(attendee_ids=attendee_ids, attendee_names=attendee_names)
 
+    add_me = db_user["bitrix_user_id"] not in attendee_ids
     selected = ", ".join(attendee_names)
     await callback.message.edit_text(
         f"Выбраны: {selected}",
-        reply_markup=_search_status_kb(attendee_names),
+        reply_markup=_search_status_kb(attendee_names, show_add_me=add_me),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "search:addme", BookSlot.searching_attendee)
+async def handle_add_me(callback: CallbackQuery, state: FSMContext, db_user: DbUser):
+    bitrix_id = db_user["bitrix_user_id"]
+    name = db_user["display_name"]
+
+    data = await state.get_data()
+    attendee_ids: list[int] = data.get("attendee_ids", [])
+    attendee_names: list[str] = data.get("attendee_names", [])
+
+    if bitrix_id not in attendee_ids:
+        attendee_ids.append(bitrix_id)
+        attendee_names.append(name)
+        await state.update_data(attendee_ids=attendee_ids, attendee_names=attendee_names)
+
+    selected = ", ".join(attendee_names)
+    await callback.message.edit_text(
+        f"Выбраны: {selected}",
+        reply_markup=_search_status_kb(attendee_names, show_add_me=False),
     )
     await callback.answer()
 
 
 @router.callback_query(F.data == "search:more", BookSlot.searching_attendee)
-async def handle_add_more(callback: CallbackQuery):
-    await callback.message.edit_text("Напиши имя или фамилию коллеги:", reply_markup=CANCEL_KB)
+async def handle_add_more(callback: CallbackQuery, state: FSMContext, db_user: DbUser):
+    data = await state.get_data()
+    attendee_ids: list[int] = data.get("attendee_ids", [])
+    add_me = db_user["bitrix_user_id"] not in attendee_ids
+    await callback.message.edit_text("Напиши имя или фамилию коллеги:", reply_markup=_cancel_kb(show_add_me=add_me))
     await callback.answer()
 
 
