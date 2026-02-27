@@ -62,6 +62,7 @@ def build_slot_keyboard(
                 row = []
         if row:
             rows.append(row)
+    rows.append([InlineKeyboardButton(text="❌ Отмена", callback_data="book:cancel")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -191,6 +192,13 @@ async def handle_find_time(message: Message, state: FSMContext, db_user: DbUser,
 
 @router.callback_query(F.data.startswith("day:"))
 async def handle_day_header(callback: CallbackQuery):
+    await callback.answer()
+
+
+@router.callback_query(F.data == "book:cancel", BookSlot.waiting_for_slot)
+async def handle_cancel_booking(callback: CallbackQuery, state: FSMContext):
+    await state.clear()
+    await callback.message.edit_text("Поиск слотов отменён.", reply_markup=MENU_KB)
     await callback.answer()
 
 
