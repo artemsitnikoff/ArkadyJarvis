@@ -11,6 +11,7 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 
 from app.bot.routers.start import MENU_KB
 from app.config import settings
+from app import db
 from app.db import DbUser
 from app.utils import DAY_NAMES_RU, merge_intervals, parse_attendees, parse_bitrix_dt
 
@@ -282,7 +283,7 @@ async def handle_search_input(message: Message, state: FSMContext, db_user: DbUs
 
 
 @router.callback_query(F.data.startswith("pick:"), BookSlot.searching_attendee)
-async def handle_pick_user(callback: CallbackQuery, state: FSMContext, db_user: DbUser):
+async def handle_pick_user(callback: CallbackQuery, state: FSMContext):
     # pick:<bitrix_id>:<name>
     parts = callback.data.split(":", 2)
     if len(parts) < 3:
@@ -301,7 +302,8 @@ async def handle_pick_user(callback: CallbackQuery, state: FSMContext, db_user: 
         attendee_names.append(name)
         await state.update_data(attendee_ids=attendee_ids, attendee_names=attendee_names)
 
-    add_me = db_user["bitrix_user_id"] not in attendee_ids
+    db_user = await db.get_user(callback.from_user.id)
+    add_me = db_user and db_user["bitrix_user_id"] not in attendee_ids
     selected = ", ".join(attendee_names)
     await callback.message.edit_text(
         f"Выбраны: {selected}",
@@ -311,7 +313,8 @@ async def handle_pick_user(callback: CallbackQuery, state: FSMContext, db_user: 
 
 
 @router.callback_query(F.data == "search:addme", BookSlot.searching_attendee)
-async def handle_add_me(callback: CallbackQuery, state: FSMContext, db_user: DbUser):
+async def handle_add_me(callback: CallbackQuery, state: FSMContext):
+    db_user = await db.get_user(callback.from_user.id)
     bitrix_id = db_user["bitrix_user_id"]
     name = db_user["display_name"]
 
@@ -333,10 +336,11 @@ async def handle_add_me(callback: CallbackQuery, state: FSMContext, db_user: DbU
 
 
 @router.callback_query(F.data == "search:more", BookSlot.searching_attendee)
-async def handle_add_more(callback: CallbackQuery, state: FSMContext, db_user: DbUser):
+async def handle_add_more(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     attendee_ids: list[int] = data.get("attendee_ids", [])
-    add_me = db_user["bitrix_user_id"] not in attendee_ids
+    db_user = await db.get_user(callback.from_user.id)
+    add_me = db_user and db_user["bitrix_user_id"] not in attendee_ids
     await callback.message.edit_text("Напиши имя или фамилию коллеги:", reply_markup=_cancel_kb(show_add_me=add_me))
     await callback.answer()
 
