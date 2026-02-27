@@ -23,6 +23,7 @@ router = Router()
 
 class BookSlot(StatesGroup):
     searching_attendee = State()
+    waiting_for_title = State()
     waiting_for_slot = State()
     waiting_for_topic = State()
 
@@ -251,6 +252,7 @@ async def handle_find_time(message: Message, state: FSMContext, db_user: DbUser,
 
 
 @router.callback_query(F.data == "book:cancel", BookSlot.searching_attendee)
+@router.callback_query(F.data == "book:cancel", BookSlot.waiting_for_title)
 @router.callback_query(F.data == "book:cancel", BookSlot.waiting_for_slot)
 async def handle_cancel_booking(callback: CallbackQuery, state: FSMContext):
     await state.clear()
@@ -346,19 +348,34 @@ async def handle_add_more(callback: CallbackQuery, state: FSMContext):
 
 
 @router.callback_query(F.data == "search:done", BookSlot.searching_attendee)
-async def handle_search_done(callback: CallbackQuery, state: FSMContext, bitrix):
+async def handle_search_done(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     attendee_ids: list[int] = data.get("attendee_ids", [])
-    attendee_names: list[str] = data.get("attendee_names", [])
 
     if not attendee_ids:
         await callback.answer("Сначала выбери хотя бы одного участника", show_alert=True)
         return
 
-    await callback.message.edit_text(f"Ищу слоты для {', '.join(attendee_names)}...")
+    await state.set_state(BookSlot.waiting_for_title)
+    await callback.message.edit_text("Напиши тему встречи:")
     await callback.answer()
 
-    await _find_and_show_slots(callback.message, state, bitrix, attendee_ids, attendee_names)
+
+@router.message(BookSlot.waiting_for_title, F.text)
+async def handle_title_then_search(message: Message, state: FSMContext, bitrix):
+    title = (message.text or "").strip()
+    if not title:
+        await message.reply("Напиши тему встречи текстом:")
+        return
+
+    data = await state.get_data()
+    attendee_ids: list[int] = data.get("attendee_ids", [])
+    attendee_names: list[str] = data.get("attendee_names", [])
+
+    await state.update_data(topic=title)
+    await message.reply(f"Ищу слоты для {', '.join(attendee_names)}...")
+
+    await _find_and_show_slots(message, state, bitrix, attendee_ids, attendee_names)
 
 
 # ── Slot selection handlers ──────────────────────────────────
@@ -369,7 +386,7 @@ async def handle_day_header(callback: CallbackQuery):
 
 
 @router.callback_query(F.data.startswith("book:"), BookSlot.waiting_for_slot)
-async def handle_slot_selected(callback: CallbackQuery, state: FSMContext):
+async def handle_slot_selected(callback: CallbackQuery, state: FSMContext, bitrix):
     # Parse callback_data: book:DDMM:HHMM:HHMM
     parts = callback.data.split(":")
     if len(parts) != 4:
@@ -391,6 +408,37 @@ async def handle_slot_selected(callback: CallbackQuery, state: FSMContext):
 
     label = f"{day_str[:2]}.{day_str[2:]} {start_str[:2]}:{start_str[2:]}–{end_str[:2]}:{end_str[2:]}"
 
+    topic = data.get("topic")
+    if topic:
+        # Title already provided (interactive search flow) — create meeting directly
+        await callback.message.edit_text(f"Создаю встречу «{topic}» на {label}...")
+        await callback.answer()
+
+        db_user = await db.get_user(callback.from_user.id)
+        owner_user_id = db_user["bitrix_user_id"]
+        attendee_ids = data["attendee_ids"]
+        attendee_names = data.get("attendee_names", [])
+
+        result = await bitrix.create_meeting(
+            title=topic,
+            date=slot_start,
+            owner_user_id=owner_user_id,
+            duration_minutes=duration,
+            attendee_ids=attendee_ids,
+        )
+
+        event_id = result.get("id", "?")
+        bitrix_url = f"https://{settings.bitrix_domain}/company/personal/user/{owner_user_id}/calendar/?EVENT_ID={event_id}"
+
+        reply = f"✅ Встреча «{topic}» создана: {label}\n🔗 {bitrix_url}"
+        if attendee_names:
+            reply += f"\n👥 Участники: {', '.join(attendee_names)}"
+        await callback.message.reply(reply, reply_markup=MENU_KB)
+        await state.clear()
+        logger.info("*** Meeting booked from free slots: %s %s attendees=%s", topic, label, attendee_ids)
+        return
+
+    # Direct @nick flow — ask for topic after slot selection
     await state.update_data(
         slot_start=slot_start.isoformat(),
         slot_duration=duration,
