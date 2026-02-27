@@ -57,6 +57,27 @@ class _BitrixUsersMixin:
                 return int(user["ID"]), full_name
         return None, None
 
+    async def search_users(self, query: str, limit: int = 5) -> list[dict]:
+        """Search active Bitrix users by name/surname partial match."""
+        commands = {
+            "by_name": ("user.get", {"filter": {"ACTIVE": True, "%NAME": query}}),
+            "by_last": ("user.get", {"filter": {"ACTIVE": True, "%LAST_NAME": query}}),
+        }
+        results = await self._batch_request(commands)
+
+        seen: set[int] = set()
+        users: list[dict] = []
+        for key in ("by_name", "by_last"):
+            for u in results.get(key, []):
+                uid = int(u["ID"])
+                if uid not in seen:
+                    seen.add(uid)
+                    name = f"{u.get('NAME', '')} {u.get('LAST_NAME', '')}".strip()
+                    users.append({"id": uid, "name": name})
+                    if len(users) >= limit:
+                        return users
+        return users
+
     async def find_user_by_email(self, email: str) -> tuple[int | None, str | None]:
         result = await self._request("user.get", {
             "filter": {"EMAIL": email},

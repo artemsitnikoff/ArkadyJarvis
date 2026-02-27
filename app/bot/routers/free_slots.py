@@ -4,6 +4,7 @@ from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from aiogram import F, Router
+from aiogram.enums import ChatType
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
@@ -20,8 +21,39 @@ router = Router()
 # ── FSM states ────────────────────────────────────────────────
 
 class BookSlot(StatesGroup):
+    searching_attendee = State()
     waiting_for_slot = State()
     waiting_for_topic = State()
+
+
+# ── Keyboards ────────────────────────────────────────────────
+
+CANCEL_KB = InlineKeyboardMarkup(inline_keyboard=[
+    [InlineKeyboardButton(text="❌ Отмена", callback_data="book:cancel")],
+])
+
+
+def _search_status_kb(attendee_names: list[str]) -> InlineKeyboardMarkup:
+    """Keyboard shown after picking a user: add more / search slots / cancel."""
+    rows: list[list[InlineKeyboardButton]] = []
+    rows.append([
+        InlineKeyboardButton(text="+ Ещё участник", callback_data="search:more"),
+        InlineKeyboardButton(text="🔍 Искать слоты", callback_data="search:done"),
+    ])
+    rows.append([InlineKeyboardButton(text="❌ Отмена", callback_data="book:cancel")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _search_results_kb(users: list[dict]) -> InlineKeyboardMarkup:
+    """Keyboard with found users to pick from."""
+    rows: list[list[InlineKeyboardButton]] = []
+    for u in users:
+        rows.append([InlineKeyboardButton(
+            text=u["name"],
+            callback_data=f"pick:{u['id']}:{u['name'][:40]}",
+        )])
+    rows.append([InlineKeyboardButton(text="❌ Отмена", callback_data="book:cancel")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 # ── Helpers ───────────────────────────────────────────────────
@@ -110,37 +142,16 @@ def _compute_free_slots_for_day(
     return [(s, e) for s, e in free_slots if (e - s) >= timedelta(minutes=30)]
 
 
-# ── Handlers ──────────────────────────────────────────────────
-
-@router.message(F.text.regexp(r"(?i)^найди\s+время"))
-async def handle_find_time(message: Message, state: FSMContext, db_user: DbUser, bitrix):
-    text = message.text or ""
-    logger.info("*** TRIGGER: 'найди время' in chat=%s from user=%s", message.chat.id, message.from_user.id)
-
-    nicknames, _ = parse_attendees(text)
-    if not nicknames:
-        await message.reply("Укажи участников: Найди время @nick1 @nick2")
-        return
-
-    user_ids: list[int] = []
-    user_names: list[str] = []
-    not_found: list[str] = []
-    nick_results = await asyncio.gather(
-        *(bitrix.find_user_by_nickname(nick) for nick in nicknames)
-    )
-    for nick, (uid, full_name) in zip(nicknames, nick_results):
-        if uid:
-            user_ids.append(uid)
-            user_names.append(f"@{nick}")
-        else:
-            not_found.append(f"@{nick}")
-
-    if not user_ids:
-        msg = "❌ Никого не удалось найти в Bitrix"
-        if not_found:
-            msg += f"\n⚠️ Не найден: {', '.join(not_found)}"
-        await message.reply(msg)
-        return
+async def _find_and_show_slots(
+    message: Message,
+    state: FSMContext,
+    bitrix,
+    user_ids: list[int],
+    user_names: list[str],
+    not_found: list[str] | None = None,
+):
+    """Shared logic: fetch accessibility, build slot keyboard, send reply."""
+    not_found = not_found or []
 
     today = datetime.now(ZoneInfo(settings.timezone)).date()
     work_days: list[date] = []
@@ -155,7 +166,6 @@ async def handle_find_time(message: Message, state: FSMContext, db_user: DbUser,
 
     accessibility = await bitrix.get_users_accessibility(user_ids, date_from, date_to)
 
-    # Build text message + collect chunks for keyboard
     lines: list[str] = []
     lines.append(f"📅 Свободные слоты для {', '.join(user_names)}:")
     if not_found:
@@ -190,15 +200,130 @@ async def handle_find_time(message: Message, state: FSMContext, db_user: DbUser,
     logger.info("*** SENT free slots for %s", user_names)
 
 
-@router.callback_query(F.data.startswith("day:"))
-async def handle_day_header(callback: CallbackQuery):
-    await callback.answer()
+# ── Handlers ──────────────────────────────────────────────────
+
+@router.message(F.text.regexp(r"(?i)^найди\s+время"))
+async def handle_find_time(message: Message, state: FSMContext, db_user: DbUser, bitrix):
+    text = message.text or ""
+    logger.info("*** TRIGGER: 'найди время' in chat=%s from user=%s", message.chat.id, message.from_user.id)
+
+    nicknames, _ = parse_attendees(text)
+    if not nicknames:
+        # In group chats @nicks autocomplete — show hint
+        if message.chat.type != ChatType.PRIVATE:
+            await message.reply("Укажи участников: Найди время @nick1 @nick2")
+            return
+        # In DM — start interactive search
+        await state.update_data(attendee_ids=[], attendee_names=[])
+        await state.set_state(BookSlot.searching_attendee)
+        await message.reply("Напиши имя или фамилию коллеги:", reply_markup=CANCEL_KB)
+        return
+
+    user_ids: list[int] = []
+    user_names: list[str] = []
+    not_found: list[str] = []
+    nick_results = await asyncio.gather(
+        *(bitrix.find_user_by_nickname(nick) for nick in nicknames)
+    )
+    for nick, (uid, full_name) in zip(nicknames, nick_results):
+        if uid:
+            user_ids.append(uid)
+            user_names.append(f"@{nick}")
+        else:
+            not_found.append(f"@{nick}")
+
+    if not user_ids:
+        msg = "❌ Никого не удалось найти в Bitrix"
+        if not_found:
+            msg += f"\n⚠️ Не найден: {', '.join(not_found)}"
+        await message.reply(msg)
+        return
+
+    await _find_and_show_slots(message, state, bitrix, user_ids, user_names, not_found)
 
 
+@router.callback_query(F.data == "book:cancel", BookSlot.searching_attendee)
 @router.callback_query(F.data == "book:cancel", BookSlot.waiting_for_slot)
 async def handle_cancel_booking(callback: CallbackQuery, state: FSMContext):
     await state.clear()
     await callback.message.edit_text("Поиск слотов отменён.", reply_markup=MENU_KB)
+    await callback.answer()
+
+
+# ── Search attendee handlers (DM flow) ───────────────────────
+
+@router.message(BookSlot.searching_attendee, F.text)
+async def handle_search_input(message: Message, state: FSMContext, bitrix):
+    query = (message.text or "").strip()
+    if not query:
+        await message.reply("Напиши имя или фамилию коллеги:", reply_markup=CANCEL_KB)
+        return
+
+    users = await bitrix.search_users(query)
+    if not users:
+        await message.reply(
+            "Никого не нашёл, попробуй другое имя:",
+            reply_markup=CANCEL_KB,
+        )
+        return
+
+    await message.reply("Выбери коллегу:", reply_markup=_search_results_kb(users))
+
+
+@router.callback_query(F.data.startswith("pick:"), BookSlot.searching_attendee)
+async def handle_pick_user(callback: CallbackQuery, state: FSMContext):
+    # pick:<bitrix_id>:<name>
+    parts = callback.data.split(":", 2)
+    if len(parts) < 3:
+        await callback.answer("Ошибка данных кнопки", show_alert=True)
+        return
+
+    bitrix_id = int(parts[1])
+    name = parts[2]
+
+    data = await state.get_data()
+    attendee_ids: list[int] = data.get("attendee_ids", [])
+    attendee_names: list[str] = data.get("attendee_names", [])
+
+    if bitrix_id not in attendee_ids:
+        attendee_ids.append(bitrix_id)
+        attendee_names.append(name)
+        await state.update_data(attendee_ids=attendee_ids, attendee_names=attendee_names)
+
+    selected = ", ".join(attendee_names)
+    await callback.message.edit_text(
+        f"Выбраны: {selected}",
+        reply_markup=_search_status_kb(attendee_names),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "search:more", BookSlot.searching_attendee)
+async def handle_add_more(callback: CallbackQuery):
+    await callback.message.edit_text("Напиши имя или фамилию коллеги:", reply_markup=CANCEL_KB)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "search:done", BookSlot.searching_attendee)
+async def handle_search_done(callback: CallbackQuery, state: FSMContext, bitrix):
+    data = await state.get_data()
+    attendee_ids: list[int] = data.get("attendee_ids", [])
+    attendee_names: list[str] = data.get("attendee_names", [])
+
+    if not attendee_ids:
+        await callback.answer("Сначала выбери хотя бы одного участника", show_alert=True)
+        return
+
+    await callback.message.edit_text(f"Ищу слоты для {', '.join(attendee_names)}...")
+    await callback.answer()
+
+    await _find_and_show_slots(callback.message, state, bitrix, attendee_ids, attendee_names)
+
+
+# ── Slot selection handlers ──────────────────────────────────
+
+@router.callback_query(F.data.startswith("day:"))
+async def handle_day_header(callback: CallbackQuery):
     await callback.answer()
 
 
