@@ -14,6 +14,7 @@ from aiogram.types import (
 
 from app import db
 from app.config import settings
+from app.version import __version__
 
 logger = logging.getLogger("arkadyjarvis")
 router = Router()
@@ -186,7 +187,7 @@ async def handle_hint(callback: CallbackQuery, state: FSMContext, bitrix):
         return
 
     if key == "all":
-        text = HELP_TEXT
+        text = f"{HELP_TEXT}\n\n<i>v{__version__}</i>"
     else:
         text = HINTS.get(key, "🤷 Неизвестная команда")
     await callback.message.answer(text, reply_markup=BACK_MENU_KB)
