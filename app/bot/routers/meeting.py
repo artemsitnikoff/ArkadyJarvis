@@ -22,6 +22,7 @@ router = Router()
 
 class MeetingSetup(StatesGroup):
     searching_attendee = State()
+    waiting_for_title = State()
 
 
 # ── Keyboards ────────────────────────────────────────────────
@@ -284,22 +285,39 @@ async def handle_mtg_add_more(callback: CallbackQuery, state: FSMContext):
 
 
 @router.callback_query(F.data == "search:done", MeetingSetup.searching_attendee)
-async def handle_mtg_done(callback: CallbackQuery, state: FSMContext, bitrix):
+async def handle_mtg_done(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     attendee_ids: list[int] = data.get("attendee_ids", [])
-    attendee_names: list[str] = data.get("attendee_names", [])
 
     if not attendee_ids:
         await callback.answer("Сначала выбери хотя бы одного участника", show_alert=True)
         return
 
-    db_user = await db.get_user(callback.from_user.id)
-    dt = datetime.fromisoformat(data["dt"])
-    context = data.get("context", "")
-
-    await callback.message.edit_text(f"Создаю встречу на {dt:%d.%m.%Y} в {dt:%H:%M}...")
+    await state.set_state(MeetingSetup.waiting_for_title)
+    await callback.message.edit_text("Напиши тему встречи:")
     await callback.answer()
 
-    await _do_create_meeting(callback.message, db_user, bitrix, dt, context, attendee_ids, attendee_names)
+
+@router.message(MeetingSetup.waiting_for_title, F.text)
+async def handle_mtg_title_input(message: Message, state: FSMContext, bitrix):
+    title = (message.text or "").strip()
+    if not title:
+        await message.reply("Напиши тему встречи текстом:")
+        return
+
+    data = await state.get_data()
+    dt = datetime.fromisoformat(data["dt"])
+    context = data.get("context", "")
+    attendee_ids: list[int] = data.get("attendee_ids", [])
+    attendee_names: list[str] = data.get("attendee_names", [])
+
+    # Use user-provided title, keep context as description
+    if context:
+        context = f"{title}\n\n{context}"
+    else:
+        context = title
+
+    db_user = await db.get_user(message.from_user.id)
+    await _do_create_meeting(message, db_user, bitrix, dt, context, attendee_ids, attendee_names)
     await state.clear()
-    logger.info("*** Meeting created via interactive search: attendees=%s", attendee_ids)
+    logger.info("*** Meeting created via interactive search: %s attendees=%s", title, attendee_ids)
