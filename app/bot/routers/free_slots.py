@@ -190,7 +190,7 @@ async def _find_and_show_slots(
     has_any_chunks = any(chunks for _, chunks in days_with_chunks)
     if not has_any_chunks:
         lines.append("Свободных слотов не найдено")
-        await message.reply("\n".join(lines).rstrip())
+        await message.reply("\n".join(lines).rstrip(), reply_markup=MENU_KB)
     else:
         keyboard = build_slot_keyboard(days_with_chunks)
         header = "\n".join(lines).rstrip()
