@@ -44,6 +44,8 @@ app/
 data/
   arkadyjarvis.db          # SQLite database
   bitrix_tokens.json       # Bitrix OAuth tokens (auto-refreshed)
+scripts/
+  show_users.py            # CLI: all users + last activity (from message_buffer, 7-day window)
 ```
 
 ## Key Patterns
