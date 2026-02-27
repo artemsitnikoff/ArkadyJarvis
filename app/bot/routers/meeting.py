@@ -284,7 +284,7 @@ async def handle_mtg_add_more(callback: CallbackQuery, state: FSMContext):
 
 
 @router.callback_query(F.data == "search:done", MeetingSetup.searching_attendee)
-async def handle_mtg_done(callback: CallbackQuery, state: FSMContext, db_user: DbUser, bitrix):
+async def handle_mtg_done(callback: CallbackQuery, state: FSMContext, bitrix):
     data = await state.get_data()
     attendee_ids: list[int] = data.get("attendee_ids", [])
     attendee_names: list[str] = data.get("attendee_names", [])
@@ -293,6 +293,7 @@ async def handle_mtg_done(callback: CallbackQuery, state: FSMContext, db_user: D
         await callback.answer("Сначала выбери хотя бы одного участника", show_alert=True)
         return
 
+    db_user = await db.get_user(callback.from_user.id)
     dt = datetime.fromisoformat(data["dt"])
     context = data.get("context", "")
 
