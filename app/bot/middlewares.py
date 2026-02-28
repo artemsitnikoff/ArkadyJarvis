@@ -38,17 +38,19 @@ class ErrorMiddleware(BaseMiddleware):
 
 PUBLIC_COMMANDS = {"/start", "/help"}
 
-# Triggers that require Bitrix authorization
+# Triggers that require authorization
 AUTH_TRIGGERS = [
     re.compile(r"(?i)^(сделай|создай)\s+встречу"),
     re.compile(r"(?i)^найди\s+время"),
     re.compile(r"(?i)^(сделай|создай)\s+задачу"),
     re.compile(r"(?i)^(сделай|создай)\s+лид"),
+    re.compile(r"(?i)^(нарисуй|сгенерируй|картинк)"),
+    re.compile(r"(?i)^(спроси|вопрос)\s"),
 ]
 
 
 def _needs_auth(text: str) -> bool:
-    """Check if this message is a command/trigger that requires Bitrix auth."""
+    """Check if this message is a command/trigger that requires auth."""
     first_word = text.split()[0].split("@")[0] if text else ""
     if first_word in {"/summary", "/jira", "/skip"}:
         return True
@@ -58,10 +60,11 @@ def _needs_auth(text: str) -> bool:
 
 
 class AuthMiddleware(BaseMiddleware):
-    """Check authorization only for commands/triggers that need Bitrix.
+    """Check authorization for all bot commands and triggers.
 
-    Group messages pass through freely (for buffering).
-    Auto-replies (ситников) also pass through without auth.
+    Only /start and /help are public. Group messages without triggers
+    pass through freely (for buffering). Auto-replies (ситников) also
+    pass through without auth.
     """
 
     async def __call__(
@@ -78,8 +81,8 @@ class AuthMiddleware(BaseMiddleware):
         user = await db.get_user(event.from_user.id) if event.from_user else None
         data["db_user"] = user
 
-        # Check if this message needs auth
-        text = event.text or ""
+        # Check if this message needs auth (text or photo caption)
+        text = event.text or event.caption or ""
         if _needs_auth(text):
             if not user or not user.get("bitrix_user_id"):
                 # /jira and /skip — allow (onboarding)
