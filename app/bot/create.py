@@ -17,7 +17,6 @@ def create_dispatcher() -> Dispatcher:
 
     # Import and include routers (order matters — catch-all last)
     from app.bot.routers.start import router as start_router
-    from app.bot.routers.auth import router as auth_router
     from app.bot.routers.summarize import router as summarize_router
     from app.bot.routers.meeting import router as meeting_router
     from app.bot.routers.free_slots import router as free_slots_router
@@ -31,7 +30,6 @@ def create_dispatcher() -> Dispatcher:
 
     dp.include_routers(
         start_router,
-        auth_router,
         summarize_router,
         meeting_router,
         free_slots_router,

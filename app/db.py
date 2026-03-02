@@ -30,13 +30,6 @@ CREATE TABLE IF NOT EXISTS users (
     created_at     TEXT DEFAULT (datetime('now'))
 );
 
-CREATE TABLE IF NOT EXISTS jira_credentials (
-    telegram_id   INTEGER PRIMARY KEY REFERENCES users(telegram_id),
-    jira_url      TEXT NOT NULL,
-    jira_username TEXT NOT NULL,
-    jira_password TEXT NOT NULL
-);
-
 CREATE TABLE IF NOT EXISTS group_chats (
     chat_id         INTEGER PRIMARY KEY,
     chat_title      TEXT,
@@ -58,9 +51,7 @@ CREATE INDEX IF NOT EXISTS idx_buffer_chat_date ON message_buffer(chat_id, sent_
 
 
 MIGRATIONS: list[str] = [
-    # Migration 1: initial schema is handled by SCHEMA constant above.
-    # Future migrations go here as SQL strings, e.g.:
-    # "ALTER TABLE users ADD COLUMN some_field TEXT DEFAULT '';",
+    "DROP TABLE IF EXISTS jira_credentials;",
 ]
 
 
@@ -145,54 +136,6 @@ async def get_user(telegram_id: int) -> DbUser | None:
     ) as cur:
         row = await cur.fetchone()
         return dict(row) if row else None
-
-
-# ── Jira credentials ──────────────────────────────────────────
-
-async def save_jira_credentials(
-    telegram_id: int, jira_url: str, jira_username: str, jira_password: str
-) -> None:
-    from app.crypto import encrypt
-
-    db = get_db()
-    encrypted_password = encrypt(jira_password)
-    await db.execute(
-        """INSERT INTO jira_credentials (telegram_id, jira_url, jira_username, jira_password)
-           VALUES (?, ?, ?, ?)
-           ON CONFLICT(telegram_id) DO UPDATE SET
-             jira_url      = excluded.jira_url,
-             jira_username = excluded.jira_username,
-             jira_password = excluded.jira_password""",
-        (telegram_id, jira_url, jira_username, encrypted_password),
-    )
-    await db.commit()
-
-
-async def get_jira_credentials(telegram_id: int) -> dict | None:
-    from app.crypto import decrypt, encrypt
-
-    db = get_db()
-    async with db.execute(
-        "SELECT * FROM jira_credentials WHERE telegram_id = ?", (telegram_id,)
-    ) as cur:
-        row = await cur.fetchone()
-        if not row:
-            return None
-
-    creds = dict(row)
-    try:
-        creds["jira_password"] = decrypt(creds["jira_password"])
-    except Exception:
-        # Lazy migration: plaintext password from before encryption was added
-        logger.info("Migrating plaintext Jira password for user %s", telegram_id)
-        plaintext = creds["jira_password"]
-        encrypted = encrypt(plaintext)
-        await db.execute(
-            "UPDATE jira_credentials SET jira_password = ? WHERE telegram_id = ?",
-            (encrypted, telegram_id),
-        )
-        await db.commit()
-    return creds
 
 
 # ── Group chats ───────────────────────────────────────────────

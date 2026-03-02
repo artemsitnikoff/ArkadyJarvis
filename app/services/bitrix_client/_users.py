@@ -78,6 +78,14 @@ class _BitrixUsersMixin:
                         return users
         return users
 
+    async def get_user_email(self, user_id: int) -> str | None:
+        """Get user email by Bitrix user ID."""
+        result = await self._request("user.get", {"ID": user_id})
+        users = result.get("result", [])
+        if users:
+            return users[0].get("EMAIL")
+        return None
+
     async def find_user_by_email(self, email: str) -> tuple[int | None, str | None]:
         result = await self._request("user.get", {
             "filter": {"EMAIL": email},

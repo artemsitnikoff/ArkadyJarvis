@@ -52,7 +52,7 @@ AUTH_TRIGGERS = [
 def _needs_auth(text: str) -> bool:
     """Check if this message is a command/trigger that requires auth."""
     first_word = text.split()[0].split("@")[0] if text else ""
-    if first_word in {"/summary", "/jira", "/skip"}:
+    if first_word in {"/summary"}:
         return True
     if text.lower().strip() == "суммаризация":
         return True
@@ -85,11 +85,6 @@ class AuthMiddleware(BaseMiddleware):
         text = event.text or event.caption or ""
         if _needs_auth(text):
             if not user or not user.get("bitrix_user_id"):
-                # /jira and /skip — allow (onboarding)
-                first_cmd = text.split()[0].split("@")[0] if text else ""
-                if first_cmd in {"/jira", "/skip"}:
-                    return await handler(event, data)
-
                 # In groups — short reply, in PM — full message
                 if event.chat.type in ("group", "supergroup"):
                     await event.reply("Сначала авторизуйся: напиши мне /start в личку")

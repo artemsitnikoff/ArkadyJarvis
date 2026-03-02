@@ -18,8 +18,10 @@ class Settings(BaseSettings):
     bitrix_domain: str = ""
     bitrix_refresh_token: str = ""
 
-    # Jira (shared URL)
+    # Jira (integration user)
     jira_url: str = ""
+    jira_username: str = ""
+    jira_password: SecretStr = SecretStr("")
 
     # Encryption
     encryption_key: str = ""

@@ -4,8 +4,9 @@ import re
 from aiogram import F, Router
 from aiogram.types import Message
 
-from app import db
 from app.bot.routers.start import MENU_KB
+from app.config import settings
+from app.db import DbUser
 from app.services.jira_client import JiraClient
 
 logger = logging.getLogger("arkadyjarvis")
@@ -13,7 +14,7 @@ router = Router()
 
 
 @router.message(F.text.regexp(r"(?i)^(сделай|создай)\s+задачу"))
-async def handle_create_task(message: Message):
+async def handle_create_task(message: Message, db_user: DbUser, bitrix):
     text = message.text or ""
     tg_id = message.from_user.id
     logger.info("*** TRIGGER: 'создай задачу' in chat=%s from user=%s", message.chat.id, tg_id)
@@ -47,12 +48,22 @@ async def handle_create_task(message: Message):
         summary = short[:100] if len(short) > 100 else short
         description = full_text
 
-        async with JiraClient(tg_id) as jira:
-            result = await jira.create_issue(project_key, summary, description)
+        # Get user email from Bitrix to find Jira account
+        user_email = await bitrix.get_user_email(db_user["bitrix_user_id"])
+
+        async with JiraClient() as jira:
+            jira_account_id = None
+            if user_email:
+                jira_account_id = await jira.find_user_by_email(user_email)
+
+            result = await jira.create_issue(
+                project_key, summary, description,
+                reporter_account_id=jira_account_id,
+                assignee_account_id=jira_account_id,
+            )
 
         issue_key = result["key"]
-        creds = await db.get_jira_credentials(tg_id)
-        jira_base = creds["jira_url"].rstrip("/") if creds else ""
+        jira_base = settings.jira_url.rstrip("/")
         await message.reply(
             f"✅ Задача создана: {issue_key}\n"
             f"📝 {summary}\n"
