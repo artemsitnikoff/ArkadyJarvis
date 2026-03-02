@@ -52,14 +52,14 @@ async def handle_create_task(message: Message, db_user: DbUser, bitrix):
         user_email = await bitrix.get_user_email(db_user["bitrix_user_id"])
 
         async with JiraClient() as jira:
-            jira_account_id = None
+            jira_username = None
             if user_email:
-                jira_account_id = await jira.find_user_by_email(user_email)
+                jira_username = await jira.find_user_by_email(user_email)
 
             result = await jira.create_issue(
                 project_key, summary, description,
-                reporter_account_id=jira_account_id,
-                assignee_account_id=jira_account_id,
+                reporter_name=jira_username,
+                assignee_name=jira_username,
             )
 
         issue_key = result["key"]

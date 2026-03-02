@@ -35,8 +35,8 @@ class JiraClient:
         project_key: str,
         summary: str,
         description: str = "",
-        reporter_account_id: str | None = None,
-        assignee_account_id: str | None = None,
+        reporter_name: str | None = None,
+        assignee_name: str | None = None,
     ) -> dict:
         url = f"{self._base_url}/rest/api/2/issue"
         fields = {
@@ -45,10 +45,10 @@ class JiraClient:
             "description": description,
             "issuetype": {"name": "Task"},
         }
-        if reporter_account_id:
-            fields["reporter"] = {"accountId": reporter_account_id}
-        if assignee_account_id:
-            fields["assignee"] = {"accountId": assignee_account_id}
+        if reporter_name:
+            fields["reporter"] = {"name": reporter_name}
+        if assignee_name:
+            fields["assignee"] = {"name": assignee_name}
 
         resp = await self._http.post(
             url,
@@ -63,18 +63,18 @@ class JiraClient:
         return result
 
     async def find_user_by_email(self, email: str) -> str | None:
-        """Find Jira accountId by email address."""
+        """Find Jira username by email address (Jira Server)."""
         url = f"{self._base_url}/rest/api/2/user/search"
         resp = await self._http.get(
             url,
-            params={"query": email},
+            params={"username": email},
             auth=self._auth,
             headers={"Content-Type": "application/json"},
         )
         resp.raise_for_status()
         users = resp.json()
         if users:
-            account_id = users[0].get("accountId")
-            logger.info("Jira user found by email %s: %s", email, account_id)
-            return account_id
+            username = users[0].get("name")
+            logger.info("Jira user found by email %s: %s", email, username)
+            return username
         return None
