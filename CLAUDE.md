@@ -1,10 +1,10 @@
 # ArkadyJarvis
 
-Multi-user Telegram bot (BotFather, NOT userbot) for team chat summarization, Bitrix24 calendar/CRM, and Jira integration.
+Multi-user Telegram bot (BotFather, NOT userbot) for team chat summarization, Bitrix24 calendar/CRM, Jira integration, and AI office manager (Glafira via OpenClaw).
 
 ## Tech Stack
 
-- **Python 3.11+**, aiogram v3 (Telegram Bot API), FastAPI + Uvicorn, OpenAI GPT-5.2, Bitrix24 REST API, Jira REST API
+- **Python 3.11+**, aiogram v3 (Telegram Bot API), FastAPI + Uvicorn, OpenAI GPT-5.2, Bitrix24 REST API, Jira REST API, OpenClaw (browser RPA via AI)
 - Uvicorn owns the event loop; aiogram polling runs as `asyncio.create_task()` in FastAPI lifespan
 - APScheduler for daily summary cron job
 - aiosqlite for persistence (users, message buffer, group chats, muted groups)
@@ -31,12 +31,14 @@ app/
       jira_task.py         # "сделай/создай задачу" trigger — project key + description
       lead.py              # "сделай/создай лид" trigger — GPT extracts fields → Bitrix CRM
       auto_reply.py        # "ситников" trigger (Seneca quotes via GPT)
+      glafira.py           # Glafira (AI office manager) — FSM chatting mode, OpenClaw streaming
       group.py             # on_bot_added / on_bot_removed — tracks group_chats in DB
       buffer.py            # Catch-all (LAST router): buffers all group messages to SQLite
   services/
     ai_client.py           # AIClient singleton — complete() and chat() methods
     bitrix_client.py       # BitrixClient singleton — OAuth file-based tokens, all Bitrix API
     jira_client.py         # JiraClient — per-user async context manager, loads creds from DB
+    openclaw_client.py     # OpenClawClient — HTTP SSE client for OpenClaw gateway
   scheduler/
     jobs.py                # daily_summary_job — summarizes all groups, builds overview, cleanup
   api/
@@ -60,7 +62,7 @@ scripts/
 
 ### Router Registration Order (in `create.py`)
 Order matters — `buffer.py` must be last (catch-all):
-1. start → 2. auth → 3. summarize → 4. meeting → 5. free_slots → 6. jira_task → 7. lead → 8. auto_reply → 9. group → 10. buffer
+1. start → 2. auth → 3. summarize → 4. meeting → 5. free_slots → 6. jira_task → 7. lead → 8. image → 9. ask_ai → 10. glafira → 11. auto_reply → 12. group → 13. buffer
 
 ### Authorization Flow
 1. User sends `/start` → bot looks up `@username` in Bitrix field `UF_USR_1678964886664`
@@ -94,7 +96,7 @@ Order matters — `buffer.py` must be last (catch-all):
 - Keeps only: `<b>`, `<i>`, `<u>`, `<s>`, `<code>`, `<pre>`, `<a>`
 
 ### MENU_KB (Inline Keyboard)
-- Defined in `start.py` as `MENU_KB` — 6 buttons with `callback_data="hint:..."`
+- Defined in `start.py` as `MENU_KB` — 10 buttons with `callback_data="hint:..."`
 - Re-sent after every successful action (summarize, meeting, task, lead, booking)
 - Imported by other routers: `from app.bot.routers.start import MENU_KB`
 - Every hint response includes `BACK_MENU_KB` ("◀️ Меню") button for navigation back to main menu
@@ -112,6 +114,19 @@ Order matters — `buffer.py` must be last (catch-all):
 - VPN required (403 without it from unsupported region)
 - AIClient methods: `complete(prompt)`, `chat(messages)`, `.raw` for direct access
 
+### Glafira (AI Office Manager via OpenClaw)
+- **OpenClaw** — AI agent that controls browser via prompts (RPA), installed on Mac
+- Mac (OpenClaw gateway): Tailscale IP `100.96.205.95:18789`, bind `lan` (0.0.0.0)
+- Ubuntu server (Jarvis prod): Tailscale IP `100.109.25.60`
+- Gateway auth: token-based (`OPENCLAW_TOKEN`), HTTP endpoint `/v1/chat/completions` (must be enabled in `~/.openclaw/openclaw.json` → `gateway.http.endpoints.chatCompletions.enabled: true`)
+- **OpenClawClient** (`app/services/openclaw_client.py`): HTTP SSE streaming via httpx, `stream_chat(messages)` yields text chunks
+- **Glafira router** (`app/bot/routers/glafira.py`): FSM state `Glafira.chatting`, persistent conversation mode (FSM not cleared after each response)
+- Access control: hardcoded allowlist `GLAFIRA_ALLOWED = {33570147, 367140321}` (Artem Sitnikov, Natalya Kurland). Others see "Функция в тестовом режиме"
+- Streaming UX: sends "Думаю..." message, edits it as chunks arrive (throttled: 0.8s between edits, min 20 new chars), `html.escape()` on response
+- Exit via `glafira:exit` callback (dedicated, not `back:menu`) to properly clear FSM state
+- Conversation history stored in FSM data, capped at 20 messages
+- OpenClaw model: Claude Sonnet 4.6 via OpenRouter
+
 ## Database Schema (aiosqlite)
 
 ```sql
@@ -127,7 +142,7 @@ Required: `BOT_TOKEN`, `OPENAI_API_KEY`, `BITRIX_CLIENT_ID`, `BITRIX_CLIENT_SECR
 
 First run: `BITRIX_REFRESH_TOKEN` (for initial OAuth token exchange)
 
-Optional: `BITRIX_DOMAIN`, `OPENAI_MODEL` (default `gpt-5.2`), `DB_PATH` (default `data/arkadyjarvis.db`), `SUMMARY_HOUR` (default 19), `SUMMARY_MINUTE` (default 0), `TIMEZONE` (default `Asia/Novosibirsk`)
+Optional: `BITRIX_DOMAIN`, `OPENAI_MODEL` (default `gpt-5.2`), `DB_PATH` (default `data/arkadyjarvis.db`), `SUMMARY_HOUR` (default 19), `SUMMARY_MINUTE` (default 0), `TIMEZONE` (default `Asia/Novosibirsk`), `OPENCLAW_URL` (e.g. `http://100.96.205.95:18789`), `OPENCLAW_TOKEN`, `OPENCLAW_AGENT_ID` (default `main`)
 
 ## Running
 
