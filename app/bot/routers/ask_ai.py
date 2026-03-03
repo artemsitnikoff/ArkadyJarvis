@@ -17,10 +17,10 @@ class AskAI(StatesGroup):
     waiting_for_question = State()
 
 
-@router.message(F.text.regexp(r"(?i)^(спроси|вопрос)\s"))
+@router.message(F.text.regexp(r"(?i)^(спроси\s+ai|вопрос)\s"))
 async def handle_askai_text(message: Message, openrouter):
     text = message.text or ""
-    question = re.sub(r"(?i)^(спроси|вопрос)\s+", "", text).strip()
+    question = re.sub(r"(?i)^(спроси\s+ai|вопрос)\s+", "", text).strip()
     if not question:
         await message.reply("Напиши вопрос после команды.")
         return
