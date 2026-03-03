@@ -37,6 +37,8 @@ async def on_bot_added(event: ChatMemberUpdated):
 @router.message(BotMentionFilter(), F.chat.type.in_({"group", "supergroup"}))
 async def handle_bot_mention(message: Message):
     """Reply with menu when bot is @mentioned in a group chat."""
+    if await db.is_group_muted(message.chat.id):
+        return
     await message.reply("Выбери команду — покажу подсказку:", reply_markup=MENU_KB)
 
 
