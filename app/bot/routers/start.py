@@ -37,6 +37,7 @@ MENU_KB = InlineKeyboardMarkup(inline_keyboard=[
         InlineKeyboardButton(text="🧠 Спроси AI", callback_data="hint:askai"),
     ],
     [
+        InlineKeyboardButton(text="🤖 Глафира", callback_data="hint:glafira"),
         InlineKeyboardButton(text="❓ Все команды", callback_data="hint:all"),
     ],
 ])
@@ -185,6 +186,27 @@ async def handle_hint(callback: CallbackQuery, state: FSMContext, bitrix):
 
     if key == "meetings":
         await _show_meetings(callback, bitrix)
+        return
+
+    if key == "glafira":
+        from app.bot.routers.glafira import Glafira, GLAFIRA_ALLOWED, GLAFIRA_EXIT_KB
+        if callback.from_user.id not in GLAFIRA_ALLOWED:
+            await callback.message.answer(
+                "🚧 Функция в тестовом режиме. Доступ ограничен.",
+                reply_markup=MENU_KB,
+            )
+            await callback.answer()
+            return
+        await state.set_state(Glafira.chatting)
+        await state.update_data(messages=[])
+        await callback.message.answer(
+            "🤖 <b>Глафира</b> — AI офис-менеджер\n\n"
+            "Напиши что нужно сделать. Я управляю браузером "
+            "и могу выполнять задачи на сайтах.\n\n"
+            "Для выхода нажми «◀️ Меню».",
+            reply_markup=GLAFIRA_EXIT_KB,
+        )
+        await callback.answer()
         return
 
     if key == "all":

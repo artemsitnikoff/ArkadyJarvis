@@ -23,6 +23,11 @@ class Settings(BaseSettings):
     jira_username: str = ""
     jira_password: SecretStr = SecretStr("")
 
+    # OpenClaw (Glafira)
+    openclaw_url: str = ""
+    openclaw_token: SecretStr = SecretStr("")
+    openclaw_agent_id: str = "main"
+
     # Encryption
     encryption_key: str = ""
 

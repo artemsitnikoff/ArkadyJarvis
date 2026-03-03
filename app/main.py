@@ -14,6 +14,7 @@ from app.db import close_db, init_db
 from app.scheduler.jobs import daily_summary_job
 from app.services.ai_client import AIClient
 from app.services.bitrix_client import BitrixClient
+from app.services.openclaw_client import OpenClawClient
 from app.services.openrouter_client import OpenRouterClient
 
 logging.basicConfig(
@@ -38,10 +39,12 @@ async def lifespan(app: FastAPI):
     ai_client = AIClient()
     bitrix = BitrixClient()
     openrouter = OpenRouterClient()
+    openclaw = OpenClawClient()
 
     dp["ai_client"] = ai_client
     dp["bitrix"] = bitrix
     dp["openrouter"] = openrouter
+    dp["openclaw"] = openclaw
 
     # Register middlewares on the dispatcher (order: error wraps auth wraps handler)
     dp.message.outer_middleware(ErrorMiddleware())
@@ -85,6 +88,7 @@ async def lifespan(app: FastAPI):
     await ai_client.close()
     await bitrix.close()
     await openrouter.close()
+    await openclaw.close()
     await close_db()
     logger.info("Shutdown complete")
 
