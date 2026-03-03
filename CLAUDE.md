@@ -7,7 +7,7 @@ Multi-user Telegram bot (BotFather, NOT userbot) for team chat summarization, Bi
 - **Python 3.11+**, aiogram v3 (Telegram Bot API), FastAPI + Uvicorn, OpenAI GPT-5.2, Bitrix24 REST API, Jira REST API
 - Uvicorn owns the event loop; aiogram polling runs as `asyncio.create_task()` in FastAPI lifespan
 - APScheduler for daily summary cron job
-- aiosqlite for persistence (users, Jira creds, message buffer, group chats)
+- aiosqlite for persistence (users, message buffer, group chats, muted groups)
 - pydantic-settings for config from `.env`
 
 ## Project Structure
@@ -16,12 +16,12 @@ Multi-user Telegram bot (BotFather, NOT userbot) for team chat summarization, Bi
 app/
   main.py                  # FastAPI app, lifespan, aiogram polling, APScheduler
   config.py                # pydantic-settings (Settings class, reads .env)
-  db.py                    # aiosqlite: schema, CRUD (users, jira_credentials, group_chats, message_buffer)
+  db.py                    # aiosqlite: schema, CRUD (users, group_chats, message_buffer, muted_groups)
   utils.py                 # Parsers (time, attendees, Bitrix datetime), constants, merge_intervals
   summarizer.py            # GPT summarization + clean_html_for_telegram()
   bot/
     create.py              # create_bot() + create_dispatcher() — router registration order matters
-    middlewares.py          # AuthMiddleware — checks Bitrix auth, injects db_user
+    middlewares.py          # AuthMiddleware — checks Bitrix auth, injects db_user; muted group check
     routers/
       start.py             # /start (auto-auth via @username → Bitrix), /help, MENU_KB, hint callbacks
       auth.py              # /jira FSM (JiraSetup: url → username → password), /skip
@@ -56,6 +56,7 @@ scripts/
 - **JiraClient** is per-user: `async with JiraClient(tg_id) as jira:` — loads creds from DB
 - All persistent state in SQLite via `app/db.py`
 - AuthMiddleware injects `db_user: dict` into every handler's kwargs
+- Muted groups: bot collects messages for summarization but blocks all triggers (replies with rejection). Checked in AuthMiddleware before auth logic. CRUD: `db.is_group_muted()`, `db.add_muted_group()`, `db.remove_muted_group()`
 
 ### Router Registration Order (in `create.py`)
 Order matters — `buffer.py` must be last (catch-all):
@@ -115,9 +116,9 @@ Order matters — `buffer.py` must be last (catch-all):
 
 ```sql
 users (telegram_id PK, bitrix_user_id, bitrix_domain, display_name, is_active, created_at)
-jira_credentials (telegram_id PK FK, jira_url, jira_username, jira_password)
 group_chats (chat_id PK, chat_title, added_at, summary_enabled)
 message_buffer (id PK AUTO, chat_id, sender_id, sender_name, text, sent_at) + INDEX(chat_id, sent_at)
+muted_groups (chat_id PK) — groups where bot collects messages but doesn't respond to triggers
 ```
 
 ## Config (.env)
