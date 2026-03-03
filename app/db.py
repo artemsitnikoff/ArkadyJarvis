@@ -47,11 +47,16 @@ CREATE TABLE IF NOT EXISTS message_buffer (
 );
 
 CREATE INDEX IF NOT EXISTS idx_buffer_chat_date ON message_buffer(chat_id, sent_at);
+
+CREATE TABLE IF NOT EXISTS muted_groups (
+    chat_id INTEGER PRIMARY KEY
+);
 """
 
 
 MIGRATIONS: list[str] = [
     "DROP TABLE IF EXISTS jira_credentials;",
+    "INSERT OR IGNORE INTO muted_groups (chat_id) VALUES (-1001408128567);",
 ]
 
 
@@ -213,3 +218,27 @@ async def cleanup_old_messages(days: int = 7) -> int:
         count = cur.rowcount
     await db.commit()
     return count
+
+
+# ── Muted groups ─────────────────────────────────────────────
+
+async def is_group_muted(chat_id: int) -> bool:
+    db = get_db()
+    async with db.execute(
+        "SELECT 1 FROM muted_groups WHERE chat_id = ?", (chat_id,)
+    ) as cur:
+        return await cur.fetchone() is not None
+
+
+async def add_muted_group(chat_id: int) -> None:
+    db = get_db()
+    await db.execute(
+        "INSERT OR IGNORE INTO muted_groups (chat_id) VALUES (?)", (chat_id,)
+    )
+    await db.commit()
+
+
+async def remove_muted_group(chat_id: int) -> None:
+    db = get_db()
+    await db.execute("DELETE FROM muted_groups WHERE chat_id = ?", (chat_id,))
+    await db.commit()

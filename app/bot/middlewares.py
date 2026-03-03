@@ -59,6 +59,25 @@ def _needs_auth(text: str) -> bool:
     return any(p.match(text) for p in AUTH_TRIGGERS)
 
 
+def _would_trigger_response(text: str) -> bool:
+    """Check if this message would trigger any bot response."""
+    if not text:
+        return False
+    stripped = text.strip()
+    # Any /command
+    if stripped.startswith("/"):
+        return True
+    lower = stripped.lower()
+    # суммаризация trigger
+    if lower == "суммаризация":
+        return True
+    # ситников (auto_reply) — substring match
+    if "ситников" in lower:
+        return True
+    # AUTH_TRIGGERS (meetings, tasks, leads, images, AI)
+    return any(p.match(stripped) for p in AUTH_TRIGGERS)
+
+
 class AuthMiddleware(BaseMiddleware):
     """Check authorization for all bot commands and triggers.
 
@@ -76,6 +95,18 @@ class AuthMiddleware(BaseMiddleware):
         # Public commands — always allow
         if event.text and event.text.split()[0].split("@")[0] in PUBLIC_COMMANDS:
             return await handler(event, data)
+
+        # Muted groups — bot collects messages but doesn't respond to triggers
+        if event.chat.type in ("group", "supergroup"):
+            if await db.is_group_muted(event.chat.id):
+                text = event.text or event.caption or ""
+                if _would_trigger_response(text):
+                    await event.reply(
+                        "Мне запретили отвечать в этой группе. "
+                        "Группа внесена в список исключений."
+                    )
+                    return None
+                return await handler(event, data)
 
         # Load user if exists
         user = await db.get_user(event.from_user.id) if event.from_user else None
