@@ -87,10 +87,15 @@ async def handle_glafira_message(
         # Final edit with complete text
         if full_text.strip():
             display = html_mod.escape(full_text.strip()[:4000])
-            await wait_msg.edit_text(
-                f"🤖 {display}",
-                reply_markup=GLAFIRA_EXIT_KB,
-            )
+            final_msg = f"🤖 {display}"
+            try:
+                await wait_msg.edit_text(
+                    final_msg,
+                    reply_markup=GLAFIRA_EXIT_KB,
+                )
+            except Exception:
+                # Already showing same text — ignore "message is not modified"
+                pass
         else:
             await wait_msg.edit_text(
                 "🤖 Глафира не ответила. Попробуй переформулировать.",
