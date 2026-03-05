@@ -38,6 +38,9 @@ MENU_KB = InlineKeyboardMarkup(inline_keyboard=[
     ],
     [
         InlineKeyboardButton(text="🤖 Глафира", callback_data="hint:glafira"),
+        InlineKeyboardButton(text="👔 Анатолий", callback_data="hint:recruiter"),
+    ],
+    [
         InlineKeyboardButton(text="❓ Все команды", callback_data="hint:all"),
     ],
 ])
@@ -167,7 +170,7 @@ async def cmd_help(message: Message):
 
 
 @router.callback_query(F.data.startswith("hint:"))
-async def handle_hint(callback: CallbackQuery, state: FSMContext, bitrix):
+async def handle_hint(callback: CallbackQuery, state: FSMContext, bitrix, potok):
     key = callback.data.split(":", 1)[1]
 
     if key == "image":
@@ -206,6 +209,46 @@ async def handle_hint(callback: CallbackQuery, state: FSMContext, bitrix):
             "Для выхода нажми «◀️ Меню».",
             reply_markup=GLAFIRA_EXIT_KB,
         )
+        await callback.answer()
+        return
+
+    if key == "recruiter":
+        from app.bot.routers.recruiter import Recruiter, RECRUITER_ALLOWED, RECRUITER_EXIT_KB
+        if callback.from_user.id not in RECRUITER_ALLOWED:
+            await callback.message.answer(
+                "🚧 Функция в тестовом режиме. Доступ ограничен.",
+                reply_markup=MENU_KB,
+            )
+            await callback.answer()
+            return
+        wait = await callback.message.answer("👔 Загружаю вакансии...")
+        try:
+            jobs = await potok.get_jobs()
+        except Exception as e:
+            logger.error("Potok error: %s", e, exc_info=True)
+            await wait.edit_text(
+                f"❌ Potok недоступен: {e}",
+                reply_markup=MENU_KB,
+            )
+            await callback.answer()
+            return
+        if not jobs:
+            await wait.edit_text("👔 Нет активных вакансий.", reply_markup=MENU_KB)
+            await callback.answer()
+            return
+        buttons = [
+            [InlineKeyboardButton(
+                text=f"{j.name} ({j.total_applicants})",
+                callback_data=f"recruit:job:{j.id}",
+            )]
+            for j in jobs[:20]
+        ]
+        buttons.append([InlineKeyboardButton(text="◀️ Меню", callback_data="recruit:exit")])
+        await wait.edit_text(
+            "👔 Выбери вакансию для оценки кандидатов:",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+        )
+        await state.set_state(Recruiter.choosing_job)
         await callback.answer()
         return
 

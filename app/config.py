@@ -28,6 +28,11 @@ class Settings(BaseSettings):
     openclaw_token: SecretStr = SecretStr("")
     openclaw_agent_id: str = "main"
 
+    # Potok.io (Recruiter Anatoly)
+    potok_api_token: SecretStr = SecretStr("")
+    potok_base_url: str = "https://app.potok.io"
+    claude_cli_path: str = "claude"
+
     # Encryption
     encryption_key: str = ""
 

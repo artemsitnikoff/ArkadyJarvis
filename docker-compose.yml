@@ -6,4 +6,5 @@ services:
     volumes:
       - ./data:/app/data
       - ./.env:/app/.env:ro
+      - ~/.claude:/root/.claude:ro
     restart: unless-stopped

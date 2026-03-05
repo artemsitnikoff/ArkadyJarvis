@@ -16,6 +16,7 @@ from app.services.ai_client import AIClient
 from app.services.bitrix_client import BitrixClient
 from app.services.openclaw_client import OpenClawClient
 from app.services.openrouter_client import OpenRouterClient
+from app.services.potok_client import PotokClient
 
 logging.basicConfig(
     level=logging.INFO,
@@ -40,11 +41,13 @@ async def lifespan(app: FastAPI):
     bitrix = BitrixClient()
     openrouter = OpenRouterClient()
     openclaw = OpenClawClient()
+    potok = PotokClient()
 
     dp["ai_client"] = ai_client
     dp["bitrix"] = bitrix
     dp["openrouter"] = openrouter
     dp["openclaw"] = openclaw
+    dp["potok"] = potok
 
     # Register middlewares on the dispatcher (order: error wraps auth wraps handler)
     dp.message.outer_middleware(ErrorMiddleware())
@@ -89,6 +92,7 @@ async def lifespan(app: FastAPI):
     await bitrix.close()
     await openrouter.close()
     await openclaw.close()
+    await potok.close()
     await close_db()
     logger.info("Shutdown complete")
 
