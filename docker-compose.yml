@@ -3,8 +3,9 @@ services:
     build: .
     ports:
       - "8002:8002"
+    env_file:
+      - .env
     volumes:
       - ./data:/app/data
       - ./.env:/app/.env:ro
-      - ~/.claude.json:/root/.claude.json:ro
     restart: unless-stopped
