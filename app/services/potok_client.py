@@ -71,7 +71,7 @@ class PotokClient:
         total_pages = first.get("pages", 1)
 
         for item in first.get("data", []):
-            if skip_scored and re.match(r"^\d{3}-", item.get("last_name", "")):
+            if skip_scored and re.match(r"^\d{3}-", item.get("last_name") or ""):
                 continue
             for aj in item.get("ajs_joins", []):
                 if aj.get("job", {}).get("id") == job_id:
@@ -90,7 +90,7 @@ class PotokClient:
                 if isinstance(data, Exception):
                     continue
                 for item in data.get("data", []):
-                    if skip_scored and re.match(r"^\d{3}-", item.get("last_name", "")):
+                    if skip_scored and re.match(r"^\d{3}-", item.get("last_name") or ""):
                         continue
                     for aj in item.get("ajs_joins", []):
                         if aj.get("job", {}).get("id") == job_id:
