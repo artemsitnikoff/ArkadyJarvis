@@ -18,10 +18,6 @@ router = Router()
 
 RECRUITER_ALLOWED = {33570147}  # Artem Sitnikov
 
-RECRUITER_EXIT_KB = InlineKeyboardMarkup(inline_keyboard=[
-    [InlineKeyboardButton(text="◀️ Меню", callback_data="recruit:exit")],
-])
-
 
 class Recruiter(StatesGroup):
     choosing_job = State()
@@ -36,6 +32,46 @@ def _score_label(score: int) -> str:
     if score >= 41:
         return "Средне"
     return "Слабо"
+
+
+def _format_result_message(
+    job_name: str, idx: int, total: int, result, applicant_name: str,
+) -> str:
+    """Format full scoring result as a Telegram HTML message."""
+    label = _score_label(result.score)
+    name = html_mod.escape(applicant_name)
+    jname = html_mod.escape(job_name)
+
+    lines = [
+        f"👔 <b>{jname}</b> [{idx}/{total}]",
+        "",
+        f"<b>{name}</b>",
+        f"Балл: <b>{result.score}/100</b> ({label})",
+        "",
+        html_mod.escape(result.reasoning),
+    ]
+
+    if result.breakdown:
+        lines.append("")
+        lines.append("📊 <b>Разбивка по критериям:</b>")
+        for b in result.breakdown:
+            criterion = html_mod.escape(b.criterion)
+            comment = html_mod.escape(b.comment) if b.comment else ""
+            lines.append(f"  {criterion}: <b>{b.score}</b> — {comment}")
+
+    if result.strengths:
+        lines.append("")
+        lines.append("✅ <b>Сильные стороны:</b>")
+        for s in result.strengths:
+            lines.append(f"  • {html_mod.escape(s)}")
+
+    if result.weaknesses:
+        lines.append("")
+        lines.append("⚠️ <b>Слабые стороны:</b>")
+        for w in result.weaknesses:
+            lines.append(f"  • {html_mod.escape(w)}")
+
+    return "\n".join(lines)
 
 
 @router.callback_query(F.data == "recruit:exit")
@@ -62,7 +98,7 @@ async def handle_job_selected(callback: CallbackQuery, state: FSMContext, potok)
         logger.error("Potok error loading job %s: %s", job_id, e, exc_info=True)
         await progress_msg.edit_text(
             f"❌ Ошибка загрузки из Potok: {html_mod.escape(str(e))}",
-            reply_markup=RECRUITER_EXIT_KB,
+            reply_markup=MENU_KB,
         )
         await state.clear()
         return
@@ -71,33 +107,45 @@ async def handle_job_selected(callback: CallbackQuery, state: FSMContext, potok)
         await progress_msg.edit_text(
             f"👔 <b>{html_mod.escape(job.name)}</b>\n\n"
             "Все кандидаты уже оценены (или нет кандидатов).",
-            reply_markup=RECRUITER_EXIT_KB,
+            reply_markup=MENU_KB,
         )
         await state.clear()
         return
 
     await state.set_state(Recruiter.scoring)
     total = len(applicants)
-    job_name = html_mod.escape(job.name)
-    lines: list[str] = []
+    job_name = job.name
+    scored = 0
+    errors = 0
+
+    # Delete "loading" message, start scoring
+    try:
+        await progress_msg.delete()
+    except Exception:
+        pass
 
     for i, applicant in enumerate(applicants, 1):
-        name = html_mod.escape(applicant.display_name)
+        name = applicant.display_name
 
-        # Update progress
-        progress_lines = "\n".join(lines) + (f"\n⏳ {name}..." if lines else f"⏳ {name}...")
-        try:
-            await progress_msg.edit_text(
-                f"👔 <b>{job_name}</b>\n\n{progress_lines}\n\n[{i}/{total}]",
-                reply_markup=RECRUITER_EXIT_KB,
-            )
-        except Exception:
-            pass
+        # Show "thinking" message
+        thinking_msg = await callback.message.answer(
+            f"👔 <b>{html_mod.escape(job_name)}</b> [{i}/{total}]\n\n"
+            f"⏳ {html_mod.escape(name)}..."
+        )
 
         try:
             result = await score_applicant(job, applicant)
-            label = _score_label(result.score)
-            lines.append(f"✅ {result.score} {name} — {label}")
+
+            # Edit thinking message with full result
+            text = _format_result_message(job_name, i, total, result, name)
+            try:
+                await thinking_msg.edit_text(text)
+            except Exception:
+                # If edit fails (message too long?), send new
+                await thinking_msg.delete()
+                await callback.message.answer(text)
+
+            scored += 1
 
             # Push to Potok
             try:
@@ -109,25 +157,20 @@ async def handle_job_selected(callback: CallbackQuery, state: FSMContext, potok)
                 logger.error("Potok push error for %s: %s", applicant.id, e)
 
         except Exception as e:
-            logger.error("Scoring error for %s: %s", applicant.display_name, e, exc_info=True)
-            lines.append(f"❌ {name} — ошибка")
-
-        # Update with result
-        try:
-            await progress_msg.edit_text(
-                f"👔 <b>{job_name}</b>\n\n" + "\n".join(lines) + f"\n\n[{i}/{total}]",
-                reply_markup=RECRUITER_EXIT_KB,
-            )
-        except Exception:
-            pass
+            logger.error("Scoring error for %s: %s", name, e, exc_info=True)
+            try:
+                await thinking_msg.edit_text(
+                    f"👔 <b>{html_mod.escape(job_name)}</b> [{i}/{total}]\n\n"
+                    f"❌ {html_mod.escape(name)} — ошибка: {html_mod.escape(str(e)[:200])}"
+                )
+            except Exception:
+                pass
+            errors += 1
 
     # Final summary
-    try:
-        await progress_msg.edit_text(
-            f"👔 <b>{job_name}</b> — готово!\n\n" + "\n".join(lines),
-            reply_markup=RECRUITER_EXIT_KB,
-        )
-    except Exception:
-        pass
-
+    summary = (
+        f"👔 <b>{html_mod.escape(job_name)}</b> — готово!\n\n"
+        f"Оценено: {scored} | Ошибок: {errors}"
+    )
+    await callback.message.answer(summary, reply_markup=MENU_KB)
     await state.clear()
