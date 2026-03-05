@@ -35,6 +35,7 @@ class Settings(BaseSettings):
 
     # Claude CLI auth (passed through to subprocess env, not used by app directly)
     claude_code_oauth_token: str = ""
+    claude_refresh_token: str = ""
 
     # Encryption
     encryption_key: str = ""

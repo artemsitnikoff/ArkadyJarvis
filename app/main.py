@@ -16,6 +16,7 @@ from app.services.ai_client import AIClient
 from app.services.bitrix_client import BitrixClient
 from app.services.openclaw_client import OpenClawClient
 from app.services.openrouter_client import OpenRouterClient
+from app.services.claude_token import init_token_file
 from app.services.potok_client import PotokClient
 
 logging.basicConfig(
@@ -35,6 +36,8 @@ async def lifespan(app: FastAPI):
     # Startup
     await init_db()
     logger.info("Database ready")
+
+    init_token_file()
 
     # Create service instances and inject into dispatcher
     ai_client = AIClient()

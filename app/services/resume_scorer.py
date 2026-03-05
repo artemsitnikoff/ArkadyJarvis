@@ -182,6 +182,9 @@ async def _call_cli(prompt: str) -> str:
 
 
 async def score_applicant(job: Job, applicant: Applicant) -> ScoringResult:
+    from app.services.claude_token import ensure_fresh_token
+    await ensure_fresh_token()
+
     prompt = _build_prompt(job, applicant)
     response_text = await _call_cli(prompt)
     result = _parse_response(response_text)
