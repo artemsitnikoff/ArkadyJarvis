@@ -213,7 +213,7 @@ async def handle_hint(callback: CallbackQuery, state: FSMContext, bitrix, potok)
         return
 
     if key == "recruiter":
-        from app.bot.routers.recruiter import Recruiter, RECRUITER_ALLOWED, RECRUITER_EXIT_KB
+        from app.bot.routers.recruiter import Recruiter, RECRUITER_ALLOWED
         if callback.from_user.id not in RECRUITER_ALLOWED:
             await callback.message.answer(
                 "🚧 Функция в тестовом режиме. Доступ ограничен.",
