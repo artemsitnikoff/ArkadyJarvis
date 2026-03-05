@@ -17,7 +17,7 @@ from app.services.resume_scorer import _extract_recruiter_instructions
 logger = logging.getLogger("arkadyjarvis")
 router = Router()
 
-RECRUITER_ALLOWED = {33570147, 367140321}  # Artem Sitnikov, Natalya Kurland
+RECRUITER_ALLOWED = {33570147, 367140321, 421632942}  # Artem, Natalya, Liza
 
 
 class Recruiter(StatesGroup):
