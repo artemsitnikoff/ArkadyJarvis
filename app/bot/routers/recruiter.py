@@ -12,6 +12,7 @@ from aiogram.types import (
 
 from app.bot.routers.start import MENU_KB
 from app.services.resume_scorer import score_applicant
+from app.services.resume_scorer import _extract_recruiter_instructions
 
 logger = logging.getLogger("arkadyjarvis")
 router = Router()
@@ -118,9 +119,23 @@ async def handle_job_selected(callback: CallbackQuery, state: FSMContext, potok)
     scored = 0
     errors = 0
 
-    # Delete "loading" message, start scoring
+    # Show job info before scoring
+    raw_desc = job.description or ""
+    clean_desc, recruiter_instructions = _extract_recruiter_instructions(raw_desc)
+
+    info_lines = [f"👔 <b>{html_mod.escape(job_name)}</b>", ""]
+    if clean_desc:
+        # Trim to reasonable length for Telegram
+        desc_text = clean_desc[:1500]
+        info_lines.append(f"📋 <b>Описание:</b>\n{html_mod.escape(desc_text)}")
+        info_lines.append("")
+    if recruiter_instructions:
+        info_lines.append(f"🎯 <b>Важно для CLAUDE:</b>\n{html_mod.escape(recruiter_instructions[:1000])}")
+        info_lines.append("")
+    info_lines.append(f"Кандидатов к оценке: <b>{total}</b>")
+
     try:
-        await progress_msg.delete()
+        await progress_msg.edit_text("\n".join(info_lines))
     except Exception:
         pass
 
