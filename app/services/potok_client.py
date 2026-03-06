@@ -11,8 +11,29 @@ logger = logging.getLogger("arkadyjarvis")
 
 
 def _strip_html(html: str) -> str:
-    text = re.sub(r"<[^>]+>", " ", html)
-    text = re.sub(r"\s+", " ", text)
+    """Convert HTML to readable plain text preserving structure."""
+    text = html
+    # Line breaks
+    text = re.sub(r"<br\s*/?>", "\n", text, flags=re.IGNORECASE)
+    # Block elements → newlines
+    text = re.sub(r"</(p|div|h[1-6]|tr|table)>", "\n", text, flags=re.IGNORECASE)
+    text = re.sub(r"<(p|div|h[1-6]|tr|table|thead|tbody)\b[^>]*>", "\n", text, flags=re.IGNORECASE)
+    # List items → bullets
+    text = re.sub(r"<li[^>]*>", "\n• ", text, flags=re.IGNORECASE)
+    text = re.sub(r"</li>", "", text, flags=re.IGNORECASE)
+    # Remove remaining tags
+    text = re.sub(r"<[^>]+>", "", text)
+    # Decode common entities
+    text = text.replace("&nbsp;", " ").replace("&amp;", "&")
+    text = text.replace("&lt;", "<").replace("&gt;", ">")
+    text = text.replace("&quot;", '"').replace("&laquo;", "«").replace("&raquo;", "»")
+    # Collapse spaces on same line (but keep newlines)
+    text = re.sub(r"[^\S\n]+", " ", text)
+    # Strip each line
+    lines = [line.strip() for line in text.split("\n")]
+    # Collapse 3+ blank lines into 2
+    text = "\n".join(lines)
+    text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()
 
 

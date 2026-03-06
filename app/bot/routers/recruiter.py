@@ -22,6 +22,7 @@ RECRUITER_ALLOWED = {33570147, 367140321, 421632942}  # Artem, Natalya, Liza
 
 class Recruiter(StatesGroup):
     choosing_job = State()
+    confirming = State()
     scoring = State()
 
 
@@ -87,6 +88,7 @@ async def handle_recruit_exit(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data.startswith("recruit:job:"), Recruiter.choosing_job)
 async def handle_job_selected(callback: CallbackQuery, state: FSMContext, potok):
+    """Show job info + candidate count, then 2 buttons: Score / Menu."""
     job_id = int(callback.data.split(":")[-1])
     await callback.answer()
 
@@ -104,6 +106,8 @@ async def handle_job_selected(callback: CallbackQuery, state: FSMContext, potok)
         await state.clear()
         return
 
+    total = len(applicants)
+
     if not applicants:
         await progress_msg.edit_text(
             f"👔 <b>{html_mod.escape(job.name)}</b>\n\n"
@@ -113,31 +117,72 @@ async def handle_job_selected(callback: CallbackQuery, state: FSMContext, potok)
         await state.clear()
         return
 
-    await state.set_state(Recruiter.scoring)
-    total = len(applicants)
-    job_name = job.name
-    scored = 0
-    errors = 0
-
-    # Show job info before scoring
+    # Build info message
     raw_desc = job.description or ""
     clean_desc, recruiter_instructions = _extract_recruiter_instructions(raw_desc)
+    job_name = html_mod.escape(job.name)
 
-    info_lines = [f"👔 <b>{html_mod.escape(job_name)}</b>", ""]
+    info_lines = [f"👔 <b>{job_name}</b>", ""]
     if clean_desc:
-        # Trim to reasonable length for Telegram
         desc_text = clean_desc[:1500]
         info_lines.append(f"📋 <b>Описание:</b>\n{html_mod.escape(desc_text)}")
         info_lines.append("")
     if recruiter_instructions:
-        info_lines.append(f"🎯 <b>Важно для CLAUDE:</b>\n{html_mod.escape(recruiter_instructions[:1000])}")
+        info_lines.append(f"🎯 <b>Важно для CLAUDE:</b>\n{html_mod.escape(recruiter_instructions[:1500])}")
         info_lines.append("")
     info_lines.append(f"Кандидатов к оценке: <b>{total}</b>")
 
+    confirm_kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text=f"✅ Оценить кандидатов ({total})",
+            callback_data=f"recruit:score:{job_id}",
+        )],
+        [InlineKeyboardButton(text="◀️ Меню", callback_data="recruit:exit")],
+    ])
+
     try:
-        await progress_msg.edit_text("\n".join(info_lines))
+        await progress_msg.edit_text("\n".join(info_lines), reply_markup=confirm_kb)
     except Exception:
-        pass
+        await callback.message.answer("\n".join(info_lines), reply_markup=confirm_kb)
+
+    await state.set_state(Recruiter.confirming)
+    await state.update_data(job_id=job_id)
+
+
+@router.callback_query(F.data.startswith("recruit:score:"), Recruiter.confirming)
+async def handle_start_scoring(callback: CallbackQuery, state: FSMContext, potok):
+    """User confirmed — start scoring."""
+    job_id = int(callback.data.split(":")[-1])
+    await callback.answer()
+
+    await state.set_state(Recruiter.scoring)
+
+    # Reload job + applicants (fresh data)
+    try:
+        job = await potok.get_job(job_id)
+        applicants = await potok.get_applicants_for_job(job_id, limit=20, skip_scored=True)
+    except Exception as e:
+        logger.error("Potok error: %s", e, exc_info=True)
+        await callback.message.answer(
+            f"❌ Ошибка: {html_mod.escape(str(e))}",
+            reply_markup=MENU_KB,
+        )
+        await state.clear()
+        return
+
+    if not applicants:
+        await callback.message.answer(
+            f"👔 <b>{html_mod.escape(job.name)}</b>\n\n"
+            "Все кандидаты уже оценены.",
+            reply_markup=MENU_KB,
+        )
+        await state.clear()
+        return
+
+    total = len(applicants)
+    job_name = job.name
+    scored = 0
+    errors = 0
 
     for i, applicant in enumerate(applicants, 1):
         name = applicant.display_name
@@ -156,7 +201,6 @@ async def handle_job_selected(callback: CallbackQuery, state: FSMContext, potok)
             try:
                 await thinking_msg.edit_text(text)
             except Exception:
-                # If edit fails (message too long?), send new
                 await thinking_msg.delete()
                 await callback.message.answer(text)
 
