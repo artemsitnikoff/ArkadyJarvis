@@ -152,6 +152,17 @@ async def handle_job_selected(callback: CallbackQuery, state: FSMContext, potok)
     total_all = len(all_applicants)
     total_new = len(new_applicants)
 
+    logger.info(
+        "Recruiter job %s: %d total, %d new",
+        job_id, total_all, total_new,
+    )
+    for a in all_applicants:
+        is_scored = bool(re.match(r"^\d{3}-", a.last_name or ""))
+        logger.info(
+            "  candidate id=%s last_name=%r first_name=%r scored=%s",
+            a.id, a.last_name, a.first_name, is_scored,
+        )
+
     if total_all == 0:
         info_lines[-1] = "Нет кандидатов на эту вакансию."
         try:
