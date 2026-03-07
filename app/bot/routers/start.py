@@ -170,8 +170,61 @@ async def cmd_help(message: Message):
 
 
 @router.callback_query(F.data.startswith("hint:"))
-async def handle_hint(callback: CallbackQuery, state: FSMContext, bitrix, potok):
+async def handle_hint(callback: CallbackQuery, state: FSMContext, bitrix, potok, ai_client):
     key = callback.data.split(":", 1)[1]
+
+    if key == "summary":
+        await callback.answer()
+        await _run_summary(callback, ai_client)
+        return
+
+    if key == "meeting":
+        from app.bot.routers.meeting import MeetingSetup
+        await state.set_state(MeetingSetup.waiting_for_command)
+        await callback.message.answer(
+            "📅 <b>Создать встречу</b>\n\n"
+            "Напиши время и участников:\n"
+            "<code>14:00 @nick1 @nick2</code>\n\n"
+            "Или просто время — найду коллег по имени.",
+            reply_markup=BACK_MENU_KB,
+        )
+        await callback.answer()
+        return
+
+    if key == "freetime":
+        from app.bot.routers.free_slots import BookSlot
+        await state.set_state(BookSlot.searching_attendee)
+        await state.update_data(attendee_ids=[], attendee_names=[])
+        await callback.message.answer(
+            "🕐 <b>Найди время</b>\n\n"
+            "Напиши имя или фамилию коллеги:",
+            reply_markup=BACK_MENU_KB,
+        )
+        await callback.answer()
+        return
+
+    if key == "task":
+        from app.bot.routers.jira_task import CreateTask
+        await state.set_state(CreateTask.waiting_for_input)
+        await callback.message.answer(
+            "📝 <b>Задача Jira</b>\n\n"
+            "Напиши ключ проекта и описание:\n"
+            "<code>DC Сделать landing page</code>",
+            reply_markup=BACK_MENU_KB,
+        )
+        await callback.answer()
+        return
+
+    if key == "lead":
+        from app.bot.routers.lead import CreateLead
+        await state.set_state(CreateLead.waiting_for_info)
+        await callback.message.answer(
+            "💼 <b>Создать лид</b>\n\n"
+            "Напиши данные контакта (имя, компания, телефон, email):",
+            reply_markup=BACK_MENU_KB,
+        )
+        await callback.answer()
+        return
 
     if key == "image":
         from app.bot.routers.image import ImageGen
@@ -260,6 +313,24 @@ async def handle_hint(callback: CallbackQuery, state: FSMContext, bitrix, potok)
     await callback.answer()
 
 
+async def _run_summary(callback: CallbackQuery, ai_client):
+    """Run summarization for the current chat (from button press)."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    from app.summarizer import summarize_from_buffer
+
+    chat_id = callback.message.chat.id
+    await callback.answer()
+    tz = ZoneInfo(settings.timezone)
+    start_of_day = datetime.now(tz).replace(hour=0, minute=0, second=0, microsecond=0)
+    try:
+        summary = await summarize_from_buffer(chat_id, ai_client=ai_client, since=start_of_day)
+        await callback.message.answer(f"📊 #summary\n\n{summary}", reply_markup=MENU_KB)
+    except Exception as e:
+        logger.error("Summary error: %s", e, exc_info=True)
+        await callback.message.answer(f"❌ Ошибка суммаризации: {e}", reply_markup=MENU_KB)
+
+
 async def _show_meetings(callback: CallbackQuery, bitrix):
     db_user = await db.get_user(callback.from_user.id)
     if not db_user or not db_user.get("bitrix_user_id"):
@@ -309,7 +380,8 @@ async def _show_meetings(callback: CallbackQuery, bitrix):
 
 
 @router.callback_query(F.data == "back:menu")
-async def handle_back_menu(callback: CallbackQuery):
+async def handle_back_menu(callback: CallbackQuery, state: FSMContext):
+    await state.clear()
     await callback.message.answer(
         "Выбери команду — покажу подсказку:",
         reply_markup=MENU_KB,

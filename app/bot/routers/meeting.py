@@ -21,6 +21,7 @@ router = Router()
 # ── FSM states ────────────────────────────────────────────────
 
 class MeetingSetup(StatesGroup):
+    waiting_for_command = State()
     searching_attendee = State()
     waiting_for_title = State()
 
@@ -96,6 +97,47 @@ async def _do_create_meeting(
 
 # ── Handlers ──────────────────────────────────────────────────
 
+@router.message(MeetingSetup.waiting_for_command)
+async def handle_meeting_fsm(message: Message, state: FSMContext, db_user: DbUser, bitrix):
+    """FSM handler: user entered meeting details from button (no command prefix)."""
+    text = (message.text or "").strip()
+    if not text:
+        await message.reply("Напиши время и участников, например:\n<code>14:00 @nick1 @nick2</code>")
+        return
+
+    # Prepend fake prefix so parse_meeting_time works
+    fake_text = f"создай встречу {text}"
+    dt, err = parse_meeting_time(fake_text)
+    if err:
+        await message.reply(err)
+        return
+
+    await state.clear()
+
+    context = ""
+    if message.reply_to_message and message.reply_to_message.text:
+        context = message.reply_to_message.text
+
+    nicknames, emails = parse_attendees(fake_text)
+
+    if not nicknames and not emails:
+        await state.update_data(
+            dt=dt.isoformat(),
+            context=context,
+            attendee_ids=[],
+            attendee_names=[],
+        )
+        await state.set_state(MeetingSetup.searching_attendee)
+        await message.reply(
+            "Напиши имя или фамилию коллеги:",
+            reply_markup=_cancel_kb(show_add_me=True),
+        )
+        return
+
+    # Has @nicks/emails — proceed with full creation (same as text trigger)
+    await _create_meeting_with_nicks(message, state, db_user, bitrix, dt, context, nicknames, emails)
+
+
 @router.message(F.text.regexp(r"(?i)^(сделай|создай)\s+встречу"))
 async def handle_create_meeting(message: Message, state: FSMContext, db_user: DbUser, bitrix):
     text = message.text or ""
@@ -127,7 +169,13 @@ async def handle_create_meeting(message: Message, state: FSMContext, db_user: Db
         )
         return
 
-    # Resolve attendees from @nicks and emails (original flow)
+    await _create_meeting_with_nicks(message, state, db_user, bitrix, dt, context, nicknames, emails)
+
+
+async def _create_meeting_with_nicks(
+    message, state, db_user, bitrix, dt, context, nicknames, emails,
+):
+    """Resolve @nicks and emails, create meeting in Bitrix."""
     attendee_ids: list[int] = []
     found_names: list[str] = []
     not_found: list[str] = []

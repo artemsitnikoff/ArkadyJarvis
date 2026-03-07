@@ -3,6 +3,8 @@ import logging
 import re
 
 from aiogram import F, Router
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import Message
 
 from app.bot.routers.start import MENU_KB
@@ -10,6 +12,10 @@ from app.config import settings
 
 logger = logging.getLogger("arkadyjarvis")
 router = Router()
+
+
+class CreateLead(StatesGroup):
+    waiting_for_info = State()
 
 EXTRACT_PROMPT = """\
 Из текста ниже извлеки данные для создания CRM-лида. Верни JSON (только JSON, без markdown).
@@ -45,14 +51,28 @@ async def handle_create_lead(message: Message, ai_client, bitrix):
         await message.reply("Напиши данные лида или реплайни на сообщение с информацией.")
         return
 
-    raw = await ai_client.complete(EXTRACT_PROMPT.format(text=combined), max_tokens=512, temperature=0.2)
+    await _create_lead(message, combined, ai_client=ai_client, bitrix=bitrix)
+
+
+@router.message(CreateLead.waiting_for_info)
+async def handle_lead_fsm(message: Message, state: FSMContext, ai_client, bitrix):
+    text = (message.text or "").strip()
+    if not text:
+        await message.reply("Напиши данные лида текстом.")
+        return
+    await state.clear()
+    await _create_lead(message, text, ai_client=ai_client, bitrix=bitrix)
+
+
+async def _create_lead(message: Message, text: str, *, ai_client, bitrix):
+    raw = await ai_client.complete(EXTRACT_PROMPT.format(text=text), max_tokens=512, temperature=0.2)
 
     raw = re.sub(r"^```(?:json)?\s*", "", raw.strip())
     raw = re.sub(r"\s*```$", "", raw)
 
     parsed = json.loads(raw)
 
-    fields: dict = {"TITLE": parsed.get("TITLE") or combined[:100]}
+    fields: dict = {"TITLE": parsed.get("TITLE") or text[:100]}
 
     if parsed.get("NAME"):
         fields["NAME"] = parsed["NAME"]
