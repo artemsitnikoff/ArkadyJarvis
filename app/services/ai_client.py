@@ -1,6 +1,8 @@
-import logging
+"""AI client — uses Claude CLI (subscription, no API tokens)."""
 
-from openai import AsyncOpenAI
+import asyncio
+import logging
+import os
 
 from app.config import settings
 
@@ -8,36 +10,58 @@ logger = logging.getLogger("arkadyjarvis")
 
 
 class AIClient:
-    """OpenAI client wrapper."""
-
-    def __init__(self):
-        self._client = AsyncOpenAI(api_key=settings.openai_api_key.get_secret_value())
+    """Claude CLI wrapper. Uses subscription via CLAUDE_CODE_OAUTH_TOKEN."""
 
     async def complete(
-        self, prompt: str, max_tokens: int = 1024, temperature: float = 1.0
+        self, prompt: str, max_tokens: int = 4096, temperature: float = 1.0,
     ) -> str:
-        response = await self._client.chat.completions.create(
-            model=settings.openai_model,
-            max_completion_tokens=max_tokens,
-            temperature=temperature,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        return response.choices[0].message.content.strip()
+        return await self._call_cli(prompt)
 
     async def chat(
-        self, messages: list[dict], max_tokens: int = 1024, temperature: float = 0.9
+        self, messages: list[dict], max_tokens: int = 4096, temperature: float = 0.9,
     ) -> str:
-        response = await self._client.chat.completions.create(
-            model=settings.openai_model,
-            max_completion_tokens=max_tokens,
-            temperature=temperature,
-            messages=messages,
+        # Format messages as a conversation for CLI
+        parts = []
+        for msg in messages:
+            role = msg.get("role", "user")
+            content = msg.get("content", "")
+            if role == "system":
+                parts.append(f"[Системная инструкция]: {content}")
+            elif role == "assistant":
+                parts.append(f"[Ассистент]: {content}")
+            else:
+                parts.append(f"[Пользователь]: {content}")
+        prompt = "\n\n".join(parts)
+        return await self._call_cli(prompt)
+
+    async def _call_cli(self, prompt: str) -> str:
+        from app.services.claude_token import ensure_fresh_token
+        await ensure_fresh_token()
+
+        env = os.environ.copy()
+        env.pop("CLAUDECODE", None)
+
+        args = [settings.claude_cli_path, "--print", "--output-format", "text"]
+        if settings.claude_model:
+            args.extend(["--model", settings.claude_model])
+
+        proc = await asyncio.create_subprocess_exec(
+            *args,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=env,
         )
-        return response.choices[0].message.content.strip()
+        stdout, stderr = await asyncio.wait_for(
+            proc.communicate(input=prompt.encode()), timeout=120,
+        )
+        if proc.returncode != 0:
+            err = stderr.decode().strip()[:300] or stdout.decode().strip()[:300]
+            raise RuntimeError(f"claude CLI (code {proc.returncode}): {err}")
+        result = stdout.decode().strip()
+        if not result:
+            raise RuntimeError("claude CLI вернул пустой ответ")
+        return result
 
     async def close(self):
-        await self._client.close()
-
-    @property
-    def raw(self) -> AsyncOpenAI:
-        return self._client
+        pass  # no persistent client to close

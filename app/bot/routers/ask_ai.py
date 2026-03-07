@@ -18,30 +18,30 @@ class AskAI(StatesGroup):
 
 
 @router.message(F.text.regexp(r"(?i)^(спроси\s+ai|вопрос)\s"))
-async def handle_askai_text(message: Message, openrouter):
+async def handle_askai_text(message: Message, ai_client):
     text = message.text or ""
     question = re.sub(r"(?i)^(спроси\s+ai|вопрос)\s+", "", text).strip()
     if not question:
         await message.reply("Напиши вопрос после команды.")
         return
-    await _ask_and_reply(message, question, openrouter=openrouter)
+    await _ask_and_reply(message, question, ai_client=ai_client)
 
 
 @router.message(AskAI.waiting_for_question)
-async def handle_askai_fsm(message: Message, state: FSMContext, openrouter):
+async def handle_askai_fsm(message: Message, state: FSMContext, ai_client):
     question = (message.text or "").strip()
     if not question:
         await message.reply("Напиши вопрос текстом.")
         return
     await state.clear()
-    await _ask_and_reply(message, question, openrouter=openrouter)
+    await _ask_and_reply(message, question, ai_client=ai_client)
 
 
-async def _ask_and_reply(message: Message, question: str, *, openrouter):
+async def _ask_and_reply(message: Message, question: str, *, ai_client):
     logger.info("*** ASK_AI: question=%r from user=%s", question, message.from_user.id)
     wait_msg = await message.reply("🧠 Думаю...")
     try:
-        answer = await openrouter.ask_opus(question)
+        answer = await ai_client.complete(question)
         html_answer = md_to_telegram_html(answer)
         await wait_msg.edit_text(html_answer, reply_markup=MENU_KB)
     except Exception as e:

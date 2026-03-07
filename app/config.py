@@ -32,6 +32,7 @@ class Settings(BaseSettings):
     potok_api_token: SecretStr = SecretStr("")
     potok_base_url: str = "https://app.potok.io"
     claude_cli_path: str = "claude"
+    claude_model: str = ""  # e.g. "claude-opus-4-6", empty = CLI default
 
     # Claude CLI auth (passed through to subprocess env, not used by app directly)
     claude_code_oauth_token: str = ""

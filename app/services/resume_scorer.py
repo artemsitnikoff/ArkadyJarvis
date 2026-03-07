@@ -1,9 +1,6 @@
-import asyncio
 import json
-import os
 import re
 
-from app.config import settings
 from app.services.potok_models import Applicant, Job, ScoringResult
 
 SCORING_PROMPT = """Ты — эксперт по подбору персонала в IT-компании. Оцени, насколько кандидат подходит под вакансию.
@@ -155,38 +152,12 @@ def _parse_response(text: str) -> dict:
     return json.loads(text)
 
 
-async def _call_cli(prompt: str) -> str:
-    env = os.environ.copy()
-    env.pop("CLAUDECODE", None)
-
-    proc = await asyncio.create_subprocess_exec(
-        settings.claude_cli_path,
-        "--print",
-        "--output-format", "text",
-        "--no-session-persistence",
-        stdin=asyncio.subprocess.PIPE,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        env=env,
-    )
-    stdout, stderr = await asyncio.wait_for(
-        proc.communicate(input=prompt.encode()), timeout=120
-    )
-    if proc.returncode != 0:
-        err = stderr.decode().strip()[:300] or stdout.decode().strip()[:300]
-        raise RuntimeError(f"claude CLI (code {proc.returncode}): {err}")
-    result = stdout.decode().strip()
-    if not result:
-        raise RuntimeError("claude CLI вернул пустой ответ")
-    return result
-
-
 async def score_applicant(job: Job, applicant: Applicant) -> ScoringResult:
-    from app.services.claude_token import ensure_fresh_token
-    await ensure_fresh_token()
+    from app.services.ai_client import AIClient
+    ai = AIClient()
 
     prompt = _build_prompt(job, applicant)
-    response_text = await _call_cli(prompt)
+    response_text = await ai.complete(prompt)
     result = _parse_response(response_text)
 
     return ScoringResult(
