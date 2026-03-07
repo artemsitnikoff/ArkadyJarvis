@@ -71,11 +71,30 @@ class PotokClient:
             data["description"] = _strip_html(data["description"])
         return Job.model_validate(data)
 
-    async def _fetch_page(self, page: int) -> dict:
-        resp = await self._client.get(
-            "/api/v3/applicants",
-            params={"per_page": 100, "page": page},
-        )
+    async def _get_job_applicant_ids(self, job_id: int) -> list[int]:
+        """Get ALL applicant IDs for a job via /jobs/{id}/ajs_joins.json (cursor pagination)."""
+        ids: list[int] = []
+        cursor = None
+        while True:
+            params: dict = {"per_page": 100}
+            if cursor:
+                params["page_cursor"] = cursor
+            resp = await self._client.get(
+                f"/api/v3/jobs/{job_id}/ajs_joins.json", params=params,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            for obj in data.get("objects", []):
+                ids.append(obj["applicant_id"])
+            if not data.get("has_next_page"):
+                break
+            cursor = data.get("page_next_cursor")
+        logger.info("Potok: job %s has %d applicant IDs via ajs_joins", job_id, len(ids))
+        return ids
+
+    async def _fetch_applicant(self, applicant_id: int) -> dict:
+        """Fetch single applicant by ID."""
+        resp = await self._client.get(f"/api/v3/applicants/{applicant_id}.json")
         resp.raise_for_status()
         return resp.json()
 
@@ -85,58 +104,36 @@ class PotokClient:
         limit: int = 20,
         skip_scored: bool = True,
     ) -> list[Applicant]:
+        """Get applicants for a job.
+
+        Uses /jobs/{id}/ajs_joins.json to get all applicant IDs (no pagination limit),
+        then fetches each applicant's details in parallel batches.
+        """
+        # Step 1: get all applicant IDs for this job
+        applicant_ids = await self._get_job_applicant_ids(job_id)
+
+        # Step 2: fetch each applicant's details in parallel batches
         found: list[Applicant] = []
         batch_size = 10
-        failed_pages = []
 
-        first = await self._fetch_page(1)
-        total_pages = first.get("pages", 1)
-        logger.info("Potok: job_id=%s, total_pages=%s", job_id, total_pages)
-
-        def _process_item(item, page_num):
-            item_name = f"{item.get('last_name', '')} {item.get('first_name', '')}".strip()
-            # Check job membership via ajs_joins
-            has_job = any(
-                aj.get("job", {}).get("id") == job_id
-                for aj in item.get("ajs_joins", [])
-            )
-            if not has_job:
-                return
-            if skip_scored and re.match(r"^\d{3}-", item.get("last_name") or ""):
-                logger.info("Potok: skip scored %s", item_name)
-                return
-            found.append(Applicant.model_validate(item))
-            logger.info("Potok: found %s (page %s)", item_name, page_num)
-
-        for item in first.get("data", []):
-            _process_item(item, 1)
-            if limit and len(found) >= limit:
-                return found[:limit]
-
-        page = 2
-        while page <= total_pages:
-            batch_end = min(page + batch_size, total_pages + 1)
-            tasks = [self._fetch_page(p) for p in range(page, batch_end)]
+        for i in range(0, len(applicant_ids), batch_size):
+            batch_ids = applicant_ids[i : i + batch_size]
+            tasks = [self._fetch_applicant(aid) for aid in batch_ids]
             results = await asyncio.gather(*tasks, return_exceptions=True)
 
-            for idx, data in enumerate(results):
-                p = page + idx
+            for aid, data in zip(batch_ids, results):
                 if isinstance(data, Exception):
-                    logger.warning("Potok: page %s failed: %s", p, data)
-                    failed_pages.append(p)
+                    logger.error("Potok: failed to fetch applicant %s: %s", aid, data)
                     continue
-                for item in data.get("data", []):
-                    _process_item(item, p)
-                    if limit and len(found) >= limit:
-                        return found[:limit]
+                item_name = f"{data.get('last_name', '')} {data.get('first_name', '')}".strip()
+                if skip_scored and re.match(r"^\d{3}-", data.get("last_name") or ""):
+                    logger.info("Potok: skip scored %s", item_name)
+                    continue
+                found.append(Applicant.model_validate(data))
+                logger.info("Potok: found %s (id=%s)", item_name, aid)
+                if limit and len(found) >= limit:
+                    return found[:limit]
 
-            page = batch_end
-
-        if failed_pages:
-            logger.warning(
-                "Potok: %d pages failed for job %s: %s",
-                len(failed_pages), job_id, failed_pages,
-            )
         logger.info(
             "Potok: job_id=%s, found %d candidates (skip_scored=%s)",
             job_id, len(found), skip_scored,
