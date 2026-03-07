@@ -88,13 +88,12 @@ async def handle_recruit_exit(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data.startswith("recruit:job:"), Recruiter.choosing_job)
 async def handle_job_selected(callback: CallbackQuery, state: FSMContext, potok):
-    """Load job first → show description, then load candidates → show buttons."""
+    """Load job → show description + buttons. Candidates loaded after button click."""
     job_id = int(callback.data.split(":")[-1])
     await callback.answer()
 
     progress_msg = await callback.message.answer("👔 Загружаю вакансию...")
 
-    # Step 1: load job and show description immediately
     try:
         job = await potok.get_job(job_id)
     except Exception as e:
@@ -116,60 +115,18 @@ async def handle_job_selected(callback: CallbackQuery, state: FSMContext, potok)
         info_lines.append("")
     if recruiter_instructions:
         info_lines.append(f"🎯 <b>Важно для CLAUDE:</b>\n{html_mod.escape(recruiter_instructions[:1500])}")
-        info_lines.append("")
-    info_lines.append("⏳ Загружаю кандидатов...")
 
-    try:
-        await progress_msg.edit_text("\n".join(info_lines))
-    except Exception:
-        pass
-
-    # Step 2: load candidates
-    try:
-        all_applicants = await potok.get_applicants_for_job(
-            job_id, limit=20, skip_scored=False,
-        )
-        new_applicants = await potok.get_applicants_for_job(
-            job_id, limit=20, skip_scored=True,
-        )
-    except Exception as e:
-        logger.error("Potok error loading applicants: %s", e, exc_info=True)
-        await progress_msg.edit_text(
-            f"❌ Ошибка загрузки кандидатов: {html_mod.escape(str(e))}",
-            reply_markup=MENU_KB,
-        )
-        await state.clear()
-        return
-
-    total_all = len(all_applicants)
-    total_new = len(new_applicants)
-
-    if total_all == 0:
-        info_lines[-1] = "Нет кандидатов на эту вакансию."
-        try:
-            await progress_msg.edit_text("\n".join(info_lines), reply_markup=MENU_KB)
-        except Exception:
-            pass
-        await state.clear()
-        return
-
-    # Replace "loading" line with counts + buttons
-    info_lines[-1] = (
-        f"Всего кандидатов: <b>{total_all}</b>"
-        + (f" | Новых: <b>{total_new}</b>" if total_new < total_all else "")
-    )
-
-    buttons = []
-    buttons.append([InlineKeyboardButton(
-        text=f"🔄 Переоценить всех ({total_all})",
-        callback_data=f"recruit:rescore:{job_id}",
-    )])
-    if total_new > 0:
-        buttons.append([InlineKeyboardButton(
-            text=f"✅ Оценить новых ({total_new})",
+    buttons = [
+        [InlineKeyboardButton(
+            text="✅ Оценить новых",
             callback_data=f"recruit:score:{job_id}",
-        )])
-    buttons.append([InlineKeyboardButton(text="◀️ Меню", callback_data="recruit:exit")])
+        )],
+        [InlineKeyboardButton(
+            text="🔄 Переоценить всех",
+            callback_data=f"recruit:rescore:{job_id}",
+        )],
+        [InlineKeyboardButton(text="◀️ Меню", callback_data="recruit:exit")],
+    ]
 
     try:
         await progress_msg.edit_text(
