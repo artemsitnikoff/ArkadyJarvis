@@ -76,6 +76,12 @@ def _format_result_message(
     return "\n".join(lines)
 
 
+@router.callback_query(F.data == "recruit:stop")
+async def handle_recruit_stop(callback: CallbackQuery, state: FSMContext):
+    await state.update_data(stop=True)
+    await callback.answer("Останавливаю после текущего кандидата...")
+
+
 @router.callback_query(F.data == "recruit:exit")
 async def handle_recruit_exit(callback: CallbackQuery, state: FSMContext):
     await state.clear()
@@ -214,12 +220,22 @@ async def _run_scoring(
     scored = 0
     errors = 0
 
+    stop_kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="⏹ Остановить", callback_data="recruit:stop")],
+    ])
+
     for i, applicant in enumerate(applicants, 1):
+        # Check if user requested stop
+        data = await state.get_data()
+        if data.get("stop"):
+            break
+
         name = applicant.display_name
 
         thinking_msg = await callback.message.answer(
             f"👔 <b>{html_mod.escape(job_name)}</b> [{i}/{total}]\n\n"
-            f"⏳ {html_mod.escape(name)}..."
+            f"⏳ {html_mod.escape(name)}...",
+            reply_markup=stop_kb,
         )
 
         try:
@@ -253,9 +269,12 @@ async def _run_scoring(
                 pass
             errors += 1
 
+    data = await state.get_data()
+    stopped = data.get("stop", False)
+    status = "остановлено" if stopped else "готово"
     summary = (
-        f"👔 <b>{html_mod.escape(job_name)}</b> — готово!\n\n"
-        f"Оценено: {scored} | Ошибок: {errors}"
+        f"👔 <b>{html_mod.escape(job_name)}</b> — {status}!\n\n"
+        f"Оценено: {scored}/{total} | Ошибок: {errors}"
     )
     await callback.message.answer(summary, reply_markup=MENU_KB)
     await state.clear()
