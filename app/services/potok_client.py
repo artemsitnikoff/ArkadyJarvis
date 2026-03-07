@@ -71,13 +71,10 @@ class PotokClient:
             data["description"] = _strip_html(data["description"])
         return Job.model_validate(data)
 
-    async def _fetch_page(self, page: int, job_id: int | None = None) -> dict:
-        params = {"per_page": 100, "page": page}
-        if job_id is not None:
-            params["by_job_id"] = job_id
+    async def _fetch_page(self, page: int) -> dict:
         resp = await self._client.get(
             "/api/v3/applicants",
-            params=params,
+            params={"per_page": 100, "page": page},
         )
         resp.raise_for_status()
         return resp.json()
@@ -92,12 +89,19 @@ class PotokClient:
         batch_size = 10
         failed_pages = []
 
-        first = await self._fetch_page(1, job_id=job_id)
+        first = await self._fetch_page(1)
         total_pages = first.get("pages", 1)
-        logger.info("Potok: job_id=%s, total_pages=%s (filtered by job)", job_id, total_pages)
+        logger.info("Potok: job_id=%s, total_pages=%s", job_id, total_pages)
 
         def _process_item(item, page_num):
             item_name = f"{item.get('last_name', '')} {item.get('first_name', '')}".strip()
+            # Check job membership via ajs_joins
+            has_job = any(
+                aj.get("job", {}).get("id") == job_id
+                for aj in item.get("ajs_joins", [])
+            )
+            if not has_job:
+                return
             if skip_scored and re.match(r"^\d{3}-", item.get("last_name") or ""):
                 logger.info("Potok: skip scored %s", item_name)
                 return
@@ -112,7 +116,7 @@ class PotokClient:
         page = 2
         while page <= total_pages:
             batch_end = min(page + batch_size, total_pages + 1)
-            tasks = [self._fetch_page(p, job_id=job_id) for p in range(page, batch_end)]
+            tasks = [self._fetch_page(p) for p in range(page, batch_end)]
             results = await asyncio.gather(*tasks, return_exceptions=True)
 
             for idx, data in enumerate(results):
