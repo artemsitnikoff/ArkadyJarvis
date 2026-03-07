@@ -115,18 +115,59 @@ async def handle_job_selected(callback: CallbackQuery, state: FSMContext, potok)
         info_lines.append("")
     if recruiter_instructions:
         info_lines.append(f"🎯 <b>Важно для CLAUDE:</b>\n{html_mod.escape(recruiter_instructions[:1500])}")
+        info_lines.append("")
+    info_lines.append("⏳ Считаю кандидатов...")
 
-    buttons = [
-        [InlineKeyboardButton(
-            text="✅ Оценить новых",
+    try:
+        await progress_msg.edit_text("\n".join(info_lines))
+    except Exception:
+        pass
+
+    # Load candidates to get counts
+    try:
+        all_applicants = await potok.get_applicants_for_job(
+            job_id, limit=50, skip_scored=False,
+        )
+        new_applicants = [
+            a for a in all_applicants
+            if not __import__("re").match(r"^\d{3}-", a.last_name or "")
+        ]
+    except Exception as e:
+        logger.error("Potok error loading applicants: %s", e, exc_info=True)
+        info_lines[-1] = f"❌ Ошибка загрузки кандидатов: {html_mod.escape(str(e))}"
+        try:
+            await progress_msg.edit_text("\n".join(info_lines), reply_markup=MENU_KB)
+        except Exception:
+            pass
+        await state.clear()
+        return
+
+    total_all = len(all_applicants)
+    total_new = len(new_applicants)
+
+    if total_all == 0:
+        info_lines[-1] = "Нет кандидатов на эту вакансию."
+        try:
+            await progress_msg.edit_text("\n".join(info_lines), reply_markup=MENU_KB)
+        except Exception:
+            pass
+        await state.clear()
+        return
+
+    # Replace loading line with buttons
+    info_lines.pop()  # remove "⏳ Считаю кандидатов..."
+
+    buttons = []
+    if total_new > 0:
+        buttons.append([InlineKeyboardButton(
+            text=f"✅ Оценить новых ({total_new})",
             callback_data=f"recruit:score:{job_id}",
-        )],
-        [InlineKeyboardButton(
-            text="🔄 Переоценить всех",
-            callback_data=f"recruit:rescore:{job_id}",
-        )],
-        [InlineKeyboardButton(text="◀️ Меню", callback_data="recruit:exit")],
-    ]
+        )])
+    buttons.append([InlineKeyboardButton(
+        text=f"🔄 Переоценить всех ({total_all})",
+        callback_data=f"recruit:rescore:{job_id}",
+    )])
+    buttons.append([InlineKeyboardButton(text="◀️ Меню", callback_data="recruit:exit")])
 
     try:
         await progress_msg.edit_text(
