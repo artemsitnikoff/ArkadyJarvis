@@ -126,7 +126,7 @@ async def handle_job_selected(callback: CallbackQuery, state: FSMContext, potok)
     # Load candidates to get counts
     try:
         all_applicants = await potok.get_applicants_for_job(
-            job_id, limit=50, skip_scored=False,
+            job_id, limit=0, skip_scored=False,
         )
         new_applicants = [
             a for a in all_applicants
@@ -190,7 +190,7 @@ async def _run_scoring(
     try:
         job = await potok.get_job(job_id)
         applicants = await potok.get_applicants_for_job(
-            job_id, limit=20, skip_scored=skip_scored,
+            job_id, limit=0, skip_scored=skip_scored,
         )
     except Exception as e:
         logger.error("Potok error: %s", e, exc_info=True)
