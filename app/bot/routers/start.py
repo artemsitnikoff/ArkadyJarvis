@@ -170,12 +170,12 @@ async def cmd_help(message: Message):
 
 
 @router.callback_query(F.data.startswith("hint:"))
-async def handle_hint(callback: CallbackQuery, state: FSMContext, bitrix, potok, ai_client):
+async def handle_hint(callback: CallbackQuery, state: FSMContext, bitrix, potok, ai_client, bot):
     key = callback.data.split(":", 1)[1]
 
     if key == "summary":
         await callback.answer()
-        await _run_summary(callback, ai_client)
+        await _run_summary(callback, ai_client, bot=bot)
         return
 
     if key == "meeting":
@@ -313,19 +313,57 @@ async def handle_hint(callback: CallbackQuery, state: FSMContext, bitrix, potok,
     await callback.answer()
 
 
-async def _run_summary(callback: CallbackQuery, ai_client):
-    """Run summarization for the current chat (from button press)."""
+async def _run_summary(callback: CallbackQuery, ai_client, bot=None):
+    """Run summarization. In DM: overview of all groups. In group: summarize current chat."""
     from datetime import datetime
     from zoneinfo import ZoneInfo
-    from app.summarizer import summarize_from_buffer
+    from app.summarizer import summarize_from_buffer, summarize_messages, build_daily_overview
 
-    chat_id = callback.message.chat.id
     await callback.answer()
     tz = ZoneInfo(settings.timezone)
     start_of_day = datetime.now(tz).replace(hour=0, minute=0, second=0, microsecond=0)
+
     try:
-        summary = await summarize_from_buffer(chat_id, ai_client=ai_client, since=start_of_day)
-        await callback.message.answer(f"📊 #summary\n\n{summary}", reply_markup=MENU_KB)
+        if callback.message.chat.type in ("group", "supergroup"):
+            summary = await summarize_from_buffer(
+                callback.message.chat.id, ai_client=ai_client, since=start_of_day,
+            )
+            await callback.message.answer(f"📊 #summary\n\n{summary}", reply_markup=MENU_KB)
+        else:
+            # DM: summarize all groups the user belongs to
+            wait_msg = await callback.message.answer("📊 Собираю обзор дня...")
+            groups = await db.get_all_group_chats()
+            tg_id = callback.from_user.id
+            user_summaries: list[tuple[str, str]] = []
+
+            for group in groups:
+                chat_id = group["chat_id"]
+                chat_title = group.get("chat_title") or str(chat_id)
+                msgs = await db.get_buffered_messages(chat_id, since=start_of_day)
+                if not msgs:
+                    continue
+                if bot:
+                    try:
+                        member = await bot.get_chat_member(chat_id, tg_id)
+                        if member.status in ("left", "kicked"):
+                            continue
+                    except Exception:
+                        pass
+                summary = await summarize_messages(msgs, ai_client=ai_client)
+                user_summaries.append((chat_title, summary))
+
+            if not user_summaries:
+                await wait_msg.edit_text("Нет сообщений в группах за сегодня.", reply_markup=MENU_KB)
+                return
+
+            db_user = await db.get_user(tg_id)
+            user_name = db_user.get("display_name", "") if db_user else ""
+            overview = await build_daily_overview(
+                user_summaries, ai_client=ai_client, user_name=user_name,
+            )
+            await wait_msg.edit_text(
+                f"#summary\n📊 <b>Обзор дня</b>\n\n{overview}", reply_markup=MENU_KB,
+            )
     except Exception as e:
         logger.error("Summary error: %s", e, exc_info=True)
         await callback.message.answer(f"❌ Ошибка суммаризации: {e}", reply_markup=MENU_KB)
