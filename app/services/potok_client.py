@@ -99,10 +99,10 @@ class PotokClient:
         def _process_item(item, page_num):
             item_name = f"{item.get('last_name', '')} {item.get('first_name', '')}".strip()
             if skip_scored and re.match(r"^\d{3}-", item.get("last_name") or ""):
-                logger.debug("Potok: skip scored %s", item_name)
+                logger.info("Potok: skip scored %s", item_name)
                 return
             found.append(Applicant.model_validate(item))
-            logger.debug("Potok: found %s (page %s)", item_name, page_num)
+            logger.info("Potok: found %s (page %s)", item_name, page_num)
 
         for item in first.get("data", []):
             _process_item(item, 1)
