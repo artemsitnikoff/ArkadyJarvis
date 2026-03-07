@@ -157,7 +157,7 @@ async def score_applicant(job: Job, applicant: Applicant) -> ScoringResult:
     ai = AIClient()
 
     prompt = _build_prompt(job, applicant)
-    response_text = await ai.complete(prompt)
+    response_text = await ai.complete(prompt, timeout=300)
     result = _parse_response(response_text)
 
     return ScoringResult(

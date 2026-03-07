@@ -14,8 +14,9 @@ class AIClient:
 
     async def complete(
         self, prompt: str, max_tokens: int = 4096, temperature: float = 1.0,
+        timeout: int = 120,
     ) -> str:
-        return await self._call_cli(prompt)
+        return await self._call_cli(prompt, timeout=timeout)
 
     async def chat(
         self, messages: list[dict], max_tokens: int = 4096, temperature: float = 0.9,
@@ -34,7 +35,7 @@ class AIClient:
         prompt = "\n\n".join(parts)
         return await self._call_cli(prompt)
 
-    async def _call_cli(self, prompt: str) -> str:
+    async def _call_cli(self, prompt: str, timeout: int = 120) -> str:
         from app.services.claude_token import ensure_fresh_token
         await ensure_fresh_token()
 
@@ -52,9 +53,14 @@ class AIClient:
             stderr=asyncio.subprocess.PIPE,
             env=env,
         )
-        stdout, stderr = await asyncio.wait_for(
-            proc.communicate(input=prompt.encode()), timeout=120,
-        )
+        try:
+            stdout, stderr = await asyncio.wait_for(
+                proc.communicate(input=prompt.encode()), timeout=timeout,
+            )
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.wait()
+            raise TimeoutError(f"claude CLI не ответил за {timeout}с")
         if proc.returncode != 0:
             err = stderr.decode().strip()[:300] or stdout.decode().strip()[:300]
             raise RuntimeError(f"claude CLI (code {proc.returncode}): {err}")
