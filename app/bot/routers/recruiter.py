@@ -228,6 +228,8 @@ async def _run_scoring(
             result = await score_applicant(job, applicant)
 
             text = _format_result_message(job_name, i, total, result, name)
+            if len(text) > 4096:
+                text = text[:4090] + "\n…"
             try:
                 await thinking_msg.edit_text(text)
             except Exception:
