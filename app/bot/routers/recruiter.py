@@ -1,5 +1,6 @@
 import html as html_mod
 import logging
+import re
 
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
@@ -136,7 +137,7 @@ async def handle_job_selected(callback: CallbackQuery, state: FSMContext, potok)
         )
         new_applicants = [
             a for a in all_applicants
-            if not __import__("re").match(r"^\d{3}-", a.last_name or "")
+            if not re.match(r"^\d{3}-", a.last_name or "")
         ]
     except Exception as e:
         logger.error("Potok error loading applicants: %s", e, exc_info=True)
@@ -184,37 +185,21 @@ async def handle_job_selected(callback: CallbackQuery, state: FSMContext, potok)
         pass
 
     await state.set_state(Recruiter.confirming)
-    await state.update_data(job_id=job_id)
+    await state.update_data(
+        job_id=job_id,
+        job=job,
+        all_applicants=all_applicants,
+        new_applicants=new_applicants,
+    )
 
 
 async def _run_scoring(
-    callback: CallbackQuery, state: FSMContext, potok, job_id: int, skip_scored: bool,
+    callback: CallbackQuery, state: FSMContext, potok, job, applicants,
 ):
     """Common scoring loop for both new and rescore modes."""
     await state.set_state(Recruiter.scoring)
 
-    try:
-        job = await potok.get_job(job_id)
-        applicants = await potok.get_applicants_for_job(
-            job_id, limit=0, skip_scored=skip_scored,
-        )
-    except Exception as e:
-        logger.error("Potok error: %s", e, exc_info=True)
-        await callback.message.answer(
-            f"❌ Ошибка: {html_mod.escape(str(e))}",
-            reply_markup=MENU_KB,
-        )
-        await state.clear()
-        return
-
-    if not applicants:
-        await callback.message.answer(
-            f"👔 <b>{html_mod.escape(job.name)}</b>\n\nНет кандидатов для оценки.",
-            reply_markup=MENU_KB,
-        )
-        await state.clear()
-        return
-
+    job_id = job.id
     total = len(applicants)
     job_name = job.name
     scored = 0
@@ -283,14 +268,14 @@ async def _run_scoring(
 @router.callback_query(F.data.startswith("recruit:score:"), Recruiter.confirming)
 async def handle_score_new(callback: CallbackQuery, state: FSMContext, potok):
     """Score only new (unscored) candidates."""
-    job_id = int(callback.data.split(":")[-1])
     await callback.answer()
-    await _run_scoring(callback, state, potok, job_id, skip_scored=True)
+    data = await state.get_data()
+    await _run_scoring(callback, state, potok, data["job"], data["new_applicants"])
 
 
 @router.callback_query(F.data.startswith("recruit:rescore:"), Recruiter.confirming)
 async def handle_rescore_all(callback: CallbackQuery, state: FSMContext, potok):
     """Re-score all candidates (including already scored)."""
-    job_id = int(callback.data.split(":")[-1])
     await callback.answer()
-    await _run_scoring(callback, state, potok, job_id, skip_scored=False)
+    data = await state.get_data()
+    await _run_scoring(callback, state, potok, data["job"], data["all_applicants"])
