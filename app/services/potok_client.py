@@ -92,11 +92,17 @@ class PotokClient:
         logger.info("Potok: job %s has %d applicant IDs via ajs_joins", job_id, len(ids))
         return ids
 
-    async def _fetch_applicant(self, applicant_id: int) -> dict:
-        """Fetch single applicant by ID."""
-        resp = await self._client.get(f"/api/v3/applicants/{applicant_id}.json")
-        resp.raise_for_status()
-        return resp.json()
+    async def _fetch_applicant(self, applicant_id: int, retries: int = 3) -> dict:
+        """Fetch single applicant by ID with retry on 429."""
+        for attempt in range(retries + 1):
+            resp = await self._client.get(f"/api/v3/applicants/{applicant_id}.json")
+            if resp.status_code == 429:
+                if attempt < retries:
+                    delay = float(resp.headers.get("Retry-After", 2))
+                    await asyncio.sleep(delay)
+                    continue
+            resp.raise_for_status()
+            return resp.json()
 
     async def get_applicants_for_job(
         self,
@@ -109,12 +115,10 @@ class PotokClient:
         Uses /jobs/{id}/ajs_joins.json to get all applicant IDs (no pagination limit),
         then fetches each applicant's details in parallel batches.
         """
-        # Step 1: get all applicant IDs for this job
         applicant_ids = await self._get_job_applicant_ids(job_id)
 
-        # Step 2: fetch each applicant's details in parallel batches
         found: list[Applicant] = []
-        batch_size = 10
+        batch_size = 5
 
         for i in range(0, len(applicant_ids), batch_size):
             batch_ids = applicant_ids[i : i + batch_size]
@@ -133,6 +137,9 @@ class PotokClient:
                 logger.info("Potok: found %s (id=%s)", item_name, aid)
                 if limit and len(found) >= limit:
                     return found[:limit]
+
+            if i + batch_size < len(applicant_ids):
+                await asyncio.sleep(0.5)
 
         logger.info(
             "Potok: job_id=%s, found %d candidates (skip_scored=%s)",
