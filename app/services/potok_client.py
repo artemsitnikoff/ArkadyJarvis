@@ -190,7 +190,7 @@ class PotokClient:
         resp.raise_for_status()
 
         if original_last_name:
-            clean_name = re.sub(r"^\d{3}-", "", original_last_name)
+            clean_name = re.sub(r"^(\d{3}-)+", "", original_last_name)
             new_last_name = f"{result.score:03d}-{clean_name}"
             resp = await self._client.patch(
                 f"/api/v3/applicants/{result.applicant_id}.json",
