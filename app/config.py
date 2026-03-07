@@ -7,9 +7,6 @@ from pydantic_settings import BaseSettings
 class Settings(BaseSettings):
     bot_token: SecretStr
 
-    openai_api_key: SecretStr = SecretStr("")
-    openai_model: str = "gpt-5.2"
-
     openrouter_api_key: SecretStr = SecretStr("")
 
     # Bitrix24 (shared app — singleton client)
@@ -37,9 +34,6 @@ class Settings(BaseSettings):
     # Claude CLI auth (passed through to subprocess env, not used by app directly)
     claude_code_oauth_token: str = ""
     claude_refresh_token: str = ""
-
-    # Encryption
-    encryption_key: str = ""
 
     # Database
     db_path: str = "data/arkadyjarvis.db"

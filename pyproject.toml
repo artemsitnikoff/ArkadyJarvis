@@ -8,11 +8,9 @@ dependencies = [
     "fastapi>=0.115,<1",
     "uvicorn[standard]>=0.34,<1",
     "aiosqlite>=0.20,<1",
-    "openai>=1.60,<2",
     "httpx>=0.28,<1",
     "apscheduler>=3.10,<4",
     "pydantic-settings>=2.7,<3",
-    "cryptography>=43,<44",
     "Pillow>=10,<12",
 ]
 
