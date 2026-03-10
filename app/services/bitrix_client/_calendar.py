@@ -78,15 +78,20 @@ class _BitrixCalendarMixin:
         })
         events = result.get("result", [])
 
-        # Filter: only future, not deleted
+        # Filter: only today's events, not deleted
+        today_str = now.strftime("%d.%m.%Y")
         filtered = []
         for ev in events:
             if ev.get("DELETED") == "Y":
                 continue
+            # Bitrix DATE_FROM format: "DD.MM.YYYY HH:MM:SS" — keep only today
+            df = ev.get("DATE_FROM", "")
+            if not df.startswith(today_str):
+                continue
             filtered.append({
                 "id": ev["ID"],
                 "name": ev.get("NAME", ""),
-                "date_from": ev.get("DATE_FROM", ""),
+                "date_from": df,
                 "date_to": ev.get("DATE_TO", ""),
                 "owner_id": ev.get("OWNER_ID"),
             })
