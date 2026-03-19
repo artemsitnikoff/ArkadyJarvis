@@ -21,17 +21,17 @@ app/
   db.py                    # aiosqlite: schema, CRUD (users, group_chats, message_buffer, muted_groups)
   utils.py                 # Parsers (time, attendees, Bitrix datetime), constants, merge_intervals, md_to_telegram_html()
   summarizer.py            # GPT summarization + clean_html_for_telegram()
-  version.py               # __version__ = "2.3.0"
+  version.py               # __version__ = "2.6.0"
   bot/
     create.py              # create_bot() + create_dispatcher() — router registration order matters
     middlewares.py          # ErrorMiddleware (catch-all error handler) + AuthMiddleware (Bitrix auth + muted groups)
     routers/
       start.py             # /start (auto-auth via @username -> Bitrix), /help, MENU_KB (12 buttons), hint callbacks, "Мои встречи"
       summarize.py         # /summary, "суммаризация" trigger
-      meeting.py           # "сделай/создай встречу" trigger — time/date/attendee parsing
+      meeting.py           # "сделай/создай встречу" trigger — time/date/attendee parsing, FSM MeetingSetup
       free_slots.py        # "найди время" trigger — calendar accessibility + FSM booking (BookSlot)
-      jira_task.py         # "сделай/создай задачу" trigger — project key + description
-      lead.py              # "сделай/создай лид" trigger — GPT extracts fields -> Bitrix CRM
+      jira_task.py         # "сделай/создай задачу" trigger — project key + description, FSM CreateTask
+      lead.py              # "сделай/создай лид" trigger — GPT extracts fields -> Bitrix CRM, FSM CreateLead
       image.py             # "нарисуй/сгенерируй" trigger — image generation via OpenRouter/Gemini, supports photo+caption editing
       ask_ai.py            # "спроси ai/вопрос" trigger — Claude answers, md_to_telegram_html conversion
       glafira.py           # Glafira (AI office manager) — FSM chatting mode, OpenClaw streaming
@@ -40,20 +40,20 @@ app/
       group.py             # on_bot_added / on_bot_removed — tracks group_chats in DB
       buffer.py            # Catch-all (LAST router): buffers all group messages to SQLite
   services/
-    ai_client.py           # AIClient — Claude CLI wrapper (subprocess `claude --print`), complete() and chat() methods
+    ai_client.py           # AIClient — Claude CLI wrapper (subprocess `claude --print`), configurable timeout (default 120s, scorer uses 300s)
     claude_token.py        # Claude OAuth token auto-refresh (file-based data/.claude_token.json)
     bitrix_client/         # BitrixClient — refactored into package with mixins
       __init__.py           # BitrixClient class (combines all mixins)
       _base.py              # _BitrixBase — OAuth file-based tokens, HTTP client, auto-refresh
-      _calendar.py          # _BitrixCalendarMixin — calendar events, free slots, create_meeting, get_user_events
+      _calendar.py          # _BitrixCalendarMixin — calendar events, free slots, create_meeting, get_user_events (today only)
       _crm.py               # _BitrixCRMMixin — leads, CRM operations
       _users.py             # _BitrixUsersMixin — user lookup, email guests, find_user_by_nickname
     jira_client.py         # JiraClient — async context manager, single integration user from settings
     openclaw_client.py     # OpenClawClient — HTTP SSE client for OpenClaw gateway
     openrouter_client.py   # OpenRouterClient — image generation (Gemini), ask_opus (Claude Opus via OpenRouter)
-    potok_client.py        # PotokClient — Potok.io ATS API (jobs, applicants, scoring push)
+    potok_client.py        # PotokClient — Potok.io ATS API (jobs, applicants via ajs_joins, scoring push)
     potok_models.py        # Pydantic models: Job, Applicant, Resume, CvParams, ScoringResult, ScoreBreakdown
-    resume_scorer.py       # AI candidate scoring — builds prompt from job+applicant, parses JSON response
+    resume_scorer.py       # AI candidate scoring — builds prompt from job+applicant, parses JSON response (300s timeout)
   scheduler/
     jobs.py                # daily_summary_job — summarizes all groups, builds overview, cleanup
   api/
@@ -69,7 +69,7 @@ scripts/
 ## Key Patterns
 
 ### Architecture
-- **AIClient** wraps Claude CLI (`claude --print --output-format text`) as subprocess. Uses `CLAUDE_CODE_OAUTH_TOKEN` env var. Token auto-refreshed by `claude_token.py` before each call. 120s timeout.
+- **AIClient** wraps Claude CLI (`claude --print --output-format text`) as subprocess. Uses `CLAUDE_CODE_OAUTH_TOKEN` env var. Token auto-refreshed by `claude_token.py` before each call. Default 120s timeout, configurable per call. On timeout: `proc.kill()` + cleanup.
 - **BitrixClient** is a singleton, refactored into package with mixins (`_base`, `_users`, `_calendar`, `_crm`). File-based OAuth (`data/bitrix_tokens.json`), auto-refresh on expiry.
 - **OpenRouterClient** is a singleton for image generation (Gemini 3 Pro via OpenRouter) and Opus queries.
 - **PotokClient** is a singleton for Potok.io ATS API (recruiter functionality).
@@ -89,6 +89,13 @@ Order matters — `buffer.py` must be last (catch-all):
 2. If found -> saves `(telegram_id, bitrix_user_id, display_name)` to `users` table
 3. AuthMiddleware blocks protected commands if user not authorized
 4. Public commands: `/start`, `/help` — always allowed without auth
+
+### Interactive Menu Buttons (FSM)
+- All MENU_KB buttons are interactive — clicking enters working mode via FSM states
+- Summary button: in DM builds overview of all groups; in group summarizes current chat
+- Meeting, Free slots, Task, Lead: set FSM state (`MeetingSetup.waiting_for_command`, `BookSlot.searching_attendee`, `CreateTask.waiting_for_input`, `CreateLead.waiting_for_info`) and wait for user input
+- Image, Ask AI: enter FSM state and wait for prompt text
+- Back menu button (`handle_back_menu`) calls `state.clear()` to exit any FSM state
 
 ### Free Slots + Booking (FSM)
 - `"найди время @nick1 @nick2"` -> computes free slots for 5 business days (9:00-19:00)
@@ -113,6 +120,7 @@ Order matters — `buffer.py` must be last (catch-all):
 ### My Meetings (Мои встречи)
 - Button in MENU_KB -> `hint:meetings` callback -> `_show_meetings()` in `start.py`
 - Fetches today's events via `bitrix.get_user_events(bitrix_user_id)`
+- Filters by DATE_FROM starting with today's date (Bitrix returns overlapping events including yesterday's)
 - Displays as inline buttons with time + name, linking to Bitrix calendar event URL
 
 ### Image Generation
@@ -132,17 +140,21 @@ Order matters — `buffer.py` must be last (catch-all):
 - Access control: `RECRUITER_ALLOWED = {33570147, 367140321, 421632942}` (Artem, Natalya, Liza)
 - Flow: hint:recruiter -> load jobs from Potok -> user picks job -> show description + candidate counts -> score new or rescore all
 - FSM states: `Recruiter.choosing_job` -> `Recruiter.confirming` -> `Recruiter.scoring`
-- **Scoring**: `resume_scorer.py` builds detailed prompt (job desc + applicant resume/experience/skills) -> Claude returns JSON with score 0-100, breakdown by criteria, strengths, weaknesses
+- **Candidate loading**: uses `/api/v3/jobs/{id}/ajs_joins.json` (cursor pagination) to get all applicant IDs for a job, then fetches details per applicant via `/api/v3/applicants/{id}.json` in parallel batches of 5 with 0.5s delay between batches (rate limit protection). Retry up to 3 times on 429 with `Retry-After` header.
+- **Scoring**: `resume_scorer.py` builds detailed prompt (job desc + applicant resume/experience/skills) -> Claude returns JSON with score 0-100, breakdown by criteria, strengths, weaknesses. Uses 300s timeout.
 - **Recruiter instructions**: job description can contain `"Важно для CLAUDE:"` section — extracted and injected as special instructions into the scoring prompt
 - **Score push**: result posted as HTML comment to Potok event + applicant last_name prefixed with `{score:03d}-` for sorting (e.g., `085-Иванов`)
 - **Skip scored**: candidates with `^\d{3}-` last_name prefix considered already scored
+- **Telegram message limit**: scoring result text truncated to 4096 chars (Telegram max). Full result still goes to Potok comment.
 - Stop button during scoring loop (`recruit:stop` callback)
+- Job and applicant data cached in FSM after initial load (no duplicate fetches on score/rescore)
 - Score labels: >=81 "Отлично", >=61 "Хорошо", >=41 "Средне", <41 "Слабо"
 
 ### Summarization
 - `summarizer.py`: GPT prompt asks for HTML `<b>` tags
 - `clean_html_for_telegram()` strips unsupported tags (`<br>`, `<p>`, `<div>`, etc.)
 - Keeps only: `<b>`, `<i>`, `<u>`, `<s>`, `<code>`, `<pre>`, `<a>`
+- Summary button in DM: builds overview of all group chats (not just current chat)
 
 ### MENU_KB (Inline Keyboard)
 - Defined in `start.py` as `MENU_KB` — 12 buttons in 6 rows:
@@ -171,6 +183,7 @@ Order matters — `buffer.py` must be last (catch-all):
 - `init_token_file()` seeds from `CLAUDE_CODE_OAUTH_TOKEN` + `CLAUDE_REFRESH_TOKEN` env vars on first run
 - `ensure_fresh_token()` called before every CLI invocation
 - Optional model override via `CLAUDE_MODEL` setting (e.g., `claude-opus-4-6`)
+- On timeout: `proc.kill()` + `await proc.wait()` to prevent zombie processes
 
 ### OpenRouter
 - Used for image generation (Gemini 3 Pro) and Opus queries
@@ -190,6 +203,18 @@ Order matters — `buffer.py` must be last (catch-all):
 - Exit via `glafira:exit` callback to properly clear FSM state
 - Conversation history stored in FSM data, capped at 20 messages
 - OpenClaw model: Claude Sonnet 4.6 via OpenRouter
+- OpenClaw workspace config: `~/.openclaw/workspace/` (SOUL.md, TOOLS.md, MEMORY.md)
+- TOOLS.md contains site-specific hints (e.g., `ozon.ru` not `ozone.ru`, payment card selection)
+
+### Potok.io API Details
+- **API docs**: https://api-doc.potok.io/ (RapiDoc UI, OpenAPI spec at `potok-api-v3.yml`)
+- **No server-side filtering**: `/api/v3/applicants` ignores all query params except `per_page` and `page`. Hard limit: 99 pages (9900 records). Sorting params ignored too.
+- **Candidate loading by job**: Use `/api/v3/jobs/{job_id}/ajs_joins.json` (cursor-based pagination with `page_cursor` + `per_page`). Returns `objects[]` with `applicant_id`, `job_id`, `stage`, etc. No record limit.
+- **Applicant details**: `/api/v3/applicants/{id}.json` — full profile with `ajs_joins`, `resumes`, `events`
+- **Rate limiting**: 429 Too Many Requests on parallel batch requests. Keep batches ≤5, add 0.5s delay between batches, retry with `Retry-After` header.
+- **Job details**: V2 (`/api/v2/jobs/{id}.json`) returns description in HTML; V3 returns more fields including `stages`, `applicants_count`
+- **Score push**: `POST /api/v3/events.json` (comment) + `PATCH /api/v3/applicants/{id}.json` (last_name with score prefix)
+- **Assessment cards API**: read-only, POST returns 404. Dynamic fields PATCH returns 200 but doesn't save.
 
 ## Database Schema (aiosqlite)
 
@@ -229,6 +254,8 @@ Health check: `curl localhost:8001/api/health`
 
 Docker: `docker compose up --build` (exposes port 8002)
 
+Logs in Docker: `docker compose logs -f`
+
 ## Known Issues
 
 - Claude CLI requires `CLAUDE_CODE_OAUTH_TOKEN` — refresh tokens are single-use, lost token = re-auth needed
@@ -237,3 +264,5 @@ Docker: `docker compose up --build` (exposes port 8002)
 - Email guest cache is in-memory (resets on restart)
 - OpenRouter image generation may silently refuse due to content policy (0 completion tokens = refusal)
 - Potok scored candidates identified by `^\d{3}-` last_name prefix — fragile convention
+- Potok API SSL: uses Russian CA certificates — works from prod (Ubuntu), may fail from Mac without Russian CA bundle
+- Tailscale + OpenVPN conflict: OpenVPN `redirect-gateway` kills Tailscale connectivity. Cannot run both simultaneously without server-side split tunnel config.

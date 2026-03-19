@@ -21,7 +21,7 @@ router = Router()
 
 MENU_KB = InlineKeyboardMarkup(inline_keyboard=[
     [
-        InlineKeyboardButton(text="📊 Суммаризация", callback_data="hint:summary"),
+        InlineKeyboardButton(text="👤 Сотрудник", callback_data="hint:employee"),
         InlineKeyboardButton(text="📅 Встреча", callback_data="hint:meeting"),
     ],
     [
@@ -37,10 +37,11 @@ MENU_KB = InlineKeyboardMarkup(inline_keyboard=[
         InlineKeyboardButton(text="🧠 Спроси AI", callback_data="hint:askai"),
     ],
     [
+        InlineKeyboardButton(text="📊 Суммаризация", callback_data="hint:summary"),
         InlineKeyboardButton(text="🤖 Глафира", callback_data="hint:glafira"),
-        InlineKeyboardButton(text="👔 Анатолий", callback_data="hint:recruiter"),
     ],
     [
+        InlineKeyboardButton(text="👔 Анатолий", callback_data="hint:recruiter"),
         InlineKeyboardButton(text="❓ Все команды", callback_data="hint:all"),
     ],
 ])
@@ -172,6 +173,17 @@ async def cmd_help(message: Message):
 @router.callback_query(F.data.startswith("hint:"))
 async def handle_hint(callback: CallbackQuery, state: FSMContext, bitrix, potok, ai_client, bot):
     key = callback.data.split(":", 1)[1]
+
+    if key == "employee":
+        from app.bot.routers.employee import FindEmployee
+        await state.set_state(FindEmployee.waiting_for_name)
+        await callback.message.answer(
+            "👤 <b>Найди сотрудника</b>\n\n"
+            "Напиши имя или фамилию:",
+            reply_markup=BACK_MENU_KB,
+        )
+        await callback.answer()
+        return
 
     if key == "summary":
         await callback.answer()

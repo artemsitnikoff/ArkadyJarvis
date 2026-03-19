@@ -78,6 +78,55 @@ class _BitrixUsersMixin:
                         return users
         return users
 
+    async def get_employee_card(self, user_id: int) -> dict | None:
+        """Fetch detailed employee card: name, position, department, phone, email, supervisor."""
+        result = await self._request("user.get", {"ID": user_id})
+        users = result.get("result", [])
+        if not users:
+            return None
+
+        u = users[0]
+        card = {
+            "id": int(u["ID"]),
+            "name": f"{u.get('NAME', '')} {u.get('LAST_NAME', '')}".strip(),
+            "position": u.get("WORK_POSITION", ""),
+            "email": u.get("EMAIL", ""),
+            "phone": u.get("PERSONAL_MOBILE") or u.get("WORK_PHONE") or u.get("PERSONAL_PHONE") or "",
+            "department_ids": u.get("UF_DEPARTMENT", []),
+            "photo": u.get("PERSONAL_PHOTO", ""),
+        }
+
+        # Fetch department names
+        if card["department_ids"]:
+            dept_commands = {
+                f"dept_{did}": ("department.get", {"ID": did})
+                for did in card["department_ids"]
+            }
+            dept_results = await self._batch_request(dept_commands)
+            dept_names = []
+            for did in card["department_ids"]:
+                depts = dept_results.get(f"dept_{did}", [])
+                if depts:
+                    dept_names.append(depts[0].get("NAME", ""))
+            card["departments"] = dept_names
+
+            # Find supervisor: get department head
+            first_dept = dept_results.get(f"dept_{card['department_ids'][0]}", [])
+            if first_dept:
+                head_id = first_dept[0].get("UF_HEAD")
+                if head_id and int(head_id) != user_id:
+                    head_result = await self._request("user.get", {"ID": head_id})
+                    head_users = head_result.get("result", [])
+                    if head_users:
+                        h = head_users[0]
+                        card["supervisor"] = {
+                            "id": int(h["ID"]),
+                            "name": f"{h.get('NAME', '')} {h.get('LAST_NAME', '')}".strip(),
+                            "position": h.get("WORK_POSITION", ""),
+                        }
+
+        return card
+
     async def get_user_email(self, user_id: int) -> str | None:
         """Get user email by Bitrix user ID."""
         result = await self._request("user.get", {"ID": user_id})
