@@ -82,11 +82,16 @@ async def handle_employee_card(callback: CallbackQuery, state: FSMContext, bitri
         dept_str = ", ".join(html_mod.escape(d) for d in card["departments"])
         lines.append(f"🏢 {dept_str}")
 
+    if card.get("telegram"):
+        tg = card["telegram"].lstrip("@")
+        lines.append(f"💬 <a href=\"https://t.me/{html_mod.escape(tg)}\">@{html_mod.escape(tg)}</a>")
+
     if card.get("email"):
         lines.append(f"📧 {html_mod.escape(card['email'])}")
 
     if card.get("phone"):
-        lines.append(f"📱 {html_mod.escape(card['phone'])}")
+        phone_raw = card["phone"]
+        lines.append(f"📱 <a href=\"tel:{html_mod.escape(phone_raw)}\">{html_mod.escape(phone_raw)}</a>")
 
     if card.get("supervisor"):
         sup = card["supervisor"]
