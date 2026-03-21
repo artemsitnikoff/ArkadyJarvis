@@ -35,6 +35,9 @@ class Settings(BaseSettings):
     claude_code_oauth_token: str = ""
     claude_refresh_token: str = ""
 
+    # Webhook
+    webhook_token: str = ""  # shared secret for incoming B24 webhooks
+
     # Database
     db_path: str = "data/arkadyjarvis.db"
 

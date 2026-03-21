@@ -143,6 +143,15 @@ async def get_user(telegram_id: int) -> DbUser | None:
         return dict(row) if row else None
 
 
+async def get_user_by_bitrix_id(bitrix_user_id: int) -> DbUser | None:
+    db = get_db()
+    async with db.execute(
+        "SELECT * FROM users WHERE bitrix_user_id = ?", (bitrix_user_id,)
+    ) as cur:
+        row = await cur.fetchone()
+        return dict(row) if row else None
+
+
 # ── Group chats ───────────────────────────────────────────────
 
 async def upsert_group_chat(chat_id: int, chat_title: str | None = None) -> None:

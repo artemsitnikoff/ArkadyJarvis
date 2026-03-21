@@ -100,5 +100,12 @@ async def lifespan(app: FastAPI):
     logger.info("Shutdown complete")
 
 
-app = FastAPI(title="ArkadyJarvis", lifespan=lifespan)
+app = FastAPI(
+    title="ArkadyJarvis",
+    description="Telegram-бот для команды: Bitrix24, Jira, AI, рекрутинг",
+    version="2.9.3",
+    docs_url="/docs",
+    lifespan=lifespan,
+)
+app.state.bot = bot
 app.include_router(api_router, prefix="/api")
