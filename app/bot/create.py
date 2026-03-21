@@ -25,6 +25,7 @@ def create_dispatcher() -> Dispatcher:
     from app.bot.routers.image import router as image_router
     from app.bot.routers.ask_ai import router as ask_ai_router
     from app.bot.routers.employee import router as employee_router
+    from app.bot.routers.work import router as work_router
     from app.bot.routers.glafira import router as glafira_router
     from app.bot.routers.recruiter import router as recruiter_router
     from app.bot.routers.auto_reply import router as auto_reply_router
@@ -41,6 +42,7 @@ def create_dispatcher() -> Dispatcher:
         image_router,
         ask_ai_router,
         employee_router,
+        work_router,
         glafira_router,
         recruiter_router,
         auto_reply_router,

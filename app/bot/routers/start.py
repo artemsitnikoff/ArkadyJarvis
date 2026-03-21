@@ -9,7 +9,9 @@ from aiogram.types import (
     CallbackQuery,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
+    KeyboardButton,
     Message,
+    ReplyKeyboardMarkup,
     ReplyKeyboardRemove,
 )
 
@@ -53,6 +55,13 @@ MENU_KB = InlineKeyboardMarkup(inline_keyboard=[
 BACK_MENU_KB = InlineKeyboardMarkup(inline_keyboard=[
     [InlineKeyboardButton(text="◀️ Меню", callback_data="back:menu")],
 ])
+
+WORK_KB = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="🏢 В офисе"), KeyboardButton(text="🏠 Удалённо")],
+    ],
+    resize_keyboard=True,
+)
 
 COPY_TIP = "\n\n<i>👆 Нажми на команду — скопируется</i>"
 
@@ -122,8 +131,8 @@ HELP_TEXT = (
 
 @router.message(CommandStart())
 async def cmd_start(message: Message, bitrix):
-    # Remove old ReplyKeyboard if any
-    await message.answer("⏳", reply_markup=ReplyKeyboardRemove())
+    # Set persistent work buttons
+    await message.answer("⏳", reply_markup=WORK_KB)
 
     user = await db.get_user(message.from_user.id)
     if user and user.get("bitrix_user_id"):
