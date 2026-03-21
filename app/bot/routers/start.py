@@ -9,9 +9,7 @@ from aiogram.types import (
     CallbackQuery,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
-    KeyboardButton,
     Message,
-    ReplyKeyboardMarkup,
     ReplyKeyboardRemove,
 )
 
@@ -23,6 +21,9 @@ logger = logging.getLogger("arkadyjarvis")
 router = Router()
 
 MENU_KB = InlineKeyboardMarkup(inline_keyboard=[
+    [InlineKeyboardButton(text="🏢  Начать день в офисе", callback_data="work:office")],
+    [InlineKeyboardButton(text="🏠  Начать день удалённо", callback_data="work:remote")],
+    [InlineKeyboardButton(text="── ── ── ── ── ──", callback_data="noop")],
     [
         InlineKeyboardButton(text="👤 Сотрудник", callback_data="hint:employee"),
         InlineKeyboardButton(text="👥 Моя команда", callback_data="hint:team"),
@@ -55,13 +56,6 @@ MENU_KB = InlineKeyboardMarkup(inline_keyboard=[
 BACK_MENU_KB = InlineKeyboardMarkup(inline_keyboard=[
     [InlineKeyboardButton(text="◀️ Меню", callback_data="back:menu")],
 ])
-
-WORK_KB = ReplyKeyboardMarkup(
-    keyboard=[
-        [KeyboardButton(text="🏢 В офисе"), KeyboardButton(text="🏠 Удалённо")],
-    ],
-    resize_keyboard=True,
-)
 
 COPY_TIP = "\n\n<i>👆 Нажми на команду — скопируется</i>"
 
@@ -131,8 +125,8 @@ HELP_TEXT = (
 
 @router.message(CommandStart())
 async def cmd_start(message: Message, bitrix):
-    # Set persistent work buttons
-    await message.answer("⏳", reply_markup=WORK_KB)
+    # Remove old ReplyKeyboard if any
+    await message.answer("⏳", reply_markup=ReplyKeyboardRemove())
 
     user = await db.get_user(message.from_user.id)
     if user and user.get("bitrix_user_id"):
@@ -181,6 +175,17 @@ async def cmd_start(message: Message, bitrix):
 @router.message(Command("help"))
 async def cmd_help(message: Message):
     await message.answer(HELP_TEXT, reply_markup=MENU_KB)
+
+
+@router.callback_query(F.data == "noop")
+async def handle_noop(callback: CallbackQuery):
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("work:"))
+async def handle_work(callback: CallbackQuery, bitrix, ai_client, db_user=None):
+    from app.bot.routers.work import start_work_day
+    await start_work_day(callback, bitrix, ai_client, db_user)
 
 
 @router.callback_query(F.data.startswith("hint:"))
