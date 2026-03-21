@@ -1,3 +1,4 @@
+import html as html_mod
 import logging
 from datetime import datetime
 
@@ -22,26 +23,29 @@ router = Router()
 MENU_KB = InlineKeyboardMarkup(inline_keyboard=[
     [
         InlineKeyboardButton(text="👤 Сотрудник", callback_data="hint:employee"),
+        InlineKeyboardButton(text="👥 Моя команда", callback_data="hint:team"),
+    ],
+    [
         InlineKeyboardButton(text="📅 Встреча", callback_data="hint:meeting"),
-    ],
-    [
         InlineKeyboardButton(text="🕐 Найди время", callback_data="hint:freetime"),
+    ],
+    [
         InlineKeyboardButton(text="📝 Задача", callback_data="hint:task"),
-    ],
-    [
         InlineKeyboardButton(text="💼 Лид", callback_data="hint:lead"),
+    ],
+    [
         InlineKeyboardButton(text="📋 Мои встречи", callback_data="hint:meetings"),
-    ],
-    [
         InlineKeyboardButton(text="🎨 Картинка", callback_data="hint:image"),
+    ],
+    [
         InlineKeyboardButton(text="🧠 Спроси AI", callback_data="hint:askai"),
-    ],
-    [
         InlineKeyboardButton(text="📊 Суммаризация", callback_data="hint:summary"),
-        InlineKeyboardButton(text="🤖 Глафира", callback_data="hint:glafira"),
     ],
     [
+        InlineKeyboardButton(text="🤖 Глафира", callback_data="hint:glafira"),
         InlineKeyboardButton(text="👔 Анатолий", callback_data="hint:recruiter"),
+    ],
+    [
         InlineKeyboardButton(text="❓ Все команды", callback_data="hint:all"),
     ],
 ])
@@ -183,6 +187,10 @@ async def handle_hint(callback: CallbackQuery, state: FSMContext, bitrix, potok,
             reply_markup=BACK_MENU_KB,
         )
         await callback.answer()
+        return
+
+    if key == "team":
+        await _show_team(callback, bitrix)
         return
 
     if key == "summary":
@@ -379,6 +387,96 @@ async def _run_summary(callback: CallbackQuery, ai_client, bot=None):
     except Exception as e:
         logger.error("Summary error: %s", e, exc_info=True)
         await callback.message.answer(f"❌ Ошибка суммаризации: {e}", reply_markup=MENU_KB)
+
+
+def _work_status_line(person: dict) -> str:
+    """Format one team member line with work status indicator."""
+    name = html_mod.escape(person["name"])
+    pos = html_mod.escape(person.get("position", ""))
+    status = person.get("work_status", "")
+    start = person.get("work_start", "")
+
+    if status == "OPENED":
+        icon = "\U0001f7e2"  # green circle
+        time_str = ""
+        if start:
+            try:
+                # Try ISO format: 2024-03-15T09:00:00+07:00
+                from datetime import datetime as _dt
+                if "T" in start:
+                    dt = _dt.fromisoformat(start)
+                else:
+                    dt = _dt.strptime(start, "%d.%m.%Y %H:%M:%S")
+                time_str = f" (с {dt.strftime('%H:%M')})"
+            except (ValueError, TypeError):
+                pass
+        label = f"{icon} <b>{name}</b>"
+        if pos:
+            label += f" — {pos}"
+        label += time_str
+    elif status == "PAUSED":
+        label = f"\U0001f7e1 <b>{name}</b>"  # yellow circle
+        if pos:
+            label += f" — {pos}"
+        label += " (пауза)"
+    else:
+        label = f"\u26aa <b>{name}</b>"  # white circle
+        if pos:
+            label += f" — {pos}"
+
+    return label
+
+
+async def _show_team(callback: CallbackQuery, bitrix):
+    db_user = await db.get_user(callback.from_user.id)
+    if not db_user or not db_user.get("bitrix_user_id"):
+        await callback.message.answer("❌ Сначала авторизуйся: /start")
+        await callback.answer()
+        return
+
+    await callback.answer()
+    wait_msg = await callback.message.answer("👥 Загружаю команду...")
+
+    try:
+        team = await bitrix.get_my_team(db_user["bitrix_user_id"])
+    except Exception as e:
+        logger.error("Failed to fetch team: %s", e, exc_info=True)
+        await wait_msg.edit_text("❌ Не удалось загрузить команду", reply_markup=MENU_KB)
+        return
+
+    if not team:
+        await wait_msg.edit_text("❌ Информация о команде недоступна", reply_markup=MENU_KB)
+        return
+
+    dept = html_mod.escape(team.get("department", ""))
+    lines = [f"👥 <b>Моя команда</b> — {dept}"] if dept else ["👥 <b>Моя команда</b>"]
+
+    # Supervisor
+    if team.get("supervisor"):
+        sup = team["supervisor"]
+        lines.append(f"\n👆 <b>Руководитель:</b> {_work_status_line(sup)}")
+
+    # Colleagues (for regular employees) or Subordinates (for managers)
+    if team.get("is_head") and team.get("subordinates"):
+        lines.append("\n👇 <b>Подчинённые:</b>")
+        for p in team["subordinates"]:
+            lines.append(_work_status_line(p))
+        if team.get("colleagues"):
+            lines.append("\n👥 <b>Коллеги (руководители):</b>")
+            for p in team["colleagues"]:
+                lines.append(_work_status_line(p))
+    elif team.get("colleagues"):
+        lines.append("\n👥 <b>Коллеги:</b>")
+        for p in team["colleagues"]:
+            lines.append(_work_status_line(p))
+
+    if not team.get("supervisor") and not team.get("colleagues") and not team.get("subordinates"):
+        lines.append("\nНет данных о команде")
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="◀️ Меню", callback_data="back:menu")],
+    ])
+    await wait_msg.edit_text("\n".join(lines), reply_markup=kb)
 
 
 async def _show_meetings(callback: CallbackQuery, bitrix):

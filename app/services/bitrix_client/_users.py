@@ -128,6 +128,144 @@ class _BitrixUsersMixin:
 
         return card
 
+    @staticmethod
+    def _brief_user(u: dict) -> dict:
+        return {
+            "id": int(u["ID"]),
+            "name": f"{u.get('NAME', '')} {u.get('LAST_NAME', '')}".strip(),
+            "position": u.get("WORK_POSITION", ""),
+        }
+
+    async def get_my_team(self, user_id: int) -> dict | None:
+        """Fetch team hierarchy: supervisor, colleagues/subordinates, with work status."""
+        # Step 1: Get user + department info + department members in one batch
+        result = await self._request("user.get", {"ID": user_id})
+        users = result.get("result", [])
+        if not users:
+            return None
+
+        me = users[0]
+        dept_ids = me.get("UF_DEPARTMENT", [])
+        if not dept_ids:
+            return {"department": "", "is_head": False, "supervisor": None,
+                    "colleagues": [], "subordinates": []}
+
+        primary_dept_id = dept_ids[0]
+
+        batch1 = {
+            "dept": ("department.get", {"ID": primary_dept_id}),
+            "members": ("user.get", {
+                "filter": {"UF_DEPARTMENT": primary_dept_id, "ACTIVE": True},
+            }),
+        }
+        r1 = await self._batch_request(batch1)
+
+        dept_list = r1.get("dept", [])
+        if not dept_list:
+            return None
+        dept = dept_list[0]
+        dept_name = dept.get("NAME", "")
+        head_id = int(dept["UF_HEAD"]) if dept.get("UF_HEAD") else None
+        parent_dept_id = int(dept["PARENT"]) if dept.get("PARENT") else None
+        members = r1.get("members", [])
+        is_head = (head_id == user_id)
+
+        supervisor = None
+        colleagues = []
+        subordinates = []
+
+        if is_head:
+            # Subordinates = other department members
+            for m in members:
+                mid = int(m["ID"])
+                if mid != user_id:
+                    subordinates.append(self._brief_user(m))
+
+            # Supervisor = parent department head; peers = sibling dept heads
+            if parent_dept_id:
+                batch2 = {
+                    "parent_dept": ("department.get", {"ID": parent_dept_id}),
+                    "all_depts": ("department.get", {}),
+                }
+                r2 = await self._batch_request(batch2)
+
+                parent_info = r2.get("parent_dept", [])
+                if parent_info:
+                    parent_head_id = int(parent_info[0]["UF_HEAD"]) if parent_info[0].get("UF_HEAD") else None
+                    if parent_head_id and parent_head_id != user_id:
+                        sup_result = await self._request("user.get", {"ID": parent_head_id})
+                        sup_users = sup_result.get("result", [])
+                        if sup_users:
+                            supervisor = self._brief_user(sup_users[0])
+
+                # Find sibling department heads (peers)
+                all_depts = r2.get("all_depts", [])
+                sibling_head_ids = []
+                for d in all_depts:
+                    if (d.get("PARENT") and int(d["PARENT"]) == parent_dept_id
+                            and int(d["ID"]) != primary_dept_id and d.get("UF_HEAD")):
+                        sid = int(d["UF_HEAD"])
+                        if sid != user_id:
+                            sibling_head_ids.append(sid)
+
+                if sibling_head_ids:
+                    peer_cmds = {
+                        f"peer_{pid}": ("user.get", {"ID": pid})
+                        for pid in sibling_head_ids[:20]
+                    }
+                    peer_results = await self._batch_request(peer_cmds)
+                    for pid in sibling_head_ids[:20]:
+                        pu = peer_results.get(f"peer_{pid}", [])
+                        if pu:
+                            colleagues.append(self._brief_user(pu[0]))
+        else:
+            # Regular employee — supervisor is dept head, colleagues are peers
+            for m in members:
+                mid = int(m["ID"])
+                if mid == user_id:
+                    continue
+                if mid == head_id:
+                    supervisor = self._brief_user(m)
+                else:
+                    colleagues.append(self._brief_user(m))
+
+            # Head might not be in the department members list
+            if head_id and not supervisor:
+                sup_result = await self._request("user.get", {"ID": head_id})
+                sup_users = sup_result.get("result", [])
+                if sup_users:
+                    supervisor = self._brief_user(sup_users[0])
+
+        # Step 3: Get timeman.status for all team members
+        all_team = []
+        if supervisor:
+            all_team.append(supervisor)
+        all_team.extend(colleagues)
+        all_team.extend(subordinates)
+
+        if all_team:
+            tm_cmds = {
+                f"tm_{p['id']}": ("timeman.status", {"USER_ID": p["id"]})
+                for p in all_team[:45]
+            }
+            try:
+                tm_results = await self._batch_request(tm_cmds)
+                for p in all_team[:45]:
+                    tm = tm_results.get(f"tm_{p['id']}")
+                    if isinstance(tm, dict):
+                        p["work_status"] = tm.get("STATUS", "")
+                        p["work_start"] = tm.get("TIME_START", "")
+            except Exception as e:
+                logger.warning("timeman.status failed (may not be enabled): %s", e)
+
+        return {
+            "department": dept_name,
+            "is_head": is_head,
+            "supervisor": supervisor,
+            "colleagues": colleagues,
+            "subordinates": subordinates,
+        }
+
     async def get_user_email(self, user_id: int) -> str | None:
         """Get user email by Bitrix user ID."""
         result = await self._request("user.get", {"ID": user_id})
