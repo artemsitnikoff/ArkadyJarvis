@@ -183,8 +183,9 @@ async def handle_noop(callback: CallbackQuery):
 
 
 @router.callback_query(F.data.startswith("work:"))
-async def handle_work(callback: CallbackQuery, bitrix, ai_client, db_user=None):
+async def handle_work(callback: CallbackQuery, bitrix, ai_client):
     from app.bot.routers.work import start_work_day
+    db_user = await db.get_user(callback.from_user.id)
     await start_work_day(callback, bitrix, ai_client, db_user)
 
 
