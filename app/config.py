@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     bitrix_client_secret: SecretStr = SecretStr("")
     bitrix_domain: str = ""
     bitrix_refresh_token: str = ""
+    bitrix_telegram_field: str = "UF_USR_1678964886664"  # custom field for Telegram username
 
     # Jira (integration user)
     jira_url: str = ""
@@ -28,8 +29,11 @@ class Settings(BaseSettings):
     # Potok.io (Recruiter Anatoly)
     potok_api_token: SecretStr = SecretStr("")
     potok_base_url: str = "https://app.potok.io"
+
+    # Claude CLI
     claude_cli_path: str = "claude"
     claude_model: str = ""  # e.g. "claude-opus-4-6", empty = CLI default
+    claude_oauth_client_id: str = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
 
     # Claude CLI auth (passed through to subprocess env, not used by app directly)
     claude_code_oauth_token: str = ""
@@ -37,6 +41,10 @@ class Settings(BaseSettings):
 
     # Webhook
     webhook_token: str = ""  # shared secret for incoming B24 webhooks
+
+    # Access control (comma-separated Telegram IDs)
+    glafira_allowed: str = ""  # e.g. "33570147,367140321"
+    recruiter_allowed: str = ""  # e.g. "33570147,367140321,421632942"
 
     # Database
     db_path: str = "data/arkadyjarvis.db"

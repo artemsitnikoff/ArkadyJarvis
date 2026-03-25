@@ -27,12 +27,13 @@ class OpenClawClient:
         await self._client.aclose()
 
     async def stream_chat(
-        self, messages: list[dict[str, str]],
+        self, messages: list[dict[str, str]], *, user_id: int | str | None = None,
     ) -> AsyncIterator[str]:
         """Send messages to OpenClaw and yield text chunks via SSE.
 
         Args:
             messages: OpenAI-format message list [{"role": "user", "content": "..."}]
+            user_id: Telegram user ID for per-user agent isolation.
 
         Yields:
             Text delta chunks from the assistant response.
@@ -40,13 +41,18 @@ class OpenClawClient:
         if not self._base_url:
             raise ValueError("OPENCLAW_URL not configured")
 
+        # Per-user agent isolation: each Telegram user gets their own agent context
+        agent_id = settings.openclaw_agent_id
+        if user_id:
+            agent_id = f"{agent_id}-{user_id}"
+
         url = f"{self._base_url}/v1/chat/completions"
         payload = {
             "model": "openclaw",
             "stream": True,
             "messages": messages,
         }
-        headers = {"x-openclaw-agent-id": settings.openclaw_agent_id}
+        headers = {"x-openclaw-agent-id": agent_id}
 
         async with self._client.stream(
             "POST", url, json=payload, headers=headers,
@@ -67,9 +73,11 @@ class OpenClawClient:
                 except (json.JSONDecodeError, KeyError, IndexError):
                     continue
 
-    async def chat(self, messages: list[dict[str, str]]) -> str:
+    async def chat(
+        self, messages: list[dict[str, str]], *, user_id: int | str | None = None,
+    ) -> str:
         """Non-streaming convenience method. Returns full response text."""
         parts: list[str] = []
-        async for chunk in self.stream_chat(messages):
+        async for chunk in self.stream_chat(messages, user_id=user_id):
             parts.append(chunk)
         return "".join(parts)

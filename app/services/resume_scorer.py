@@ -1,7 +1,7 @@
-import json
 import re
 
 from app.services.potok_models import Applicant, Job, ScoringResult
+from app.utils import parse_json_response
 
 SCORING_PROMPT = """Ты — эксперт по подбору персонала в IT-компании. Оцени, насколько кандидат подходит под вакансию.
 
@@ -142,14 +142,7 @@ def _build_prompt(job: Job, applicant: Applicant) -> str:
 
 
 def _parse_response(text: str) -> dict:
-    match = re.search(r"```(?:json)?\s*(\{.*\})\s*```", text, re.DOTALL)
-    if match:
-        return json.loads(match.group(1))
-    start = text.find("{")
-    end = text.rfind("}")
-    if start != -1 and end != -1 and end > start:
-        return json.loads(text[start:end + 1])
-    return json.loads(text)
+    return parse_json_response(text)
 
 
 async def score_applicant(job: Job, applicant: Applicant) -> ScoringResult:

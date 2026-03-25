@@ -13,12 +13,19 @@ from aiogram.types import (
 )
 
 from app.bot.routers.start import MENU_KB
+from app.config import settings
 
 logger = logging.getLogger("arkadyjarvis")
 router = Router()
 
-# Telegram IDs allowed to use Glafira (test mode)
-GLAFIRA_ALLOWED = {33570147, 367140321}
+
+def _parse_allowed_ids(csv: str) -> set[int]:
+    if not csv.strip():
+        return set()
+    return {int(x.strip()) for x in csv.split(",") if x.strip().isdigit()}
+
+
+GLAFIRA_ALLOWED = _parse_allowed_ids(settings.glafira_allowed)
 
 GLAFIRA_EXIT_KB = InlineKeyboardMarkup(inline_keyboard=[
     [InlineKeyboardButton(text="◀️ Меню", callback_data="glafira:exit")],
@@ -67,7 +74,7 @@ async def handle_glafira_message(
         edit_interval = 0.8
         last_edit_time = 0.0
 
-        async for chunk in openclaw.stream_chat(conv_messages):
+        async for chunk in openclaw.stream_chat(conv_messages, user_id=message.from_user.id):
             full_text += chunk
 
             now = asyncio.get_event_loop().time()

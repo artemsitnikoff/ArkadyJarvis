@@ -14,11 +14,12 @@ from pathlib import Path
 
 import httpx
 
+from app.config import settings
+
 logger = logging.getLogger("arkadyjarvis")
 
 TOKEN_FILE = Path("data/.claude_token.json")
 TOKEN_URL = "https://api.anthropic.com/v1/oauth/token"
-CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
 REFRESH_BUFFER_MS = 600_000  # refresh 10 min before expiry
 
 
@@ -87,7 +88,7 @@ async def ensure_fresh_token() -> None:
                 data={
                     "grant_type": "refresh_token",
                     "refresh_token": refresh_token,
-                    "client_id": CLIENT_ID,
+                    "client_id": settings.claude_oauth_client_id,
                 },
                 headers={"Content-Type": "application/x-www-form-urlencoded"},
             )

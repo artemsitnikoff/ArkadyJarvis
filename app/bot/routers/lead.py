@@ -1,4 +1,3 @@
-import json
 import logging
 import re
 
@@ -9,6 +8,7 @@ from aiogram.types import Message
 
 from app.bot.routers.start import MENU_KB
 from app.config import settings
+from app.utils import parse_json_response
 
 logger = logging.getLogger("arkadyjarvis")
 router = Router()
@@ -36,7 +36,7 @@ EXTRACT_PROMPT = """\
 
 
 @router.message(F.text.regexp(r"(?i)^(сделай|создай)\s+лид"))
-async def handle_create_lead(message: Message, ai_client, bitrix):
+async def handle_create_lead(message: Message, ai_client, bitrix, db_user=None):
     text = message.text or ""
     logger.info("*** TRIGGER: 'создай лид' in chat=%s from user=%s", message.chat.id, message.from_user.id)
 
@@ -51,41 +51,49 @@ async def handle_create_lead(message: Message, ai_client, bitrix):
         await message.reply("Напиши данные лида или реплайни на сообщение с информацией.")
         return
 
-    await _create_lead(message, combined, ai_client=ai_client, bitrix=bitrix)
+    await _create_lead(message, combined, ai_client=ai_client, bitrix=bitrix, db_user=db_user)
 
 
 @router.message(CreateLead.waiting_for_info)
-async def handle_lead_fsm(message: Message, state: FSMContext, ai_client, bitrix):
+async def handle_lead_fsm(message: Message, state: FSMContext, ai_client, bitrix, db_user=None):
     text = (message.text or "").strip()
     if not text:
         await message.reply("Напиши данные лида текстом.")
         return
     await state.clear()
-    await _create_lead(message, text, ai_client=ai_client, bitrix=bitrix)
+    await _create_lead(message, text, ai_client=ai_client, bitrix=bitrix, db_user=db_user)
 
 
-async def _create_lead(message: Message, text: str, *, ai_client, bitrix):
+async def _create_lead(message: Message, text: str, *, ai_client, bitrix, db_user=None):
     raw = await ai_client.complete(EXTRACT_PROMPT.format(text=text), max_tokens=512, temperature=0.2)
-
-    raw = re.sub(r"^```(?:json)?\s*", "", raw.strip())
-    raw = re.sub(r"\s*```$", "", raw)
-
-    parsed = json.loads(raw)
+    parsed = parse_json_response(raw)
 
     fields: dict = {"TITLE": parsed.get("TITLE") or text[:100]}
 
-    if parsed.get("NAME"):
-        fields["NAME"] = parsed["NAME"]
-    if parsed.get("LAST_NAME"):
-        fields["LAST_NAME"] = parsed["LAST_NAME"]
-    if parsed.get("COMPANY_TITLE"):
-        fields["COMPANY_TITLE"] = parsed["COMPANY_TITLE"]
+    for key in ("NAME", "LAST_NAME", "COMPANY_TITLE", "COMMENTS"):
+        if parsed.get(key):
+            fields[key] = parsed[key]
+
     if parsed.get("PHONE"):
         fields["PHONE"] = [{"VALUE": parsed["PHONE"], "VALUE_TYPE": "WORK"}]
     if parsed.get("EMAIL"):
         fields["EMAIL"] = [{"VALUE": parsed["EMAIL"], "VALUE_TYPE": "WORK"}]
-    if parsed.get("COMMENTS"):
-        fields["COMMENTS"] = parsed["COMMENTS"]
+
+    # Source: mark that lead came from Telegram bot
+    fields["SOURCE_ID"] = "OTHER"
+    fields["SOURCE_DESCRIPTION"] = "Telegram-бот ArkadyJarvis"
+
+    # Add creator's Telegram contact for traceability
+    tg_user = message.from_user
+    if tg_user:
+        username = tg_user.username or ""
+        creator_name = tg_user.full_name or ""
+        source_parts = [f"Создал: {creator_name}"]
+        if username:
+            source_parts.append(f"@{username}")
+        existing_comments = fields.get("COMMENTS", "")
+        tg_info = " | ".join(source_parts)
+        fields["COMMENTS"] = f"{existing_comments}\n\n[Telegram] {tg_info}".strip()
 
     result = await bitrix.create_lead(fields)
 

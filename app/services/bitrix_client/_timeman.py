@@ -22,15 +22,12 @@ class _BitrixTimemanMixin:
             logger.warning("timeman.status failed for user %s: %s", user_id, e)
             return None
 
-    async def start_work_day(self, user_id: int, remote: bool = False) -> dict:
+    async def start_work_day(self, user_id: int) -> dict:
         """Start a work day for the user via timeman.open.
 
-        For remote work, passes report='Удалённая работа'.
         Returns dict with ok, status, time_start, error.
         """
         params = {"USER_ID": user_id}
-        if remote:
-            params["report"] = "Удалённая работа"
 
         try:
             result = await self._request("timeman.open", params)

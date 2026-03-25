@@ -12,13 +12,21 @@ from aiogram.types import (
 )
 
 from app.bot.routers.start import MENU_KB
+from app.config import settings
 from app.services.resume_scorer import score_applicant
 from app.services.resume_scorer import _extract_recruiter_instructions
 
 logger = logging.getLogger("arkadyjarvis")
 router = Router()
 
-RECRUITER_ALLOWED = {33570147, 367140321, 421632942}  # Artem, Natalya, Liza
+
+def _parse_allowed_ids(csv: str) -> set[int]:
+    if not csv.strip():
+        return set()
+    return {int(x.strip()) for x in csv.split(",") if x.strip().isdigit()}
+
+
+RECRUITER_ALLOWED = _parse_allowed_ids(settings.recruiter_allowed)
 
 
 class Recruiter(StatesGroup):

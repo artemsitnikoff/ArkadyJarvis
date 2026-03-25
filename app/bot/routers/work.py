@@ -45,8 +45,8 @@ async def start_work_day(callback: CallbackQuery, bitrix, ai_client, db_user):
         await callback.message.answer(f"✅ Вы уже работаете{time_str}")
         return
 
-    # Start work day
-    result = await bitrix.start_work_day(bitrix_id, remote=remote)
+    # Start work day (no report on open — report is for closing)
+    result = await bitrix.start_work_day(bitrix_id)
     if not result.get("ok"):
         error = result.get("error", "Неизвестная ошибка")
         logger.error("Failed to start work day for user %s: %s", bitrix_id, error)

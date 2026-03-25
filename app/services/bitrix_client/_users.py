@@ -1,6 +1,8 @@
 import logging
 import re
 
+from app.config import settings
+
 logger = logging.getLogger("arkadyjarvis")
 
 
@@ -43,7 +45,7 @@ class _BitrixUsersMixin:
         variants = [clean, f"@{clean}"]
 
         commands = {
-            v: ("user.get", {"filter": {"UF_USR_1678964886664": v}})
+            v: ("user.get", {"filter": {settings.bitrix_telegram_field: v}})
             for v in variants
         }
 
@@ -92,7 +94,7 @@ class _BitrixUsersMixin:
             "position": u.get("WORK_POSITION", ""),
             "email": u.get("EMAIL", ""),
             "phone": u.get("PERSONAL_MOBILE") or u.get("WORK_PHONE") or u.get("PERSONAL_PHONE") or "",
-            "telegram": u.get("UF_USR_1678964886664", ""),
+            "telegram": u.get(settings.bitrix_telegram_field, ""),
             "department_ids": u.get("UF_DEPARTMENT", []),
             "photo": u.get("PERSONAL_PHOTO", ""),
         }

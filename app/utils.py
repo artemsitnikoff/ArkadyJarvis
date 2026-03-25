@@ -1,3 +1,4 @@
+import json
 import re
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -152,6 +153,22 @@ def md_to_telegram_html(text: str) -> str:
         result.append("<pre>" + html_mod.escape("\n".join(code_lines)) + "</pre>")
 
     return "\n".join(result).strip()
+
+
+def parse_json_response(raw: str) -> dict:
+    """Extract JSON object from AI response — handles markdown fences and embedded text."""
+    raw = raw.strip()
+    raw = re.sub(r"^```(?:json)?\s*", "", raw)
+    raw = re.sub(r"\s*```$", "", raw)
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        pass
+    start = raw.find("{")
+    end = raw.rfind("}")
+    if start != -1 and end > start:
+        return json.loads(raw[start:end + 1])
+    raise ValueError(f"Cannot parse JSON from AI response: {raw[:200]}")
 
 
 def merge_intervals(intervals: list[tuple[datetime, datetime]]) -> list[tuple[datetime, datetime]]:

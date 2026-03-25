@@ -21,7 +21,7 @@ app/
   db.py                    # aiosqlite: schema, CRUD (users, group_chats, message_buffer, muted_groups)
   utils.py                 # Parsers (time, attendees, Bitrix datetime), constants, merge_intervals, md_to_telegram_html()
   summarizer.py            # GPT summarization + clean_html_for_telegram()
-  version.py               # __version__ = "2.6.0"
+  version.py               # __version__
   bot/
     create.py              # create_bot() + create_dispatcher() — router registration order matters
     middlewares.py          # ErrorMiddleware (catch-all error handler) + AuthMiddleware (Bitrix auth + muted groups)
@@ -31,7 +31,7 @@ app/
       meeting.py           # "сделай/создай встречу" trigger — time/date/attendee parsing, FSM MeetingSetup
       free_slots.py        # "найди время" trigger — calendar accessibility + FSM booking (BookSlot)
       jira_task.py         # "сделай/создай задачу" trigger — project key + description, FSM CreateTask
-      lead.py              # "сделай/создай лид" trigger — GPT extracts fields -> Bitrix CRM, FSM CreateLead
+      lead.py              # "сделай/создай лид" trigger — AI extracts fields -> Bitrix CRM with SOURCE + Telegram contact, FSM CreateLead
       image.py             # "нарисуй/сгенерируй" trigger — image generation via OpenRouter/Gemini, supports photo+caption editing
       ask_ai.py            # "спроси ai/вопрос" trigger — Claude answers, md_to_telegram_html conversion
       glafira.py           # Glafira (AI office manager) — FSM chatting mode, OpenClaw streaming
@@ -47,9 +47,10 @@ app/
       _base.py              # _BitrixBase — OAuth file-based tokens, HTTP client, auto-refresh
       _calendar.py          # _BitrixCalendarMixin — calendar events, free slots, create_meeting, get_user_events (today only)
       _crm.py               # _BitrixCRMMixin — leads, CRM operations
-      _users.py             # _BitrixUsersMixin — user lookup, email guests, find_user_by_nickname
+      _timeman.py           # _BitrixTimemanMixin — work day start/status via timeman API
+      _users.py             # _BitrixUsersMixin — user lookup, email guests, find_user_by_nickname, get_my_team
     jira_client.py         # JiraClient — async context manager, single integration user from settings
-    openclaw_client.py     # OpenClawClient — HTTP SSE client for OpenClaw gateway
+    openclaw_client.py     # OpenClawClient — HTTP SSE client for OpenClaw gateway (per-user agent isolation via user_id)
     openrouter_client.py   # OpenRouterClient — image generation (Gemini), ask_opus (Claude Opus via OpenRouter)
     potok_client.py        # PotokClient — Potok.io ATS API (jobs, applicants via ajs_joins, scoring push)
     potok_models.py        # Pydantic models: Job, Applicant, Resume, CvParams, ScoringResult, ScoreBreakdown
@@ -57,7 +58,9 @@ app/
   scheduler/
     jobs.py                # daily_summary_job — summarizes all groups, builds overview, cleanup
   api/
-    routes.py              # GET /api/health
+    routes.py              # GET /api/health, POST /api/bitrix/notify, POST /api/bitrix/broadcast (webhook endpoints)
+      work.py              # Work day start logic (start_work_day callback handler with AI greeting)
+      employee.py          # Employee search FSM + employee card display
 data/
   arkadyjarvis.db          # SQLite database
   bitrix_tokens.json       # Bitrix OAuth tokens (auto-refreshed)
@@ -70,7 +73,7 @@ scripts/
 
 ### Architecture
 - **AIClient** wraps Claude CLI (`claude --print --output-format text`) as subprocess. Uses `CLAUDE_CODE_OAUTH_TOKEN` env var. Token auto-refreshed by `claude_token.py` before each call. Default 120s timeout, configurable per call. On timeout: `proc.kill()` + cleanup.
-- **BitrixClient** is a singleton, refactored into package with mixins (`_base`, `_users`, `_calendar`, `_crm`). File-based OAuth (`data/bitrix_tokens.json`), auto-refresh on expiry.
+- **BitrixClient** is a singleton, refactored into package with mixins (`_base`, `_users`, `_calendar`, `_crm`, `_timeman`). File-based OAuth (`data/bitrix_tokens.json`), auto-refresh on expiry.
 - **OpenRouterClient** is a singleton for image generation (Gemini 3 Pro via OpenRouter) and Opus queries.
 - **PotokClient** is a singleton for Potok.io ATS API (recruiter functionality).
 - **JiraClient** uses a single integration user from settings: `async with JiraClient() as jira:`. Maps Telegram user to Jira reporter/assignee via Bitrix email lookup.
@@ -82,10 +85,10 @@ scripts/
 
 ### Router Registration Order (in `create.py`)
 Order matters — `buffer.py` must be last (catch-all):
-1. start -> 2. summarize -> 3. meeting -> 4. free_slots -> 5. jira_task -> 6. lead -> 7. image -> 8. ask_ai -> 9. glafira -> 10. recruiter -> 11. auto_reply -> 12. group -> 13. buffer
+1. start -> 2. summarize -> 3. meeting -> 4. free_slots -> 5. jira_task -> 6. lead -> 7. image -> 8. ask_ai -> 9. employee -> 10. glafira -> 11. recruiter -> 12. auto_reply -> 13. group -> 14. buffer
 
 ### Authorization Flow
-1. User sends `/start` -> bot looks up `@username` in Bitrix field `UF_USR_1678964886664`
+1. User sends `/start` -> bot looks up `@username` in Bitrix field (configured as `BITRIX_TELEGRAM_FIELD`, default `UF_USR_1678964886664`)
 2. If found -> saves `(telegram_id, bitrix_user_id, display_name)` to `users` table
 3. AuthMiddleware blocks protected commands if user not authorized
 4. Public commands: `/start`, `/help` — always allowed without auth
@@ -229,11 +232,11 @@ muted_groups (chat_id PK) — groups where bot collects messages but doesn't res
 
 Required: `BOT_TOKEN`
 
-AI: `CLAUDE_CODE_OAUTH_TOKEN`, `CLAUDE_REFRESH_TOKEN` (for auto-refresh), `CLAUDE_CLI_PATH` (default `claude`), `CLAUDE_MODEL` (optional override)
+AI: `CLAUDE_CODE_OAUTH_TOKEN`, `CLAUDE_REFRESH_TOKEN` (for auto-refresh), `CLAUDE_CLI_PATH` (default `claude`), `CLAUDE_MODEL` (optional override), `CLAUDE_OAUTH_CLIENT_ID` (default official Claude Code ID)
 
 OpenRouter: `OPENROUTER_API_KEY` (for image generation + Opus)
 
-Bitrix24: `BITRIX_CLIENT_ID`, `BITRIX_CLIENT_SECRET`, `BITRIX_DOMAIN`, `BITRIX_REFRESH_TOKEN` (first run only)
+Bitrix24: `BITRIX_CLIENT_ID`, `BITRIX_CLIENT_SECRET`, `BITRIX_DOMAIN`, `BITRIX_REFRESH_TOKEN` (first run only), `BITRIX_TELEGRAM_FIELD` (default `UF_USR_1678964886664`)
 
 Potok.io: `POTOK_API_TOKEN`, `POTOK_BASE_URL` (default `https://app.potok.io`)
 
@@ -241,7 +244,22 @@ OpenClaw: `OPENCLAW_URL`, `OPENCLAW_TOKEN`, `OPENCLAW_AGENT_ID` (default `main`)
 
 Jira (integration user): `JIRA_URL`, `JIRA_USERNAME`, `JIRA_PASSWORD`
 
+Webhook: `WEBHOOK_TOKEN` (shared secret for incoming B24 webhooks, header `X-Webhook-Token`)
+
+Access control: `GLAFIRA_ALLOWED` (comma-separated Telegram IDs), `RECRUITER_ALLOWED` (comma-separated Telegram IDs)
+
 Other: `DB_PATH` (default `data/arkadyjarvis.db`), `SUMMARY_HOUR` (default 19), `SUMMARY_MINUTE` (default 0), `TIMEZONE` (default `Asia/Novosibirsk`)
+
+## Coding Guidelines
+
+- **No hardcoded field IDs**: Bitrix24 custom fields (UF_*) must be in `config.py`, not in code. Field IDs are dynamic and opaque.
+- **No hardcoded user IDs**: Access control lists (allowed users) must be in `.env`, not in code.
+- **No hardcoded secrets**: All tokens, client IDs, secrets go in `.env` via pydantic-settings.
+- **JSON from AI**: Use `utils.parse_json_response()` for parsing — handles markdown fences, embedded text. Don't duplicate parsing logic.
+- **Timeman API**: `timeman.open` should NOT pre-fill `report` — reports are for `timeman.close` (end of day).
+- **OpenClaw isolation**: Always pass `user_id` to `openclaw.stream_chat()` — each Telegram user gets isolated agent context via `x-openclaw-agent-id` header.
+- **Lead creation**: Always include `SOURCE_ID`/`SOURCE_DESCRIPTION` and creator's Telegram contact in `COMMENTS` for traceability.
+- **Callback handlers in start.py**: Don't rely on `db_user` from middleware kwargs — fetch via `db.get_user(callback.from_user.id)` directly.
 
 ## Running
 
