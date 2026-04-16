@@ -18,6 +18,7 @@ from app.services.openclaw_client import OpenClawClient
 from app.services.openrouter_client import OpenRouterClient
 from app.services.claude_token import init_token_file
 from app.services.potok_client import PotokClient
+from app.version import __version__
 
 logging.basicConfig(
     level=logging.INFO,
@@ -103,7 +104,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="ArkadyJarvis",
     description="Telegram-бот для команды: Bitrix24, Jira, AI, рекрутинг",
-    version="2.9.3",
+    version=__version__,
     docs_url="/docs",
     lifespan=lifespan,
 )
