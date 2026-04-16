@@ -1,9 +1,12 @@
 """AI client — uses Claude CLI (subscription, no API tokens)."""
 
 import asyncio
+import logging
 import os
 
 from app.config import settings
+
+logger = logging.getLogger("arkadyjarvis")
 
 
 class AIClient:
@@ -22,6 +25,8 @@ class AIClient:
         args = [settings.claude_cli_path, "--print", "--output-format", "text"]
         if settings.claude_model:
             args.extend(["--model", settings.claude_model])
+
+        logger.info("claude CLI argv: %s", args)
 
         proc = await asyncio.create_subprocess_exec(
             *args,
