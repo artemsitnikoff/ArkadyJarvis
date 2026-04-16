@@ -54,6 +54,9 @@ class Settings(BaseSettings):
     summary_minute: int = 0
     timezone: str = "Asia/Novosibirsk"
 
+    # Wednesday frog meme — sent every Wednesday 10:00 local time. 0 = disabled.
+    wednesday_frog_chat_id: int = 0
+
     @field_validator("summary_hour")
     @classmethod
     def validate_summary_hour(cls, v: int) -> int:

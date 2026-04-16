@@ -3,10 +3,13 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from aiogram import Bot
+from aiogram.types import BufferedInputFile
 
 from app import db
 from app.config import settings
 from app.services.ai_client import AIClient
+from app.services.openrouter_client import OpenRouterClient
+from app.services.prompts import load_prompt
 from app.summarizer import build_daily_overview, summarize_messages
 
 logger = logging.getLogger("arkadyjarvis")
@@ -77,3 +80,23 @@ async def daily_summary_job(bot: Bot, ai_client: AIClient):
     deleted = await db.cleanup_old_messages(days=7)
     if deleted:
         logger.info("=== Cleaned up %d old messages", deleted)
+
+
+async def wednesday_frog_job(bot: Bot, ai_client: AIClient, openrouter: OpenRouterClient):
+    """Generate and send a frog meme image to the configured chat every Wednesday."""
+    chat_id = settings.wednesday_frog_chat_id
+    if not chat_id:
+        logger.info("=== wednesday_frog_job skipped: WEDNESDAY_FROG_CHAT_ID not set")
+        return
+
+    try:
+        meta_prompt = load_prompt("wednesday_frog")
+        image_prompt = (await ai_client.complete(meta_prompt)).strip()
+        logger.info("=== Wednesday frog prompt: %s", image_prompt)
+
+        image_bytes = await openrouter.generate_image(image_prompt)
+        photo = BufferedInputFile(image_bytes, filename="wednesday_frog.png")
+        await bot.send_photo(chat_id, photo, caption="🐸 Со средой, мои чуваки!")
+        logger.info("=== Wednesday frog sent to chat %s", chat_id)
+    except Exception as e:
+        logger.error("=== wednesday_frog_job failed: %s", e, exc_info=True)

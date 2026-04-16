@@ -190,6 +190,14 @@ Order matters — `buffer.py` must be last (catch-all):
 - `db.get_active_users()` returns all users with `is_active=1`
 - Cleans up messages older than 7 days
 
+### Wednesday Frog Job (scheduler/jobs.py)
+- Runs every Wednesday at 10:00 local time (timezone from settings)
+- Skipped if `WEDNESDAY_FROG_CHAT_ID` is 0/unset
+- Two-step pipeline:
+  1. Claude CLI generates a fresh image prompt using `prompts/wednesday_frog.md` — different scene each week, always features a cartoon frog + the caption "Со средой, мои чуваки!"
+  2. `OpenRouterClient.generate_image()` (Gemini 3 Pro Image) renders the picture
+- Sent via `bot.send_photo()` to the configured chat
+
 ### Claude CLI (AI Client)
 - AIClient calls `claude --print --output-format text` as subprocess
 - Token: `CLAUDE_CODE_OAUTH_TOKEN` env var, auto-refreshed via `claude_token.py`
@@ -258,7 +266,7 @@ Webhook: `WEBHOOK_TOKEN` (shared secret for incoming B24 webhooks, header `X-Web
 
 Access control: `GLAFIRA_ALLOWED` (comma-separated Telegram IDs), `RECRUITER_ALLOWED` (comma-separated Telegram IDs)
 
-Other: `DB_PATH` (default `data/arkadyjarvis.db`), `SUMMARY_HOUR` (default 19), `SUMMARY_MINUTE` (default 0), `TIMEZONE` (default `Asia/Novosibirsk`)
+Other: `DB_PATH` (default `data/arkadyjarvis.db`), `SUMMARY_HOUR` (default 19), `SUMMARY_MINUTE` (default 0), `TIMEZONE` (default `Asia/Novosibirsk`), `WEDNESDAY_FROG_CHAT_ID` (default 0 = disabled)
 
 ## Coding Guidelines
 
