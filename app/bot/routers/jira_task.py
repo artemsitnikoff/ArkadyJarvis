@@ -1,7 +1,7 @@
 import logging
 import re
 
-from aiogram import F, Router
+from aiogram import Router
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import Message
@@ -17,20 +17,6 @@ router = Router()
 
 class CreateTask(StatesGroup):
     waiting_for_input = State()
-
-
-@router.message(F.text.regexp(r"(?i)^(сделай|создай)\s+задачу"))
-async def handle_create_task(message: Message, db_user: DbUser, bitrix):
-    text = message.text or ""
-    logger.info("*** TRIGGER: 'создай задачу' in chat=%s from user=%s", message.chat.id, message.from_user.id)
-
-    body = re.sub(r"(?i)^(сделай|создай)\s+задачу\s*", "", text).strip()
-
-    reply_text = ""
-    if message.reply_to_message and message.reply_to_message.text:
-        reply_text = message.reply_to_message.text.strip()
-
-    await _create_task(message, body, reply_text, db_user=db_user, bitrix=bitrix)
 
 
 @router.message(CreateTask.waiting_for_input)

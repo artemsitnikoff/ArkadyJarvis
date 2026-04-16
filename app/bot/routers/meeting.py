@@ -3,7 +3,6 @@ import logging
 from datetime import datetime
 
 from aiogram import F, Router
-from aiogram.enums import ChatType
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
@@ -135,40 +134,6 @@ async def handle_meeting_fsm(message: Message, state: FSMContext, db_user: DbUse
         return
 
     # Has @nicks/emails — proceed with full creation (same as text trigger)
-    await _create_meeting_with_nicks(message, state, db_user, bitrix, dt, context, nicknames, emails)
-
-
-@router.message(F.text.regexp(r"(?i)^(сделай|создай)\s+встречу"))
-async def handle_create_meeting(message: Message, state: FSMContext, db_user: DbUser, bitrix):
-    text = message.text or ""
-    logger.info("*** TRIGGER: 'сделай встречу' in chat=%s from user=%s", message.chat.id, message.from_user.id)
-
-    dt, err = parse_meeting_time(text)
-    if err:
-        await message.reply(err)
-        return
-
-    context = ""
-    if message.reply_to_message and message.reply_to_message.text:
-        context = message.reply_to_message.text
-
-    nicknames, emails = parse_attendees(text)
-
-    # No @nicks and no emails — start interactive search in DM
-    if not nicknames and not emails and message.chat.type == ChatType.PRIVATE:
-        await state.update_data(
-            dt=dt.isoformat(),
-            context=context,
-            attendee_ids=[],
-            attendee_names=[],
-        )
-        await state.set_state(MeetingSetup.searching_attendee)
-        await message.reply(
-            "Напиши имя или фамилию коллеги:",
-            reply_markup=_cancel_kb(show_add_me=True),
-        )
-        return
-
     await _create_meeting_with_nicks(message, state, db_user, bitrix, dt, context, nicknames, emails)
 
 

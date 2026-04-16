@@ -45,6 +45,9 @@ MENU_KB = InlineKeyboardMarkup(inline_keyboard=[
         InlineKeyboardButton(text="📊 Суммаризация", callback_data="hint:summary"),
     ],
     [
+        InlineKeyboardButton(text="📄 Проверь договор", callback_data="hint:contract"),
+    ],
+    [
         InlineKeyboardButton(text="🤖 Глафира", callback_data="hint:glafira"),
         InlineKeyboardButton(text="👔 Анатолий", callback_data="hint:recruiter"),
     ],
@@ -272,6 +275,18 @@ async def handle_hint(callback: CallbackQuery, state: FSMContext, bitrix, potok,
         from app.bot.routers.ask_ai import AskAI
         await state.set_state(AskAI.waiting_for_question)
         await callback.message.answer("🧠 Задай вопрос:", reply_markup=BACK_MENU_KB)
+        await callback.answer()
+        return
+
+    if key == "contract":
+        from app.bot.routers.contract import ContractCheck
+        await state.set_state(ContractCheck.waiting_for_document)
+        await callback.message.answer(
+            "📄 <b>Проверка договора</b>\n\n"
+            "Пришли файл (PDF, DOCX или TXT) — проверю по правилам "
+            "и выдам список несоответствий.",
+            reply_markup=BACK_MENU_KB,
+        )
         await callback.answer()
         return
 

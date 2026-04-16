@@ -12,7 +12,7 @@ BASE_URL = "https://openrouter.ai/api/v1/chat/completions"
 
 
 class OpenRouterClient:
-    """OpenRouter client for image generation and Opus queries."""
+    """OpenRouter client for image generation."""
 
     def __init__(self):
         self._client = httpx.AsyncClient(
@@ -114,21 +114,3 @@ class OpenRouterClient:
             raise ValueError("Модель отказала — возможно, запрос нарушает контент-политику")
 
         raise ValueError("Модель не вернула картинку, попробуй другой промпт")
-
-    async def ask_opus(self, prompt: str) -> str:
-        """Ask Claude Opus 4.6 via OpenRouter. Returns text response."""
-        payload = {
-            "model": "anthropic/claude-opus-4.6",
-            "messages": [{"role": "user", "content": prompt}],
-            "max_tokens": 4096,
-        }
-        resp = await self._client.post(BASE_URL, json=payload)
-        resp.raise_for_status()
-        data = resp.json()
-
-        content = data["choices"][0]["message"]["content"]
-        if isinstance(content, str):
-            return content.strip()
-        # multimodal response — extract text parts
-        parts = [p["text"] for p in content if p.get("type") == "text"]
-        return "\n".join(parts).strip()

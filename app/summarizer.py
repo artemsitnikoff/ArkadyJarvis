@@ -59,9 +59,7 @@ def _format_messages(msgs: list[dict]) -> str:
 MAX_INPUT_CHARS = 100_000  # ~25K tokens, safe for GPT context window
 
 
-async def summarize_messages(
-    msgs: list[dict], *, ai_client: AIClient, max_tokens: int = 1024,
-) -> str:
+async def summarize_messages(msgs: list[dict], *, ai_client: AIClient) -> str:
     """Run GPT summarization on a list of message dicts."""
     conversation = _format_messages(msgs)
     if len(conversation) > MAX_INPUT_CHARS:
@@ -71,7 +69,7 @@ async def summarize_messages(
         if nl != -1:
             conversation = conversation[nl + 1:]
         logger.warning("Truncated conversation to %d chars for summarization", len(conversation))
-    result = await ai_client.complete(TASK_SUMMARY_PROMPT + conversation, max_tokens=max_tokens)
+    result = await ai_client.complete(TASK_SUMMARY_PROMPT + conversation)
     return result
 
 
@@ -109,6 +107,6 @@ async def build_daily_overview(
             f"\nЭтот обзор для {user_name}. "
             "Неотвеченные вопросы адресованные этому человеку — выдели ПЕРВЫМИ с пометкой ‼️.\n\n"
         )
-    result = await ai_client.complete(prompt + full_text, max_tokens=1500)
+    result = await ai_client.complete(prompt + full_text)
     logger.info("<<< DAILY OVERVIEW RESPONSE:\n%s", result)
     return result

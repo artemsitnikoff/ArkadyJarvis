@@ -27,16 +27,16 @@ app/
     middlewares.py          # ErrorMiddleware (catch-all error handler) + AuthMiddleware (Bitrix auth + muted groups)
     routers/
       start.py             # /start (auto-auth via @username -> Bitrix), /help, MENU_KB (12 buttons), hint callbacks, "Мои встречи"
-      summarize.py         # /summary, "суммаризация" trigger
-      meeting.py           # "сделай/создай встречу" trigger — time/date/attendee parsing, FSM MeetingSetup
-      free_slots.py        # "найди время" trigger — calendar accessibility + FSM booking (BookSlot)
-      jira_task.py         # "сделай/создай задачу" trigger — project key + description, FSM CreateTask
-      lead.py              # "сделай/создай лид" trigger — AI extracts fields -> Bitrix CRM with SOURCE + Telegram contact, FSM CreateLead
-      image.py             # "нарисуй/сгенерируй" trigger — image generation via OpenRouter/Gemini, supports photo+caption editing
-      ask_ai.py            # "спроси ai/вопрос" trigger — Claude answers, md_to_telegram_html conversion
+      summarize.py         # /summary command — on-demand chat summarization
+      meeting.py           # FSM MeetingSetup — time/date/attendee parsing, Bitrix meeting creation
+      free_slots.py        # FSM BookSlot — calendar accessibility + slot booking
+      jira_task.py         # FSM CreateTask — Jira issue creation (project key + description)
+      lead.py              # FSM CreateLead — AI extracts fields -> Bitrix CRM with SOURCE + Telegram contact
+      image.py             # FSM ImageGen — image generation via OpenRouter/Gemini, supports photo+caption editing
+      ask_ai.py            # FSM AskAI — Claude answers, md_to_telegram_html conversion
+      contract.py          # FSM ContractCheck — parse PDF/DOCX/TXT, check against rules in prompts/contract_check.md
       glafira.py           # Glafira (AI office manager) — FSM chatting mode, OpenClaw streaming
       recruiter.py         # Анатолий (AI recruiter) — Potok.io integration, candidate scoring via Claude
-      auto_reply.py        # "ситников" trigger (Seneca quotes via GPT)
       group.py             # on_bot_added / on_bot_removed — tracks group_chats in DB
       buffer.py            # Catch-all (LAST router): buffers all group messages to SQLite
   services/
@@ -50,8 +50,10 @@ app/
       _timeman.py           # _BitrixTimemanMixin — work day start/status via timeman API
       _users.py             # _BitrixUsersMixin — user lookup, email guests, find_user_by_nickname, get_my_team
     jira_client.py         # JiraClient — async context manager, single integration user from settings
+    document_parser.py     # Extract text from .pdf/.docx/.txt for contract check
     openclaw_client.py     # OpenClawClient — HTTP SSE client for OpenClaw gateway (per-user agent isolation via user_id)
-    openrouter_client.py   # OpenRouterClient — image generation (Gemini), ask_opus (Claude Opus via OpenRouter)
+    openrouter_client.py   # OpenRouterClient — image generation (Gemini)
+    prompts.py             # load_prompt(name) — loads templates from prompts/ directory
     potok_client.py        # PotokClient — Potok.io ATS API (jobs, applicants via ajs_joins, scoring push)
     potok_models.py        # Pydantic models: Job, Applicant, Resume, CvParams, ScoringResult, ScoreBreakdown
     resume_scorer.py       # AI candidate scoring — builds prompt from job+applicant, parses JSON response (300s timeout)
@@ -74,7 +76,7 @@ scripts/
 ### Architecture
 - **AIClient** wraps Claude CLI (`claude --print --output-format text`) as subprocess. Uses `CLAUDE_CODE_OAUTH_TOKEN` env var. Token auto-refreshed by `claude_token.py` before each call. Default 120s timeout, configurable per call. On timeout: `proc.kill()` + cleanup.
 - **BitrixClient** is a singleton, refactored into package with mixins (`_base`, `_users`, `_calendar`, `_crm`, `_timeman`). File-based OAuth (`data/bitrix_tokens.json`), auto-refresh on expiry.
-- **OpenRouterClient** is a singleton for image generation (Gemini 3 Pro via OpenRouter) and Opus queries.
+- **OpenRouterClient** is a singleton for image generation (Gemini 3 Pro via OpenRouter).
 - **PotokClient** is a singleton for Potok.io ATS API (recruiter functionality).
 - **JiraClient** uses a single integration user from settings: `async with JiraClient() as jira:`. Maps Telegram user to Jira reporter/assignee via Bitrix email lookup.
 - All persistent state in SQLite via `app/db.py`.
@@ -85,7 +87,7 @@ scripts/
 
 ### Router Registration Order (in `create.py`)
 Order matters — `buffer.py` must be last (catch-all):
-1. start -> 2. summarize -> 3. meeting -> 4. free_slots -> 5. jira_task -> 6. lead -> 7. image -> 8. ask_ai -> 9. employee -> 10. glafira -> 11. recruiter -> 12. auto_reply -> 13. group -> 14. buffer
+1. start -> 2. summarize -> 3. meeting -> 4. free_slots -> 5. jira_task -> 6. lead -> 7. image -> 8. ask_ai -> 9. contract -> 10. employee -> 11. glafira -> 12. recruiter -> 13. group -> 14. buffer
 
 ### Authorization Flow
 1. User sends `/start` -> bot looks up `@username` in Bitrix field (configured as `BITRIX_TELEGRAM_FIELD`, default `UF_USR_1678964886664`)
@@ -101,15 +103,16 @@ Order matters — `buffer.py` must be last (catch-all):
 - Back menu button (`handle_back_menu`) calls `state.clear()` to exit any FSM state
 
 ### Free Slots + Booking (FSM)
-- `"найди время @nick1 @nick2"` -> computes free slots for 5 business days (9:00-19:00)
+- Entry: "Найди время" button -> FSM `BookSlot.searching_attendee` -> interactive search
+- Computes free slots for 5 business days (9:00-19:00)
 - Splits into hourly chunks, builds inline keyboard with slot buttons
-- FSM states: `BookSlot.waiting_for_slot` -> `BookSlot.waiting_for_topic`
+- FSM states: `searching_attendee` -> `waiting_for_title` -> `waiting_for_slot` -> (`waiting_for_topic`)
 - User picks slot -> types meeting title -> `BitrixClient.create_meeting()`
 - Stale button handler (without StateFilter) shows alert "Кнопки устарели"
 - Handler registration order critical: `handle_slot_selected` (with StateFilter) BEFORE `handle_stale_slot`
 
 ### Meeting Creation
-- Regex: `(?i)^(сделай|создай)\s+встречу`
+- Entry: "Встреча" button -> FSM `MeetingSetup.waiting_for_command`
 - `utils.parse_meeting_time()`: supports `HH:MM`, `HHMM`, `DD.MM`, `DD месяц`
 - `utils.parse_attendees()`: emails removed from text BEFORE @nick extraction
 - @nicks -> `BitrixClient.find_user_by_nickname()` (Bitrix field `UF_USR_1678964886664`)
@@ -127,16 +130,24 @@ Order matters — `buffer.py` must be last (catch-all):
 - Displays as inline buttons with time + name, linking to Bitrix calendar event URL
 
 ### Image Generation
-- Trigger: `"нарисуй/сгенерируй/картинк"` — text or photo with caption
+- Entry: "Картинка" button -> FSM `ImageGen.waiting_for_prompt` (text prompt or photo+caption)
 - Uses `OpenRouterClient.generate_image()` via Gemini 3 Pro Image Preview
 - Supports photo+caption mode: downloads photo, resizes to max 1024px, sends as base64 alongside prompt
-- FSM state `ImageGen.waiting_for_prompt` for button-triggered flow
 - Handles multiple response formats from OpenRouter (images array, data URI in string, multimodal content array)
 
 ### Ask AI
-- Trigger: `"спроси ai/вопрос"` + inline text, or FSM from button
+- Entry: "Спроси AI" button -> FSM `AskAI.waiting_for_question`
 - Uses `AIClient.complete()` (Claude CLI)
 - Response converted via `md_to_telegram_html()` from `utils.py`
+
+### Contract Check
+- Entry: "Проверь договор" button -> FSM `ContractCheck.waiting_for_document`
+- User uploads PDF/DOCX/TXT -> `document_parser.extract_text()` extracts plain text
+- Prompt template loaded from `prompts/contract_check.md` via `prompts.load_prompt()`
+- Prompt + text sent to `AIClient.complete(timeout=300)`
+- Document text truncated to 120K chars to fit context
+- Long responses split into 4000-char chunks (Telegram limit)
+- Add new prompt-based assistants by dropping a `.md` file into `prompts/` and loading it via `load_prompt(name)`
 
 ### Recruiter "Анатолий" (Potok.io Integration)
 - **Potok.io** — ATS (Applicant Tracking System) for recruitment
@@ -189,10 +200,9 @@ Order matters — `buffer.py` must be last (catch-all):
 - On timeout: `proc.kill()` + `await proc.wait()` to prevent zombie processes
 
 ### OpenRouter
-- Used for image generation (Gemini 3 Pro) and Opus queries
+- Used for image generation (Gemini 3 Pro)
 - API key: `OPENROUTER_API_KEY`
 - `generate_image(prompt, image_b64?)` — returns raw PNG bytes
-- `ask_opus(prompt)` — Claude Opus 4.6 via OpenRouter, returns text
 
 ### Glafira (AI Office Manager via OpenClaw)
 - **OpenClaw** — AI agent that controls browser via prompts (RPA), installed on Mac
@@ -234,7 +244,7 @@ Required: `BOT_TOKEN`
 
 AI: `CLAUDE_CODE_OAUTH_TOKEN`, `CLAUDE_REFRESH_TOKEN` (for auto-refresh), `CLAUDE_CLI_PATH` (default `claude`), `CLAUDE_MODEL` (optional override), `CLAUDE_OAUTH_CLIENT_ID` (default official Claude Code ID)
 
-OpenRouter: `OPENROUTER_API_KEY` (for image generation + Opus)
+OpenRouter: `OPENROUTER_API_KEY` (for image generation)
 
 Bitrix24: `BITRIX_CLIENT_ID`, `BITRIX_CLIENT_SECRET`, `BITRIX_DOMAIN`, `BITRIX_REFRESH_TOKEN` (first run only), `BITRIX_TELEGRAM_FIELD` (default `UF_USR_1678964886664`)
 

@@ -1,39 +1,16 @@
 """AI client — uses Claude CLI (subscription, no API tokens)."""
 
 import asyncio
-import logging
 import os
 
 from app.config import settings
-
-logger = logging.getLogger("arkadyjarvis")
 
 
 class AIClient:
     """Claude CLI wrapper. Uses subscription via CLAUDE_CODE_OAUTH_TOKEN."""
 
-    async def complete(
-        self, prompt: str, max_tokens: int = 4096, temperature: float = 1.0,
-        timeout: int = 120,
-    ) -> str:
+    async def complete(self, prompt: str, timeout: int = 120) -> str:
         return await self._call_cli(prompt, timeout=timeout)
-
-    async def chat(
-        self, messages: list[dict], max_tokens: int = 4096, temperature: float = 0.9,
-    ) -> str:
-        # Format messages as a conversation for CLI
-        parts = []
-        for msg in messages:
-            role = msg.get("role", "user")
-            content = msg.get("content", "")
-            if role == "system":
-                parts.append(f"[Системная инструкция]: {content}")
-            elif role == "assistant":
-                parts.append(f"[Ассистент]: {content}")
-            else:
-                parts.append(f"[Пользователь]: {content}")
-        prompt = "\n\n".join(parts)
-        return await self._call_cli(prompt)
 
     async def _call_cli(self, prompt: str, timeout: int = 120) -> str:
         from app.services.claude_token import ensure_fresh_token

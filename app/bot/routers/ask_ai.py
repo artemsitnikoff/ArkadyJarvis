@@ -1,7 +1,6 @@
 import logging
-import re
 
-from aiogram import F, Router
+from aiogram import Router
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import Message
@@ -15,16 +14,6 @@ router = Router()
 
 class AskAI(StatesGroup):
     waiting_for_question = State()
-
-
-@router.message(F.text.regexp(r"(?i)^(спроси\s+ai|вопрос)\s"))
-async def handle_askai_text(message: Message, ai_client):
-    text = message.text or ""
-    question = re.sub(r"(?i)^(спроси\s+ai|вопрос)\s+", "", text).strip()
-    if not question:
-        await message.reply("Напиши вопрос после команды.")
-        return
-    await _ask_and_reply(message, question, ai_client=ai_client)
 
 
 @router.message(AskAI.waiting_for_question)

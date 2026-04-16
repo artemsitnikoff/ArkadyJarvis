@@ -1,10 +1,8 @@
-import asyncio
 import logging
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from aiogram import F, Router
-from aiogram.enums import ChatType
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
@@ -13,7 +11,7 @@ from app.bot.routers.start import MENU_KB
 from app.config import settings
 from app import db
 from app.db import DbUser
-from app.utils import DAY_NAMES_RU, merge_intervals, parse_attendees, parse_bitrix_dt
+from app.utils import DAY_NAMES_RU, merge_intervals, parse_bitrix_dt
 
 logger = logging.getLogger("arkadyjarvis")
 router = Router()
@@ -210,46 +208,6 @@ async def _find_and_show_slots(
 
 
 # ── Handlers ──────────────────────────────────────────────────
-
-@router.message(F.text.regexp(r"(?i)^найди\s+время"))
-async def handle_find_time(message: Message, state: FSMContext, db_user: DbUser, bitrix):
-    text = message.text or ""
-    logger.info("*** TRIGGER: 'найди время' in chat=%s from user=%s", message.chat.id, message.from_user.id)
-
-    nicknames, _ = parse_attendees(text)
-    if not nicknames:
-        # In group chats @nicks autocomplete — show hint
-        if message.chat.type != ChatType.PRIVATE:
-            await message.reply("Укажи участников: Найди время @nick1 @nick2")
-            return
-        # In DM — start interactive search
-        await state.update_data(attendee_ids=[], attendee_names=[])
-        await state.set_state(BookSlot.searching_attendee)
-        await message.reply("Напиши имя или фамилию коллеги:", reply_markup=_cancel_kb(show_add_me=True))
-        return
-
-    user_ids: list[int] = []
-    user_names: list[str] = []
-    not_found: list[str] = []
-    nick_results = await asyncio.gather(
-        *(bitrix.find_user_by_nickname(nick) for nick in nicknames)
-    )
-    for nick, (uid, full_name) in zip(nicknames, nick_results):
-        if uid:
-            user_ids.append(uid)
-            user_names.append(f"@{nick}")
-        else:
-            not_found.append(f"@{nick}")
-
-    if not user_ids:
-        msg = "❌ Никого не удалось найти в Bitrix"
-        if not_found:
-            msg += f"\n⚠️ Не найден: {', '.join(not_found)}"
-        await message.reply(msg)
-        return
-
-    await _find_and_show_slots(message, state, bitrix, user_ids, user_names, not_found)
-
 
 @router.callback_query(F.data == "book:cancel", BookSlot.searching_attendee)
 @router.callback_query(F.data == "book:cancel", BookSlot.waiting_for_title)

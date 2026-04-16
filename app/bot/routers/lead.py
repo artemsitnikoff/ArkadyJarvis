@@ -1,7 +1,6 @@
 import logging
-import re
 
-from aiogram import F, Router
+from aiogram import Router
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import Message
@@ -35,25 +34,6 @@ EXTRACT_PROMPT = """\
 """
 
 
-@router.message(F.text.regexp(r"(?i)^(сделай|создай)\s+лид"))
-async def handle_create_lead(message: Message, ai_client, bitrix, db_user=None):
-    text = message.text or ""
-    logger.info("*** TRIGGER: 'создай лид' in chat=%s from user=%s", message.chat.id, message.from_user.id)
-
-    body = re.sub(r"(?i)^(сделай|создай)\s+лид\s*", "", text).strip()
-
-    reply_text = ""
-    if message.reply_to_message and message.reply_to_message.text:
-        reply_text = message.reply_to_message.text.strip()
-
-    combined = "\n".join(filter(None, [body, reply_text]))
-    if not combined:
-        await message.reply("Напиши данные лида или реплайни на сообщение с информацией.")
-        return
-
-    await _create_lead(message, combined, ai_client=ai_client, bitrix=bitrix, db_user=db_user)
-
-
 @router.message(CreateLead.waiting_for_info)
 async def handle_lead_fsm(message: Message, state: FSMContext, ai_client, bitrix, db_user=None):
     text = (message.text or "").strip()
@@ -65,7 +45,7 @@ async def handle_lead_fsm(message: Message, state: FSMContext, ai_client, bitrix
 
 
 async def _create_lead(message: Message, text: str, *, ai_client, bitrix, db_user=None):
-    raw = await ai_client.complete(EXTRACT_PROMPT.format(text=text), max_tokens=512, temperature=0.2)
+    raw = await ai_client.complete(EXTRACT_PROMPT.format(text=text))
     parsed = parse_json_response(raw)
 
     fields: dict = {"TITLE": parsed.get("TITLE") or text[:100]}

@@ -1,7 +1,6 @@
 import base64
 import io
 import logging
-import re
 
 from aiogram import Bot, F, Router
 from aiogram.fsm.context import FSMContext
@@ -33,31 +32,6 @@ async def _download_photo(message: Message, bot: Bot) -> str | None:
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     return base64.b64encode(buf.getvalue()).decode()
-
-
-# ── Text trigger: "нарисуй ..." ──────────────────────────────
-
-@router.message(F.text.regexp(r"(?i)^(нарисуй|сгенерируй|картинк)"))
-async def handle_image_text(message: Message, openrouter):
-    text = message.text or ""
-    prompt = re.sub(r"(?i)^(нарисуй|сгенерируй|картинку?)\s*", "", text).strip()
-    if not prompt:
-        await message.reply("Напиши что нарисовать после команды.")
-        return
-    await _generate_and_send(message, prompt, openrouter=openrouter)
-
-
-# ── Photo with caption trigger: "нарисуй ..." ────────────────
-
-@router.message(F.photo, F.caption.regexp(r"(?i)^(нарисуй|сгенерируй|картинк)"))
-async def handle_image_photo_caption(message: Message, bot: Bot, openrouter):
-    caption = message.caption or ""
-    prompt = re.sub(r"(?i)^(нарисуй|сгенерируй|картинку?)\s*", "", caption).strip()
-    if not prompt:
-        await message.reply("Напиши что сделать с картинкой после команды.")
-        return
-    image_b64 = await _download_photo(message, bot)
-    await _generate_and_send(message, prompt, openrouter=openrouter, image_b64=image_b64)
 
 
 # ── FSM: waiting for prompt (from button) ─────────────────────

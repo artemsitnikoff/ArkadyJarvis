@@ -1,6 +1,6 @@
 import logging
 
-from aiogram import F, Router
+from aiogram import Router
 from aiogram.filters import Command
 from aiogram.types import Message
 
@@ -11,10 +11,9 @@ router = Router()
 
 
 @router.message(Command("summary"))
-@router.message(F.text.lower() == "суммаризация")
 async def handle_summarize(message: Message, ai_client):
     chat_id = message.chat.id
-    logger.info("*** TRIGGER: суммаризация in chat=%s from user=%s", chat_id, message.from_user.id)
+    logger.info("*** /summary in chat=%s from user=%s", chat_id, message.from_user.id)
 
     from app.summarizer import summarize_from_buffer
     from datetime import datetime
