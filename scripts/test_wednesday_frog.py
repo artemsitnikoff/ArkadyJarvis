@@ -8,12 +8,15 @@ Usage:
 
 import asyncio
 import sys
+from pathlib import Path
 
-from app.bot.create import create_bot
-from app.scheduler.jobs import send_wednesday_frog
-from app.services.ai_client import AIClient
-from app.services.claude_token import init_token_file
-from app.services.openrouter_client import OpenRouterClient
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from app.bot.create import create_bot  # noqa: E402
+from app.scheduler.jobs import send_wednesday_frog  # noqa: E402
+from app.services.ai_client import AIClient  # noqa: E402
+from app.services.claude_token import init_token_file  # noqa: E402
+from app.services.openrouter_client import OpenRouterClient  # noqa: E402
 
 DEFAULT_TEST_CHAT_ID = -790607108
 
