@@ -48,7 +48,10 @@ MENU_KB = InlineKeyboardMarkup(inline_keyboard=[
         InlineKeyboardButton(text="📄 Проверь договор", callback_data="hint:contract"),
     ],
     [
+        InlineKeyboardButton(text="⚖️ Цицерон", callback_data="hint:cicero"),
         InlineKeyboardButton(text="🤖 Глафира", callback_data="hint:glafira"),
+    ],
+    [
         InlineKeyboardButton(text="👔 Анатолий", callback_data="hint:recruiter"),
     ],
     [
@@ -285,6 +288,20 @@ async def handle_hint(callback: CallbackQuery, state: FSMContext, bitrix, potok,
             "📄 <b>Проверка договора</b>\n\n"
             "Пришли файл (PDF, DOCX или TXT) — проверю по правилам "
             "и выдам список несоответствий.",
+            reply_markup=BACK_MENU_KB,
+        )
+        await callback.answer()
+        return
+
+    if key == "cicero":
+        from app.bot.routers.cicero import Cicero
+        await state.set_state(Cicero.chatting)
+        await callback.message.answer(
+            "⚖️ <b>Цицерон</b> — юридический консультант\n\n"
+            "Задай вопрос текстом или приложи документ (PDF/DOCX/TXT) "
+            "с вопросом в подписи. Отвечу по российскому законодательству "
+            "(ГК, КоАП, АПК, НК РФ, КонсультантПлюс).\n\n"
+            "Можно задавать вопросы подряд. Выход — «◀️ Меню».",
             reply_markup=BACK_MENU_KB,
         )
         await callback.answer()

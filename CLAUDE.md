@@ -35,6 +35,7 @@ app/
       image.py             # FSM ImageGen — image generation via OpenRouter/Gemini, supports photo+caption editing
       ask_ai.py            # FSM AskAI — Claude answers, md_to_telegram_html conversion
       contract.py          # FSM ContractCheck — parse PDF/DOCX/TXT, check against rules in prompts/contract_check.md
+      cicero.py            # FSM Cicero — legal consultant (RU law), persistent chat with optional document attachments
       glafira.py           # Glafira (AI office manager) — FSM chatting mode, OpenClaw streaming
       recruiter.py         # Анатолий (AI recruiter) — Potok.io integration, candidate scoring via Claude
       group.py             # on_bot_added / on_bot_removed — tracks group_chats in DB
@@ -87,7 +88,7 @@ scripts/
 
 ### Router Registration Order (in `create.py`)
 Order matters — `buffer.py` must be last (catch-all):
-1. start -> 2. summarize -> 3. meeting -> 4. free_slots -> 5. jira_task -> 6. lead -> 7. image -> 8. ask_ai -> 9. contract -> 10. employee -> 11. glafira -> 12. recruiter -> 13. group -> 14. buffer
+1. start -> 2. summarize -> 3. meeting -> 4. free_slots -> 5. jira_task -> 6. lead -> 7. image -> 8. ask_ai -> 9. contract -> 10. employee -> 11. cicero -> 12. glafira -> 13. recruiter -> 14. group -> 15. buffer
 
 ### Authorization Flow
 1. User sends `/start` -> bot looks up `@username` in Bitrix field (configured as `BITRIX_TELEGRAM_FIELD`, default `UF_USR_1678964886664`)
@@ -148,6 +149,13 @@ Order matters — `buffer.py` must be last (catch-all):
 - Document text truncated to 120K chars to fit context
 - Long responses split into 4000-char chunks (Telegram limit)
 - Add new prompt-based assistants by dropping a `.md` file into `prompts/` and loading it via `load_prompt(name)`
+
+### Cicero (Legal Consultant)
+- Entry: "Цицерон" button -> FSM `Cicero.chatting` (persistent — multiple questions in a row)
+- Accepts both plain text questions and documents (PDF/DOCX/TXT) with a caption
+- System prompt from `prompts/cicero.md` (RU law consultant: ГК, КоАП, АПК, НК РФ, КонсультантПлюс)
+- No conversation history — each question is standalone (prompt + question/document)
+- Exits via "◀️ Меню" (`back:menu` callback clears FSM)
 
 ### Recruiter "Анатолий" (Potok.io Integration)
 - **Potok.io** — ATS (Applicant Tracking System) for recruitment
