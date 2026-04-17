@@ -4,7 +4,7 @@ import logging
 from aiogram import Bot, F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.types import BufferedInputFile, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from app.services.document_parser import UnsupportedDocumentError, extract_text
 from app.services.prompts import load_prompt
@@ -110,8 +110,12 @@ async def _send_answer(message: Message, wait_msg: Message, answer: str):
         await wait_msg.edit_text(html_answer, reply_markup=EXIT_KB)
         return
 
+    # Long answer — send as a .md file to avoid breaking HTML entities across chunks
     await wait_msg.delete()
-    for chunk_start in range(0, len(html_answer), TELEGRAM_MSG_LIMIT):
-        chunk = html_answer[chunk_start:chunk_start + TELEGRAM_MSG_LIMIT]
-        is_last = chunk_start + TELEGRAM_MSG_LIMIT >= len(html_answer)
-        await message.answer(chunk, reply_markup=EXIT_KB if is_last else None)
+    preview = answer[:300].rstrip() + ("..." if len(answer) > 300 else "")
+    file = BufferedInputFile(answer.encode("utf-8"), filename="cicero_answer.md")
+    await message.answer_document(
+        file,
+        caption=f"⚖️ Ответ Цицерона (ответ длинный, прикрепляю файлом):\n\n{preview}",
+        reply_markup=EXIT_KB,
+    )

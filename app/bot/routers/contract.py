@@ -4,7 +4,7 @@ import logging
 from aiogram import Bot, F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import Message
+from aiogram.types import BufferedInputFile, Message
 
 from app.bot.routers.start import MENU_KB
 from app.services.document_parser import UnsupportedDocumentError, extract_text
@@ -78,11 +78,15 @@ async def handle_contract_document(message: Message, state: FSMContext, bot: Bot
         await wait_msg.edit_text(body, reply_markup=MENU_KB)
         return
 
-    await wait_msg.edit_text(header.strip())
-    for chunk_start in range(0, len(html_answer), TELEGRAM_MSG_LIMIT):
-        chunk = html_answer[chunk_start:chunk_start + TELEGRAM_MSG_LIMIT]
-        is_last = chunk_start + TELEGRAM_MSG_LIMIT >= len(html_answer)
-        await message.answer(chunk, reply_markup=MENU_KB if is_last else None)
+    # Long answer — send as a .md file to avoid breaking HTML entities across chunks
+    await wait_msg.delete()
+    preview = answer[:300].rstrip() + ("..." if len(answer) > 300 else "")
+    file = BufferedInputFile(answer.encode("utf-8"), filename="contract_check.md")
+    await message.answer_document(
+        file,
+        caption=f"{header.strip()}\n\n{preview}",
+        reply_markup=MENU_KB,
+    )
 
 
 @router.message(ContractCheck.waiting_for_document)
