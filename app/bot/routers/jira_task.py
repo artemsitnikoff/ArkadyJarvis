@@ -40,13 +40,21 @@ async def handle_task_fsm(
 
 
 def _extract_summary(structured: str, fallback: str) -> str:
-    """Pull the task headline out of the structured AI output."""
-    match = re.search(r"(?mi)^\s*\**\s*Задача:\s*\**\s*(.+?)\s*$", structured)
-    if match:
-        headline = match.group(1).strip(" *")
-        if headline:
-            return headline[:200]
-    return fallback[:200]
+    """Pull the task headline out of the structured AI output.
+
+    Jira summary can't contain newlines and is limited to 255 chars.
+    """
+    headline = ""
+    for line in structured.splitlines():
+        cleaned = line.strip().strip("*").strip()
+        if cleaned.lower().startswith("задача:"):
+            headline = cleaned.split(":", 1)[1].strip().strip("*").strip()
+            if headline:
+                break
+    if not headline:
+        headline = fallback
+    headline = " ".join(headline.split())  # collapse whitespace, strip newlines
+    return headline[:200] or "Задача без названия"
 
 
 async def _create_task(

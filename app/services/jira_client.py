@@ -56,7 +56,13 @@ class JiraClient:
             auth=self._auth,
             headers={"Content-Type": "application/json"},
         )
-        resp.raise_for_status()
+        if resp.status_code >= 400:
+            body = resp.text[:500]
+            logger.error(
+                "Jira create_issue failed: %s %s | payload=%s",
+                resp.status_code, body, fields,
+            )
+            raise RuntimeError(f"Jira {resp.status_code}: {body}")
         result = resp.json()
 
         logger.info("Jira issue created: %s", result.get("key"))
