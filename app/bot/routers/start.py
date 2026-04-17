@@ -344,6 +344,15 @@ async def handle_hint(callback: CallbackQuery, state: FSMContext, bitrix, potok,
             )
             await callback.answer()
             return
+        await callback.message.answer(
+            "👔 <b>Анатолий</b> — AI-рекрутёр\n\n"
+            "Оцениваю кандидатов по вакансиям из Potok.io: сравниваю резюме "
+            "с описанием вакансии через Claude, ставлю балл 0–100, выделяю "
+            "сильные и слабые стороны. Результат публикую комментарием в Potok "
+            "и добавляю префикс со скором к фамилии кандидата для сортировки.\n\n"
+            "Сейчас подтяну список вакансий — выбери нужную, "
+            "и я начну оценку резюме кандидатов."
+        )
         wait = await callback.message.answer("👔 Загружаю вакансии...")
         try:
             jobs = await potok.get_jobs()
