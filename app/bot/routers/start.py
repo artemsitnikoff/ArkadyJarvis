@@ -247,8 +247,13 @@ async def handle_hint(callback: CallbackQuery, state: FSMContext, bitrix, potok,
         await state.set_state(CreateTask.waiting_for_input)
         await callback.message.answer(
             "📝 <b>Задача Jira</b>\n\n"
-            "Напиши ключ проекта и описание:\n"
-            "<code>DC Сделать landing page</code>",
+            "Опиши задачу своими словами: что делаем, для кого, к какому сроку, "
+            "какие блокеры. Я переформулирую по нашему шаблону "
+            "(Задача, Приоритет, Контекст, Что сделать, Блокеры, Ожидаемый результат, "
+            "Ориентир начала работ) и создам тикет в Jira.\n\n"
+            "Формат:\n"
+            "<code>DC &lt;твоё описание&gt;</code>\n\n"
+            "Где <b>DC</b> — ключ проекта в Jira.",
             reply_markup=BACK_MENU_KB,
         )
         await callback.answer()

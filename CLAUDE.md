@@ -30,7 +30,7 @@ app/
       summarize.py         # /summary command — on-demand chat summarization
       meeting.py           # FSM MeetingSetup — time/date/attendee parsing, Bitrix meeting creation
       free_slots.py        # FSM BookSlot — calendar accessibility + slot booking
-      jira_task.py         # FSM CreateTask — Jira issue creation (project key + description)
+      jira_task.py         # FSM CreateTask — Jira issue creation; raw input is reformatted via prompts/jira_task_template.md before ticket creation
       lead.py              # FSM CreateLead — AI extracts fields -> Bitrix CRM with SOURCE + Telegram contact
       image.py             # FSM ImageGen — image generation via OpenRouter/Gemini, supports photo+caption editing
       ask_ai.py            # FSM AskAI — Claude answers, md_to_telegram_html conversion

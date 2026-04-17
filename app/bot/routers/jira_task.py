@@ -10,6 +10,7 @@ from app.bot.routers.start import MENU_KB
 from app.config import settings
 from app.db import DbUser
 from app.services.jira_client import JiraClient
+from app.services.prompts import load_prompt
 
 logger = logging.getLogger("arkadyjarvis")
 router = Router()
@@ -20,7 +21,9 @@ class CreateTask(StatesGroup):
 
 
 @router.message(CreateTask.waiting_for_input)
-async def handle_task_fsm(message: Message, state: FSMContext, db_user: DbUser, bitrix):
+async def handle_task_fsm(
+    message: Message, state: FSMContext, db_user: DbUser, bitrix, ai_client,
+):
     text = (message.text or "").strip()
     if not text:
         await message.reply("Напиши задачу текстом: <code>DC Описание задачи</code>")
@@ -31,10 +34,24 @@ async def handle_task_fsm(message: Message, state: FSMContext, db_user: DbUser, 
     if message.reply_to_message and message.reply_to_message.text:
         reply_text = message.reply_to_message.text.strip()
 
-    await _create_task(message, text, reply_text, db_user=db_user, bitrix=bitrix)
+    await _create_task(
+        message, text, reply_text, db_user=db_user, bitrix=bitrix, ai_client=ai_client,
+    )
 
 
-async def _create_task(message: Message, body: str, reply_text: str, *, db_user: DbUser, bitrix):
+def _extract_summary(structured: str, fallback: str) -> str:
+    """Pull the task headline out of the structured AI output."""
+    match = re.search(r"(?mi)^\s*\**\s*Задача:\s*\**\s*(.+?)\s*$", structured)
+    if match:
+        headline = match.group(1).strip(" *")
+        if headline:
+            return headline[:200]
+    return fallback[:200]
+
+
+async def _create_task(
+    message: Message, body: str, reply_text: str, *, db_user: DbUser, bitrix, ai_client,
+):
     try:
         key_match = re.search(r"\b([A-Z][A-Z0-9]{1,9})\b", body)
         if not key_match:
@@ -53,9 +70,14 @@ async def _create_task(message: Message, body: str, reply_text: str, *, db_user:
             )
             return
 
-        short = full_text.split("\n")[0].split(". ")[0]
-        summary = short[:100] if len(short) > 100 else short
-        description = full_text
+        wait_msg = await message.reply("📝 Оформляю задачу по шаблону...")
+
+        template = load_prompt("jira_task_template")
+        structured = await ai_client.complete(f"{template}\n{full_text}")
+
+        short_fallback = full_text.split("\n")[0].split(". ")[0]
+        summary = _extract_summary(structured, short_fallback)
+        description = structured
 
         user_email = await bitrix.get_user_email(db_user["bitrix_user_id"])
 
@@ -72,7 +94,7 @@ async def _create_task(message: Message, body: str, reply_text: str, *, db_user:
 
         issue_key = result["key"]
         jira_base = settings.jira_url.rstrip("/")
-        await message.reply(
+        await wait_msg.edit_text(
             f"✅ Задача создана: {issue_key}\n"
             f"📝 {summary}\n"
             f"🔗 {jira_base}/browse/{issue_key}",
