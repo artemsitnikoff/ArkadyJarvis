@@ -1,4 +1,5 @@
 import logging
+import random
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -13,6 +14,42 @@ from app.services.prompts import load_prompt
 from app.summarizer import build_daily_overview, summarize_messages
 
 logger = logging.getLogger("arkadyjarvis")
+
+FROG_STYLES = [
+    "кубизм в духе Пабло Пикассо",
+    "постимпрессионизм в духе Ван Гога с густыми мазками",
+    "японская манга / аниме",
+    "американский супергеройский комикс Marvel",
+    "научная фантастика и космос в духе Star Wars",
+    "киберпанк с неоновыми огнями в духе Blade Runner",
+    "акварельная иллюстрация",
+    "пиксель-арт 8-bit как в NES",
+    "vaporwave с розово-фиолетовой палитрой",
+    "чёрно-белое нуарное кино",
+    "советский мультфильм «Ну, погоди!»",
+    "фэнтези-иллюстрация в стиле Зельды",
+    "3D-рендер в стиле мультфильмов Pixar",
+    "египетские иероглифы и фрески",
+    "минимализм Баухауса",
+    "витражное стекло готического собора",
+    "ретро-постер 50-х годов",
+    "уличное граффити",
+    "русский лубок",
+    "картина эпохи Возрождения в духе Леонардо да Винчи",
+    "поп-арт в стиле Энди Уорхола",
+    "японская гравюра укиё-э (Хокусай)",
+    "сюрреализм Сальвадора Дали с тающими формами",
+    "LEGO-конструктор",
+    "стим-панк с медными шестернями и паром",
+    "классический Disney 90-х",
+    "низкополигональная 3D-графика low-poly",
+    "ASCII-арт на зелёном терминале",
+    "сериал Rick and Morty",
+    "Советский плакат Родченко / конструктивизм",
+    "абстрактный экспрессионизм в стиле Джексона Поллока",
+    "стиль ghibli Хаяо Миядзаки",
+    "футуристичный holographic glass-morphism",
+]
 
 
 async def daily_summary_job(bot: Bot, ai_client: AIClient):
@@ -86,13 +123,17 @@ async def send_wednesday_frog(
     bot: Bot, ai_client: AIClient, openrouter: OpenRouterClient, chat_id: int,
 ):
     """Generate a fresh frog meme and send it to the given chat."""
-    meta_prompt = load_prompt("wednesday_frog")
+    style = random.choice(FROG_STYLES)
+    logger.info("=== Wednesday frog style: %s", style)
+
+    meta_prompt = load_prompt("wednesday_frog").replace("{style}", style)
     image_prompt = (await ai_client.complete(meta_prompt)).strip()
     logger.info("=== Wednesday frog prompt: %s", image_prompt)
 
     image_bytes = await openrouter.generate_image(image_prompt)
     photo = BufferedInputFile(image_bytes, filename="wednesday_frog.png")
-    await bot.send_photo(chat_id, photo, caption="🐸 Со средой, мои чуваки!")
+    caption = f"🐸 Со средой, мои чуваки!\n\n<i>стиль: {style}</i>"
+    await bot.send_photo(chat_id, photo, caption=caption)
     logger.info("=== Wednesday frog sent to chat %s", chat_id)
 
 
