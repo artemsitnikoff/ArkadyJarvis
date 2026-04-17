@@ -77,32 +77,36 @@ class _BitrixCalendarMixin:
             "to": date_to,
         })
         events = result.get("result", [])
+        logger.info("get_user_events: user=%s got %d raw events", user_id, len(events))
 
         # Filter: only today's events, not deleted, not declined, not cancelled
         today_str = now.strftime("%d.%m.%Y")
         filtered = []
         for ev in events:
+            ev_id = ev.get("ID")
+            ev_name = ev.get("NAME", "")
+            meeting_status = (ev.get("MEETING_STATUS") or "").upper()
+            status = (ev.get("STATUS") or "").upper()
+            accessibility = (ev.get("ACCESSIBILITY") or "").lower()
+            df = ev.get("DATE_FROM", "")
+            logger.info(
+                "event %s '%s' date=%s meeting_status=%s status=%s acc=%s deleted=%s",
+                ev_id, ev_name, df, meeting_status, status, accessibility,
+                ev.get("DELETED"),
+            )
+
             if ev.get("DELETED") == "Y":
                 continue
             # Bitrix DATE_FROM format: "DD.MM.YYYY HH:MM:SS" — keep only today
-            df = ev.get("DATE_FROM", "")
             if not df.startswith(today_str):
                 continue
             # Current user's participation status: H=host, Y=accepted, N=declined, Q=tentative
-            meeting_status = (ev.get("MEETING_STATUS") or "").upper()
             if meeting_status == "N":
-                logger.info(
-                    "Skip declined event %s (%s) for user %s",
-                    ev.get("ID"), ev.get("NAME"), user_id,
-                )
+                logger.info("  -> skip (declined)")
                 continue
             # Event status: CONFIRMED / TENTATIVE / CANCELLED
-            status = (ev.get("STATUS") or "").upper()
             if status == "CANCELLED":
-                logger.info(
-                    "Skip cancelled event %s (%s) for user %s",
-                    ev.get("ID"), ev.get("NAME"), user_id,
-                )
+                logger.info("  -> skip (cancelled)")
                 continue
             filtered.append({
                 "id": ev["ID"],
