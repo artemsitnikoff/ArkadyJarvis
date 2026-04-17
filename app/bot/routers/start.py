@@ -46,12 +46,10 @@ MENU_KB = InlineKeyboardMarkup(inline_keyboard=[
     ],
     [
         InlineKeyboardButton(text="📄 Проверь договор", callback_data="hint:contract"),
-    ],
-    [
         InlineKeyboardButton(text="⚖️ Цицерон", callback_data="hint:cicero"),
-        InlineKeyboardButton(text="🤖 Глафира", callback_data="hint:glafira"),
     ],
     [
+        InlineKeyboardButton(text="🤖 Глафира", callback_data="hint:glafira"),
         InlineKeyboardButton(text="👔 Анатолий", callback_data="hint:recruiter"),
     ],
     [
