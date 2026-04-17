@@ -50,23 +50,45 @@ class JiraClient:
         if assignee_name:
             fields["assignee"] = {"name": assignee_name}
 
+        result = await self._post_issue(url, fields)
+        if result is not None:
+            return result
+
+        # Retry without assignee — Jira will fall back to the project default
+        # (usually the project lead).
+        if "assignee" in fields:
+            logger.warning(
+                "Jira rejected assignee '%s' — retrying with project default",
+                assignee_name,
+            )
+            fields.pop("assignee")
+            retry = await self._post_issue(url, fields)
+            if retry is not None:
+                return retry
+
+        raise RuntimeError("Jira create_issue failed (see log for details)")
+
+    async def _post_issue(self, url: str, fields: dict) -> dict | None:
+        """POST an issue; return dict on success, None on recoverable assignee error, raise otherwise."""
         resp = await self._http.post(
             url,
             json={"fields": fields},
             auth=self._auth,
             headers={"Content-Type": "application/json"},
         )
-        if resp.status_code >= 400:
-            body = resp.text[:500]
-            logger.error(
-                "Jira create_issue failed: %s %s | payload=%s",
-                resp.status_code, body, fields,
-            )
-            raise RuntimeError(f"Jira {resp.status_code}: {body}")
-        result = resp.json()
+        if resp.status_code < 400:
+            result = resp.json()
+            logger.info("Jira issue created: %s", result.get("key"))
+            return result
 
-        logger.info("Jira issue created: %s", result.get("key"))
-        return result
+        body = resp.text[:500]
+        logger.error(
+            "Jira create_issue failed: %s %s | payload=%s",
+            resp.status_code, body, fields,
+        )
+        if resp.status_code == 400 and "cannot be assigned" in body:
+            return None
+        raise RuntimeError(f"Jira {resp.status_code}: {body}")
 
     async def find_user_by_email(self, email: str) -> str | None:
         """Find Jira username by email address (Jira Server)."""
