@@ -78,7 +78,7 @@ class _BitrixCalendarMixin:
         })
         events = result.get("result", [])
 
-        # Filter: only today's events, not deleted
+        # Filter: only today's events, not deleted, not declined, not cancelled
         today_str = now.strftime("%d.%m.%Y")
         filtered = []
         for ev in events:
@@ -88,12 +88,30 @@ class _BitrixCalendarMixin:
             df = ev.get("DATE_FROM", "")
             if not df.startswith(today_str):
                 continue
+            # Current user's participation status: H=host, Y=accepted, N=declined, Q=tentative
+            meeting_status = (ev.get("MEETING_STATUS") or "").upper()
+            if meeting_status == "N":
+                logger.info(
+                    "Skip declined event %s (%s) for user %s",
+                    ev.get("ID"), ev.get("NAME"), user_id,
+                )
+                continue
+            # Event status: CONFIRMED / TENTATIVE / CANCELLED
+            status = (ev.get("STATUS") or "").upper()
+            if status == "CANCELLED":
+                logger.info(
+                    "Skip cancelled event %s (%s) for user %s",
+                    ev.get("ID"), ev.get("NAME"), user_id,
+                )
+                continue
             filtered.append({
                 "id": ev["ID"],
                 "name": ev.get("NAME", ""),
                 "date_from": df,
                 "date_to": ev.get("DATE_TO", ""),
                 "owner_id": ev.get("OWNER_ID"),
+                "meeting_status": meeting_status,
+                "status": status,
             })
 
         # Sort by date_from
