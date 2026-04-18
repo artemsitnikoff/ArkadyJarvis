@@ -19,7 +19,7 @@ logger = logging.getLogger("arkadyjarvis")
 class MeetingArtifacts:
     transcript_md: str
     review_md: str
-    expertise_md: str
+    brief_md: str
 
 
 def _format_duration(seconds: float) -> str:
@@ -92,18 +92,18 @@ async def process_meeting(
         timeout=600,
     )
 
-    # ── Stage 3: executor's expertise ──────────────────────────
-    await _tick("Готовлю исполнительскую экспертизу...")
-    expertise_prompt = load_prompt("meeting_expertise")
-    expertise_input = (
-        f"{expertise_prompt}\n\n---\n\n"
+    # ── Stage 3: analyst brief (zero-stage prep) ───────────────
+    await _tick("Готовлю заготовку для аналитика...")
+    brief_prompt = load_prompt("meeting_brief")
+    brief_input = (
+        f"{brief_prompt}\n\n---\n\n"
         f"# Транскрипт встречи\n\n{transcript_md}\n\n---\n\n"
         f"# Ревью встречи\n\n{review_md}"
     )
-    expertise_md = await ai_client.complete(expertise_input, timeout=600)
+    brief_md = await ai_client.complete(brief_input, timeout=600)
 
     return MeetingArtifacts(
         transcript_md=transcript_md,
         review_md=review_md,
-        expertise_md=expertise_md,
+        brief_md=brief_md,
     )

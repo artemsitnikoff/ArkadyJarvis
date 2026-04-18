@@ -185,9 +185,9 @@ All MENU_KB buttons are interactive — clicking opens a working mode via FSM st
 - Stage 0: `meeting_downloader.download_meeting()` streams to a temp dir (ceiling 1 GiB) → `ffmpeg_tool.convert_to_opus()` produces mono 16 kHz opus @ 24 kbps → `probe_duration()` via ffprobe
 - Meetings longer than `MEETING_MAX_MINUTES` (default 90) are rejected with a clear message — long recordings would overflow the OpenRouter base64 payload
 - Stage 1: `OpenRouterClient.transcribe_voice()` → diarized markdown transcript
-- Stage 2: Claude CLI with `prompts/meeting_review.md` → meeting review
-- Stage 3: Claude CLI with `prompts/meeting_expertise.md` + transcript + review → executor's expertise (checklist, red flags, questions for the next meeting)
-- All three artifacts are delivered as `.md` file attachments
+- Stage 2: Claude CLI with `prompts/meeting_review.md` → meeting review (protocol: decisions, next steps, open questions)
+- Stage 3: Claude CLI with `prompts/meeting_brief.md` + transcript + review → analyst brief ("zero stage" prep: glossary, facts, vague wordings, strong quotes, 1–2-day domain onboarding plan, draft TOC of the future SOW, starter action list). Intentionally NOT an expert review — the human analyst does the judgement, AI just saves the first 2–4 hours of prep.
+- All three artifacts are delivered as `.md` file attachments (`1_transcript.md`, `2_review.md`, `3_brief.md`)
 - Temp directory (downloaded file + ogg) is wiped in `finally`
 - `ffmpeg` is installed in the Docker image (apt package)
 
@@ -198,8 +198,8 @@ All MENU_KB buttons are interactive — clicking opens a working mode via FSM st
 - `voice_transcribe.md` — diarization prompt (used by both Lead voice input and Socrates stage 1)
 - `wednesday_frog.md` — Wed 10:00 meme generator
 - `monday_poster.md` — Mon 09:00 constructivist IT poster
-- `meeting_review.md` — Socrates stage 2 (review)
-- `meeting_expertise.md` — Socrates stage 3 (executor's expertise)
+- `meeting_review.md` — Socrates stage 2 (review / protocol)
+- `meeting_brief.md` — Socrates stage 3 (analyst brief: glossary, facts, onboarding plan, draft SOW TOC)
 
 ### Cicero (Legal Consultant)
 - Entry: "Цицерон" button → FSM `Cicero.chatting` (persistent — multiple questions in a row)

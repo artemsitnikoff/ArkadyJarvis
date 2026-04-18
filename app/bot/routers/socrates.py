@@ -128,13 +128,13 @@ async def handle_meeting_url(
         for name, body in [
             ("1_transcript.md", artifacts.transcript_md),
             ("2_review.md", artifacts.review_md),
-            ("3_expertise.md", artifacts.expertise_md),
+            ("3_brief.md", artifacts.brief_md),
         ]:
             file = BufferedInputFile(body.encode("utf-8"), filename=name)
             await message.answer_document(file)
 
         await message.answer(
-            "✅ Готово — транскрипт, ревью и экспертиза отправлены файлами выше.",
+            "✅ Готово — транскрипт, ревью и заготовка для аналитика отправлены файлами выше.",
             reply_markup=MENU_KB,
         )
         await wait_msg.delete()
