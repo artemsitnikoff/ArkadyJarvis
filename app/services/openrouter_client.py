@@ -169,6 +169,10 @@ class OpenRouterClient:
                 ],
             }],
             "response_format": {"type": "json_object"},
+            # Gemini 2.5 Pro can emit up to ~65k tokens; a 90-min meeting
+            # diarized JSON easily runs 15-30k. Too low a cap silently
+            # truncates the JSON and we get "Expecting value" at parse time.
+            "max_tokens": 32000,
         }
 
         try:
@@ -186,13 +190,35 @@ class OpenRouterClient:
 
         try:
             data = resp.json()
-            content = data["choices"][0]["message"]["content"]
+            choice = data["choices"][0]
+            finish_reason = choice.get("finish_reason", "?")
+            content = choice["message"]["content"]
             if isinstance(content, list):
                 content = "".join(p.get("text", "") for p in content if p.get("type") == "text")
+            logger.info(
+                "Transcribe finish_reason=%s content_len=%d usage=%s",
+                finish_reason, len(content or ""), data.get("usage"),
+            )
             parsed = parse_json_response(content)
         except Exception as e:
-            logger.error("Transcribe parse error: %s", e, exc_info=True)
-            return TranscriptionResult(success=False, error=f"не смог разобрать ответ: {e}")
+            # Dump enough of the raw content to diagnose truncation vs. malformed JSON.
+            head = (content[:500] if isinstance(content, str) else str(content)[:500])
+            tail = (content[-500:] if isinstance(content, str) and len(content) > 500 else "")
+            logger.error(
+                "Transcribe parse error: %s | finish_reason=%s | content_len=%s | "
+                "head=%r | tail=%r",
+                e,
+                locals().get("finish_reason", "?"),
+                len(content) if isinstance(content, str) else "n/a",
+                head, tail,
+                exc_info=True,
+            )
+            hint = ""
+            if locals().get("finish_reason") == "length":
+                hint = " (ответ обрезан по лимиту токенов — попробуй более короткую запись)"
+            return TranscriptionResult(
+                success=False, error=f"не смог разобрать ответ: {e}{hint}",
+            )
 
         segments = parsed.get("segments") or []
         # Sanity: ensure monotonic timestamps and end >= start
