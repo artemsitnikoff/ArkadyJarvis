@@ -8,12 +8,73 @@ import httpx
 from app.config import settings
 from app.services.potok_models import Applicant, Job, ScoringResult
 
-# Limit concurrent applicant fetches across the whole client — Potok
-# rate-limits aggressively, and parallel score_new/rescore_all flows could
-# otherwise double the load on the /applicants/{id} endpoint.
-_FETCH_SEMAPHORE = asyncio.Semaphore(5)
-
 logger = logging.getLogger("arkadyjarvis")
+
+
+def _score_label(score: int) -> str:
+    if score >= 81:
+        return "Отлично"
+    if score >= 61:
+        return "Хорошо"
+    if score >= 41:
+        return "Средне"
+    return "Слабо"
+
+
+def _build_comment_html(result: ScoringResult) -> str:
+    """Render Potok event comment HTML for a scoring result (all user-supplied
+    strings are html-escaped)."""
+    esc = html_mod.escape
+    label = _score_label(result.score)
+
+    breakdown_html = ""
+    if result.breakdown:
+        rows = ""
+        for b in result.breakdown:
+            rows += (
+                f"<tr>"
+                f"<td style='padding:4px 8px'>{esc(b.criterion)}</td>"
+                f"<td style='padding:4px 8px;text-align:center'><b>{b.score}</b></td>"
+                f"<td style='padding:4px 8px'>{esc(b.comment)}</td>"
+                f"</tr>"
+            )
+        breakdown_html = (
+            f"<br><b>📊 Разбивка по критериям:</b>"
+            f"<table border='1' cellpadding='0' cellspacing='0' "
+            f"style='border-collapse:collapse;margin-top:5px;width:100%'>"
+            f"<tr style='background:#f0f0f0'>"
+            f"<th style='padding:4px 8px;text-align:left;width:30%'>Критерий</th>"
+            f"<th style='padding:4px 8px;text-align:center;width:60px'>Баллы</th>"
+            f"<th style='padding:4px 8px;text-align:left'>Комментарий</th>"
+            f"</tr>"
+            f"{rows}"
+            f"<tr style='background:#f0f0f0'>"
+            f"<td style='padding:4px 8px'><b>ИТОГО</b></td>"
+            f"<td style='padding:4px 8px;text-align:center'><b>{result.score}</b></td>"
+            f"<td style='padding:4px 8px'></td>"
+            f"</tr>"
+            f"</table>"
+        )
+
+    strengths = (
+        "".join(f"<li>{esc(s)}</li>" for s in result.strengths)
+        if result.strengths else "<li>нет</li>"
+    )
+    weaknesses = (
+        "".join(f"<li>{esc(s)}</li>" for s in result.weaknesses)
+        if result.weaknesses else "<li>нет</li>"
+    )
+
+    return (
+        f"<h3>🤖 Оценка AI: {result.score}/100 ({label})</h3>"
+        f"<p>{esc(result.reasoning)}</p>"
+        f"{breakdown_html}"
+        f"<br>"
+        f"<b>✅ Сильные стороны:</b>"
+        f"<ul>{strengths}</ul>"
+        f"<b>⚠️ Слабые стороны:</b>"
+        f"<ul>{weaknesses}</ul>"
+    )
 
 
 def _strip_html(html: str) -> str:
@@ -55,6 +116,11 @@ class PotokClient:
                 "Content-Type": "application/json",
             },
         )
+        # Cap concurrent applicant fetches — Potok rate-limits aggressively,
+        # and parallel score_new/rescore_all flows would otherwise double the
+        # load on the /applicants/{id} endpoint. Instance-level so the
+        # semaphore is tied to the client's event loop.
+        self._fetch_semaphore = asyncio.Semaphore(5)
 
     async def close(self):
         await self._client.aclose()
@@ -100,7 +166,7 @@ class PotokClient:
 
     async def _fetch_applicant(self, applicant_id: int, retries: int = 3) -> dict:
         """Fetch single applicant by ID with retry on 429. Concurrency-limited."""
-        async with _FETCH_SEMAPHORE:
+        async with self._fetch_semaphore:
             last_status = None
             for attempt in range(retries + 1):
                 resp = await self._client.get(f"/api/v3/applicants/{applicant_id}.json")
@@ -163,63 +229,7 @@ class PotokClient:
     async def push_scoring(
         self, result: ScoringResult, job_id: int, original_last_name: str = ""
     ) -> None:
-        label = (
-            "Отлично" if result.score >= 81
-            else "Хорошо" if result.score >= 61
-            else "Средне" if result.score >= 41
-            else "Слабо"
-        )
-
-        esc = html_mod.escape
-        breakdown_html = ""
-        if result.breakdown:
-            rows = ""
-            for b in result.breakdown:
-                rows += (
-                    f"<tr>"
-                    f"<td style='padding:4px 8px'>{esc(b.criterion)}</td>"
-                    f"<td style='padding:4px 8px;text-align:center'><b>{b.score}</b></td>"
-                    f"<td style='padding:4px 8px'>{esc(b.comment)}</td>"
-                    f"</tr>"
-                )
-            breakdown_html = (
-                f"<br><b>📊 Разбивка по критериям:</b>"
-                f"<table border='1' cellpadding='0' cellspacing='0' "
-                f"style='border-collapse:collapse;margin-top:5px;width:100%'>"
-                f"<tr style='background:#f0f0f0'>"
-                f"<th style='padding:4px 8px;text-align:left;width:30%'>Критерий</th>"
-                f"<th style='padding:4px 8px;text-align:center;width:60px'>Баллы</th>"
-                f"<th style='padding:4px 8px;text-align:left'>Комментарий</th>"
-                f"</tr>"
-                f"{rows}"
-                f"<tr style='background:#f0f0f0'>"
-                f"<td style='padding:4px 8px'><b>ИТОГО</b></td>"
-                f"<td style='padding:4px 8px;text-align:center'><b>{result.score}</b></td>"
-                f"<td style='padding:4px 8px'></td>"
-                f"</tr>"
-                f"</table>"
-            )
-
-        strengths = (
-            "".join(f"<li>{esc(s)}</li>" for s in result.strengths)
-            if result.strengths else "<li>нет</li>"
-        )
-        weaknesses = (
-            "".join(f"<li>{esc(s)}</li>" for s in result.weaknesses)
-            if result.weaknesses else "<li>нет</li>"
-        )
-
-        comment = (
-            f"<h3>🤖 Оценка AI: {result.score}/100 ({label})</h3>"
-            f"<p>{esc(result.reasoning)}</p>"
-            f"{breakdown_html}"
-            f"<br>"
-            f"<b>✅ Сильные стороны:</b>"
-            f"<ul>{strengths}</ul>"
-            f"<b>⚠️ Слабые стороны:</b>"
-            f"<ul>{weaknesses}</ul>"
-        )
-
+        comment = _build_comment_html(result)
         event = {
             "applicant_id": result.applicant_id,
             "body": comment,

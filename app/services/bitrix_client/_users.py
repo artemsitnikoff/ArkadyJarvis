@@ -338,6 +338,15 @@ class _BitrixUsersMixin:
             if i + batch_limit < len(all_chunks):
                 await asyncio.sleep(inter_batch_delay)
 
+        # If every batch failed, keep loaded=False so the next call retries
+        # (otherwise we'd lock an empty cache in until a process restart).
+        if total_batches > 0 and errors == total_batches:
+            logger.warning(
+                "All %d email-guest batches failed — leaving cache unloaded for retry",
+                total_batches,
+            )
+            return
+
         self._email_guests_loaded = True
         logger.info(
             "Loaded %d email guests from Bitrix (batches=%d, errors=%d)",

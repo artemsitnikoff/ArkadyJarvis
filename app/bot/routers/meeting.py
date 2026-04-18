@@ -88,6 +88,31 @@ def _build_meeting_reply(
     return text
 
 
+async def _commit_meeting(
+    bitrix,
+    owner_user_id: int,
+    dt: datetime,
+    context: str,
+    attendee_ids: list[int],
+    description: str | None = None,
+) -> tuple[object, str]:
+    """Create a Bitrix meeting and return (event_id, bitrix_url)."""
+    title = context[:80] if context else "Встреча"
+    result = await bitrix.create_meeting(
+        title=title,
+        date=dt,
+        owner_user_id=owner_user_id,
+        description=description if description is not None else (context or ""),
+        attendee_ids=attendee_ids if attendee_ids else None,
+    )
+    event_id = result.get("id", "?")
+    bitrix_url = (
+        f"https://{settings.bitrix_domain}/company/personal/user/"
+        f"{owner_user_id}/calendar/?EVENT_ID={event_id}"
+    )
+    return event_id, bitrix_url
+
+
 async def _do_create_meeting(
     message: Message,
     db_user: DbUser,
@@ -98,21 +123,9 @@ async def _do_create_meeting(
     attendee_names: list[str],
 ):
     """Create a Bitrix meeting and send confirmation message."""
-    title = context[:80] if context else "Встреча"
-    description = context or ""
-
-    owner_user_id = db_user["bitrix_user_id"]
-    result = await bitrix.create_meeting(
-        title=title,
-        date=dt,
-        owner_user_id=owner_user_id,
-        description=description,
-        attendee_ids=attendee_ids if attendee_ids else None,
+    event_id, bitrix_url = await _commit_meeting(
+        bitrix, db_user["bitrix_user_id"], dt, context, attendee_ids,
     )
-
-    event_id = result.get("id", "?")
-    bitrix_url = f"https://{settings.bitrix_domain}/company/personal/user/{owner_user_id}/calendar/?EVENT_ID={event_id}"
-
     reply_text = _build_meeting_reply(
         dt, event_id, bitrix_url,
         found_names=attendee_names,
@@ -200,22 +213,14 @@ async def _create_meeting_with_nicks(
             else:
                 invite_emails.append(email)
 
-    title = context[:80] if context else "Встреча"
     description = context or ""
     if invite_emails:
         description += "\n\nПригласить по email: " + ", ".join(invite_emails)
 
-    owner_user_id = db_user["bitrix_user_id"]
-    result = await bitrix.create_meeting(
-        title=title,
-        date=dt,
-        owner_user_id=owner_user_id,
+    event_id, bitrix_url = await _commit_meeting(
+        bitrix, db_user["bitrix_user_id"], dt, context, attendee_ids,
         description=description,
-        attendee_ids=attendee_ids if attendee_ids else None,
     )
-
-    event_id = result.get("id", "?")
-    bitrix_url = f"https://{settings.bitrix_domain}/company/personal/user/{owner_user_id}/calendar/?EVENT_ID={event_id}"
 
     reply_text = _build_meeting_reply(
         dt, event_id, bitrix_url,

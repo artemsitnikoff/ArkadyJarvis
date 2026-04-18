@@ -303,7 +303,7 @@ Required: `BOT_TOKEN`
 
 AI: `CLAUDE_CODE_OAUTH_TOKEN`, `CLAUDE_REFRESH_TOKEN` (for auto-refresh), `CLAUDE_CLI_PATH` (default `claude`), `CLAUDE_MODEL` (optional override, e.g. `claude-opus-4-7`), `CLAUDE_OAUTH_CLIENT_ID` (default official Claude Code ID)
 
-OpenRouter: `OPENROUTER_API_KEY`, `OPENROUTER_MODEL` (default `google/gemini-2.5-pro` — used for voice transcription)
+OpenRouter: `OPENROUTER_API_KEY`, `OPENROUTER_MODEL` (default `google/gemini-2.5-pro` — used for voice transcription), `OPENROUTER_TIMEOUT` (default 300s, read/write; connect is always 10s)
 
 Bitrix24: `BITRIX_CLIENT_ID`, `BITRIX_CLIENT_SECRET`, `BITRIX_DOMAIN`, `BITRIX_REFRESH_TOKEN` (first run only), `BITRIX_TELEGRAM_FIELD` (default `UF_USR_1678964886664`)
 
@@ -333,7 +333,7 @@ Other: `DB_PATH` (default `data/arkadyjarvis.db`), `SUMMARY_HOUR` (default 19), 
 - **HTML-escape user strings**: When building HTML messages (default parse_mode), always `html.escape()` user-controlled strings (names, companies, titles, AI-returned free text). Broken entities → Telegram 400.
 - **Long AI answers** (>4000 chars): attach as `.md` file with a short preview caption instead of trying to chunk HTML.
 - **AIClient injection**: services that need Claude (e.g. `resume_scorer.score_applicant`) must receive `ai_client` as parameter, not instantiate new `AIClient()`.
-- **Db user in callbacks**: `AuthMiddleware` now injects `db_user` into callback handlers — use it rather than re-fetching via `db.get_user(...)`.
+- **Db user in callbacks**: `AuthMiddleware` injects `db_user` into callback handlers — use the injected value instead of re-fetching via `db.get_user(...)`. Some older callbacks still re-fetch (meeting.py, free_slots.py) — cleanup pending, not a bug.
 - **Prompts live in `prompts/`**: add new assistants by dropping a `.md` file and loading via `load_prompt(name)`. Template placeholders (`{style}`) are substituted by the caller.
 
 ## Running
@@ -354,10 +354,11 @@ Logs in Docker: `docker compose logs -f`
 - Claude CLI requires `CLAUDE_CODE_OAUTH_TOKEN` — refresh tokens are single-use, lost token = re-auth needed
 - Email guests cannot be created via Bitrix REST API (only UI)
 - Bitrix OAuth tokens are shared (file-based), not per-user
-- Email guest cache is in-memory (resets on restart); `_load_email_guests` currently has no rate-limit between batches
+- Email guest cache is in-memory (resets on restart); `_load_email_guests` throttles 0.3s between batches and leaves the cache unloaded for retry if every batch fails
 - OpenRouter image generation may silently refuse due to content policy (0 completion tokens = refusal)
 - Potok scored candidates identified by `^\d{3}-` last_name prefix — fragile convention
 - Potok API SSL: uses Russian CA certificates — works from prod (Ubuntu), may fail from Mac without Russian CA bundle
 - Tailscale + OpenVPN conflict: OpenVPN `redirect-gateway` kills Tailscale connectivity. Cannot run both simultaneously without server-side split tunnel config.
-- `middlewares.py` still contains legacy `AUTH_TRIGGERS` regex list and `"ситников"` check for removed text triggers — dead code, scheduled for cleanup
 - Some callback handlers (`meeting.py`, `free_slots.py`) still re-fetch `db_user` via `db.get_user()` instead of using the middleware-injected one — not broken, just duplicated DB calls
+- `meeting.py` and `free_slots.py` duplicate the attendee-picker UI (`_cancel_kb`, `_search_status_kb`, `pick:*` / `search:*` handlers, ~120 lines) — pending extraction into `app/bot/routers/_attendee_picker.py`
+- `start.py:handle_hint` is a 200-line if/elif switch over 12 hint keys — pending refactor into a dict of handlers

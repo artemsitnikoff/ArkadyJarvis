@@ -162,25 +162,40 @@ async def bitrix_broadcast(
     failed = 0
     for user in users:
         tg_id = user["telegram_id"]
-        try:
-            await bot.send_message(tg_id, body.text)
+        if await _send_with_retry(bot, tg_id, body.text):
             sent += 1
-        except TelegramRetryAfter as e:
-            # Telegram asked us to back off — wait then retry once.
-            logger.warning(
-                "Broadcast rate-limited (tg=%s), sleeping %ss", tg_id, e.retry_after,
-            )
-            await asyncio.sleep(e.retry_after)
-            try:
-                await bot.send_message(tg_id, body.text)
-                sent += 1
-            except Exception as retry_err:
-                logger.warning("Broadcast retry failed for tg=%s: %s", tg_id, retry_err)
-                failed += 1
-        except Exception as e:
-            logger.warning("Broadcast failed for tg=%s: %s", tg_id, e)
+        else:
             failed += 1
         await asyncio.sleep(_BROADCAST_INTERVAL)
 
     logger.info("Webhook broadcast: sent=%d, failed=%d", sent, failed)
     return BroadcastResponse(ok=True, sent=sent, failed=failed)
+
+
+async def _send_with_retry(bot, tg_id: int, text: str, max_retries: int = 2) -> bool:
+    """Send a message with retries on TelegramRetryAfter (rate-limit).
+
+    Returns True on success, False on any terminal failure. Rate-limit
+    retries are bounded by `max_retries` so a single unfortunate user
+    can't stall the broadcast indefinitely.
+    """
+    for attempt in range(max_retries + 1):
+        try:
+            await bot.send_message(tg_id, text)
+            return True
+        except TelegramRetryAfter as e:
+            if attempt >= max_retries:
+                logger.warning(
+                    "Broadcast give up after %d rate-limit retries for tg=%s",
+                    max_retries, tg_id,
+                )
+                return False
+            logger.warning(
+                "Broadcast rate-limited (tg=%s), sleeping %ss (attempt %d/%d)",
+                tg_id, e.retry_after, attempt + 1, max_retries,
+            )
+            await asyncio.sleep(e.retry_after)
+        except Exception as e:
+            logger.warning("Broadcast failed for tg=%s: %s", tg_id, e)
+            return False
+    return False
