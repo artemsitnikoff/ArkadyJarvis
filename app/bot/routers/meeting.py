@@ -92,17 +92,16 @@ async def _commit_meeting(
     bitrix,
     owner_user_id: int,
     dt: datetime,
-    context: str,
+    title: str,
+    description: str,
     attendee_ids: list[int],
-    description: str | None = None,
 ) -> tuple[object, str]:
     """Create a Bitrix meeting and return (event_id, bitrix_url)."""
-    title = context[:80] if context else "Встреча"
     result = await bitrix.create_meeting(
         title=title,
         date=dt,
         owner_user_id=owner_user_id,
-        description=description if description is not None else (context or ""),
+        description=description,
         attendee_ids=attendee_ids if attendee_ids else None,
     )
     event_id = result.get("id", "?")
@@ -123,8 +122,12 @@ async def _do_create_meeting(
     attendee_names: list[str],
 ):
     """Create a Bitrix meeting and send confirmation message."""
+    title = context[:80] if context else "Встреча"
     event_id, bitrix_url = await _commit_meeting(
-        bitrix, db_user["bitrix_user_id"], dt, context, attendee_ids,
+        bitrix, db_user["bitrix_user_id"], dt,
+        title=title,
+        description=context or "",
+        attendee_ids=attendee_ids,
     )
     reply_text = _build_meeting_reply(
         dt, event_id, bitrix_url,
@@ -213,13 +216,16 @@ async def _create_meeting_with_nicks(
             else:
                 invite_emails.append(email)
 
+    title = context[:80] if context else "Встреча"
     description = context or ""
     if invite_emails:
         description += "\n\nПригласить по email: " + ", ".join(invite_emails)
 
     event_id, bitrix_url = await _commit_meeting(
-        bitrix, db_user["bitrix_user_id"], dt, context, attendee_ids,
+        bitrix, db_user["bitrix_user_id"], dt,
+        title=title,
         description=description,
+        attendee_ids=attendee_ids,
     )
 
     reply_text = _build_meeting_reply(

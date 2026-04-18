@@ -305,7 +305,7 @@ AI: `CLAUDE_CODE_OAUTH_TOKEN`, `CLAUDE_REFRESH_TOKEN` (for auto-refresh), `CLAUD
 
 OpenRouter: `OPENROUTER_API_KEY`, `OPENROUTER_MODEL` (default `google/gemini-2.5-pro` — used for voice transcription), `OPENROUTER_TIMEOUT` (default 300s, read/write; connect is always 10s)
 
-Bitrix24: `BITRIX_CLIENT_ID`, `BITRIX_CLIENT_SECRET`, `BITRIX_DOMAIN`, `BITRIX_REFRESH_TOKEN` (first run only), `BITRIX_TELEGRAM_FIELD` (default `UF_USR_1678964886664`)
+Bitrix24: `BITRIX_CLIENT_ID`, `BITRIX_CLIENT_SECRET`, `BITRIX_DOMAIN`, `BITRIX_REFRESH_TOKEN` (first run only), `BITRIX_TELEGRAM_FIELD` (default `UF_USR_1678964886664`), `BITRIX_EMAIL_GUESTS_SCAN_MAX` (default 2000), `BITRIX_EMAIL_GUESTS_MULTIPLIER` (default 3)
 
 Potok.io: `POTOK_API_TOKEN`, `POTOK_BASE_URL` (default `https://app.potok.io`)
 

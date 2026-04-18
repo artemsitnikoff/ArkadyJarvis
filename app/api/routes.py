@@ -172,22 +172,27 @@ async def bitrix_broadcast(
     return BroadcastResponse(ok=True, sent=sent, failed=failed)
 
 
+_MAX_RETRY_AFTER_SECONDS = 10
+
+
 async def _send_with_retry(bot, tg_id: int, text: str, max_retries: int = 2) -> bool:
     """Send a message with retries on TelegramRetryAfter (rate-limit).
 
     Returns True on success, False on any terminal failure. Rate-limit
     retries are bounded by `max_retries` so a single unfortunate user
-    can't stall the broadcast indefinitely.
+    can't stall the broadcast indefinitely. Retry delay is clamped to
+    _MAX_RETRY_AFTER_SECONDS so one user's 60-second ban doesn't freeze
+    the whole broadcast — we just give up on them and move on.
     """
     for attempt in range(max_retries + 1):
         try:
             await bot.send_message(tg_id, text)
             return True
         except TelegramRetryAfter as e:
-            if attempt >= max_retries:
+            if attempt >= max_retries or e.retry_after > _MAX_RETRY_AFTER_SECONDS:
                 logger.warning(
-                    "Broadcast give up after %d rate-limit retries for tg=%s",
-                    max_retries, tg_id,
+                    "Broadcast give up on tg=%s after %d retries (retry_after=%ss)",
+                    tg_id, attempt, e.retry_after,
                 )
                 return False
             logger.warning(

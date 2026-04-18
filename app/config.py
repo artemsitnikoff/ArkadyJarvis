@@ -20,6 +20,9 @@ class Settings(BaseSettings):
     bitrix_domain: str = ""
     bitrix_refresh_token: str = ""
     bitrix_telegram_field: str = "UF_USR_1678964886664"  # custom field for Telegram username
+    # Email-guest scan (im.user.list.get); raise if your portal has >2000 users
+    bitrix_email_guests_scan_max: int = 2000
+    bitrix_email_guests_multiplier: int = 3  # max_id = max(total_regular*M, scan_max)
 
     # Jira (integration user)
     jira_url: str = ""

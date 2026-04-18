@@ -13,8 +13,8 @@ from aiogram.types import (
 
 from app.bot.routers.start import MENU_KB
 from app.config import settings
-from app.services.resume_scorer import score_applicant
-from app.services.resume_scorer import extract_recruiter_instructions
+from app.services.potok_client import score_label
+from app.services.resume_scorer import extract_recruiter_instructions, score_applicant
 
 logger = logging.getLogger("arkadyjarvis")
 router = Router()
@@ -35,21 +35,11 @@ class Recruiter(StatesGroup):
     scoring = State()
 
 
-def _score_label(score: int) -> str:
-    if score >= 81:
-        return "Отлично"
-    if score >= 61:
-        return "Хорошо"
-    if score >= 41:
-        return "Средне"
-    return "Слабо"
-
-
 def _format_result_message(
     job_name: str, idx: int, total: int, result, applicant_name: str,
 ) -> str:
     """Format full scoring result as a Telegram HTML message."""
-    label = _score_label(result.score)
+    label = score_label(result.score)
     name = html_mod.escape(applicant_name)
     jname = html_mod.escape(job_name)
 

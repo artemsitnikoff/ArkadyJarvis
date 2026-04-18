@@ -11,7 +11,7 @@ from app.services.potok_models import Applicant, Job, ScoringResult
 logger = logging.getLogger("arkadyjarvis")
 
 
-def _score_label(score: int) -> str:
+def score_label(score: int) -> str:
     if score >= 81:
         return "Отлично"
     if score >= 61:
@@ -25,7 +25,7 @@ def _build_comment_html(result: ScoringResult) -> str:
     """Render Potok event comment HTML for a scoring result (all user-supplied
     strings are html-escaped)."""
     esc = html_mod.escape
-    label = _score_label(result.score)
+    label = score_label(result.score)
 
     breakdown_html = ""
     if result.breakdown:
@@ -104,12 +104,24 @@ def _strip_html(html: str) -> str:
     return text.strip()
 
 
+def _parse_retry_after(header_value: str | None, default: float = 2.0) -> float:
+    """Potok's Retry-After is usually a number of seconds, but RFC7231 also allows
+    an HTTP-date. Only the numeric form is actionable; fall back to `default`
+    otherwise. Never raises."""
+    if not header_value:
+        return default
+    try:
+        return float(header_value)
+    except ValueError:
+        return default
+
+
 class PotokClient:
     def __init__(self):
         token = settings.potok_api_token.get_secret_value()
         self._client = httpx.AsyncClient(
             base_url=settings.potok_base_url,
-            timeout=30.0,
+            timeout=httpx.Timeout(connect=10.0, read=30.0, write=10.0, pool=10.0),
             headers={
                 "Authorization": f"Bearer {token}",
                 "Accept": "application/json",
@@ -167,20 +179,20 @@ class PotokClient:
     async def _fetch_applicant(self, applicant_id: int, retries: int = 3) -> dict:
         """Fetch single applicant by ID with retry on 429. Concurrency-limited."""
         async with self._fetch_semaphore:
-            last_status = None
             for attempt in range(retries + 1):
                 resp = await self._client.get(f"/api/v3/applicants/{applicant_id}.json")
-                last_status = resp.status_code
-                if resp.status_code == 429:
-                    if attempt < retries:
-                        delay = float(resp.headers.get("Retry-After", 2))
-                        await asyncio.sleep(delay)
-                        continue
+                if resp.status_code == 429 and attempt < retries:
+                    delay = _parse_retry_after(resp.headers.get("Retry-After"))
+                    await asyncio.sleep(delay)
+                    continue
+                # Either success, any non-429 error, or 429 on the last attempt:
+                # let raise_for_status surface it to the caller.
                 resp.raise_for_status()
                 return resp.json()
+            # Unreachable — loop either returns or raises, but keep an explicit
+            # raise so linters / future refactors don't invent an implicit None.
             raise RuntimeError(
-                f"Potok: applicant {applicant_id} unreachable after {retries + 1} "
-                f"attempts (last status {last_status})"
+                f"Potok: applicant {applicant_id} retry loop exited without response"
             )
 
     async def get_applicants_for_job(
@@ -245,8 +257,19 @@ class PotokClient:
         if original_last_name:
             clean_name = re.sub(r"^(\d{3}-)+", "", original_last_name)
             new_last_name = f"{result.score:03d}-{clean_name}"
-            resp = await self._client.patch(
-                f"/api/v3/applicants/{result.applicant_id}.json",
-                json={"applicant": {"last_name": new_last_name}},
-            )
-            resp.raise_for_status()
+            try:
+                resp = await self._client.patch(
+                    f"/api/v3/applicants/{result.applicant_id}.json",
+                    json={"applicant": {"last_name": new_last_name}},
+                )
+                resp.raise_for_status()
+            except Exception as e:
+                # Comment is already posted; prefix update failing is a
+                # non-fatal inconsistency. On rescore_all a duplicate comment
+                # may appear until the prefix catches up — log loudly so ops
+                # can spot it, but don't re-raise.
+                logger.warning(
+                    "Potok: posted comment for applicant %s (score %d) but "
+                    "failed to update last_name prefix: %s",
+                    result.applicant_id, result.score, e,
+                )

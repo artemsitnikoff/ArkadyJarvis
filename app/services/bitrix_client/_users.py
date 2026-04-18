@@ -293,9 +293,19 @@ class _BitrixUsersMixin:
 
         import asyncio
 
-        result = await self._request("user.get", {"start": 0})
+        try:
+            result = await self._request("user.get", {"start": 0})
+        except Exception as e:
+            # Bitrix 5xx / network — don't take down the caller (lead, meeting,
+            # cicero could all end up here). Leave loaded=False so the next
+            # resolve_email_user() retries.
+            logger.warning("Email guests initial user.get failed: %s", e)
+            return
         total_regular = result.get("total", 0)
-        max_id = max(total_regular * 3, 2000)
+        max_id = max(
+            total_regular * settings.bitrix_email_guests_multiplier,
+            settings.bitrix_email_guests_scan_max,
+        )
 
         chunk_size = 100
         all_chunks = []
