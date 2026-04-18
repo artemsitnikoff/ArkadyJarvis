@@ -192,7 +192,7 @@ async def send_monday_poster(
     image_bytes = await openrouter.generate_image(image_prompt)
     photo = BufferedInputFile(image_bytes, filename="monday_poster.png")
     await bot.send_photo(
-        chat_id, photo, caption="☭ Наконец-то понедельник — и на любимую работу!",
+        chat_id, photo, caption="🛠 Наконец-то понедельник — и на любимую работу!",
     )
     logger.info("=== Monday poster sent to chat %s", chat_id)
 
