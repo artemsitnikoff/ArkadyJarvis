@@ -204,7 +204,14 @@ Order matters — `buffer.py` must be last (catch-all):
 - Two-step pipeline:
   1. Claude CLI generates a fresh image prompt using `prompts/wednesday_frog.md` — different scene each week, always features a cartoon frog + the caption "Со средой, мои чуваки!"
   2. `OpenRouterClient.generate_image()` (Gemini 3 Pro Image) renders the picture
+- Art style chosen randomly each week from `FROG_STYLES` list (65 recognizable styles) and injected into the prompt via `{style}` placeholder
 - Sent via `bot.send_photo()` to the configured chat
+
+### Monday Poster Job (scheduler/jobs.py)
+- Runs every Monday at 09:00 local time
+- Skipped if `MONDAY_POSTER_CHAT_ID` is 0/unset
+- Generates a Soviet-1930s-style motivational poster (constructivism / Rodchenko / Klutsis / Lissitzky) with the caption "Наконец-то понедельник — и на любимую работу!" — worker hero varies each week (steelworker, pilot, kolkhoz worker, metrostroi builder, etc.)
+- Prompt template: `prompts/monday_poster.md`
 
 ### Claude CLI (AI Client)
 - AIClient calls `claude --print --output-format text` as subprocess
@@ -274,7 +281,7 @@ Webhook: `WEBHOOK_TOKEN` (shared secret for incoming B24 webhooks, header `X-Web
 
 Access control: `GLAFIRA_ALLOWED` (comma-separated Telegram IDs), `RECRUITER_ALLOWED` (comma-separated Telegram IDs)
 
-Other: `DB_PATH` (default `data/arkadyjarvis.db`), `SUMMARY_HOUR` (default 19), `SUMMARY_MINUTE` (default 0), `TIMEZONE` (default `Asia/Novosibirsk`), `WEDNESDAY_FROG_CHAT_ID` (default 0 = disabled)
+Other: `DB_PATH` (default `data/arkadyjarvis.db`), `SUMMARY_HOUR` (default 19), `SUMMARY_MINUTE` (default 0), `TIMEZONE` (default `Asia/Novosibirsk`), `WEDNESDAY_FROG_CHAT_ID` (default 0 = disabled), `MONDAY_POSTER_CHAT_ID` (default 0 = disabled)
 
 ## Coding Guidelines
 

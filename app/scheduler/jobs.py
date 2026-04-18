@@ -179,3 +179,31 @@ async def wednesday_frog_job(bot: Bot, ai_client: AIClient, openrouter: OpenRout
         await send_wednesday_frog(bot, ai_client, openrouter, chat_id)
     except Exception as e:
         logger.error("=== wednesday_frog_job failed: %s", e, exc_info=True)
+
+
+async def send_monday_poster(
+    bot: Bot, ai_client: AIClient, openrouter: OpenRouterClient, chat_id: int,
+):
+    """Generate a Soviet-1930s-style motivational Monday poster and send it to chat."""
+    meta_prompt = load_prompt("monday_poster")
+    image_prompt = (await ai_client.complete(meta_prompt)).strip()
+    logger.info("=== Monday poster prompt: %s", image_prompt)
+
+    image_bytes = await openrouter.generate_image(image_prompt)
+    photo = BufferedInputFile(image_bytes, filename="monday_poster.png")
+    await bot.send_photo(
+        chat_id, photo, caption="☭ Наконец-то понедельник — и на любимую работу!",
+    )
+    logger.info("=== Monday poster sent to chat %s", chat_id)
+
+
+async def monday_poster_job(bot: Bot, ai_client: AIClient, openrouter: OpenRouterClient):
+    """Scheduler entry — reads chat_id from settings."""
+    chat_id = settings.monday_poster_chat_id
+    if not chat_id:
+        logger.info("=== monday_poster_job skipped: MONDAY_POSTER_CHAT_ID not set")
+        return
+    try:
+        await send_monday_poster(bot, ai_client, openrouter, chat_id)
+    except Exception as e:
+        logger.error("=== monday_poster_job failed: %s", e, exc_info=True)
