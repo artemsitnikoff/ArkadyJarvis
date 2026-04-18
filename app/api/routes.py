@@ -16,6 +16,12 @@ from app.config import settings
 # broadcast finish in ~25 s without floodwaits.
 _BROADCAST_INTERVAL = 0.05
 
+# One user's FloodWait can block the whole broadcast loop. If Telegram asks to
+# wait longer than this, we give up on that recipient immediately and move on.
+# `retry_after` STRICTLY greater than this is rejected (exactly equal is still
+# retried).
+_MAX_RETRY_AFTER_SECONDS = 10
+
 logger = logging.getLogger("arkadyjarvis")
 router = APIRouter()
 
@@ -170,9 +176,6 @@ async def bitrix_broadcast(
 
     logger.info("Webhook broadcast: sent=%d, failed=%d", sent, failed)
     return BroadcastResponse(ok=True, sent=sent, failed=failed)
-
-
-_MAX_RETRY_AFTER_SECONDS = 10
 
 
 async def _send_with_retry(bot, tg_id: int, text: str, max_retries: int = 2) -> bool:

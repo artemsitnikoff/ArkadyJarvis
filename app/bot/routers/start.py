@@ -193,59 +193,44 @@ async def handle_work(callback: CallbackQuery, bitrix, ai_client):
     await start_work_day(callback, bitrix, ai_client, db_user)
 
 
-@router.callback_query(F.data.startswith("hint:"))
-async def handle_hint(callback: CallbackQuery, state: FSMContext, bitrix, potok, ai_client, bot):
-    key = callback.data.split(":", 1)[1]
+def _simple_fsm_hints() -> dict[str, tuple]:
+    """(state, prompt_text, initial_fsm_data | None) for button-only FSM entries.
 
-    if key == "employee":
-        from app.bot.routers.employee import FindEmployee
-        await state.set_state(FindEmployee.waiting_for_name)
-        await callback.message.answer(
-            "👤 <b>Найди сотрудника</b>\n\n"
-            "Напиши имя или фамилию:",
-            reply_markup=BACK_MENU_KB,
-        )
-        await callback.answer()
-        return
+    Lazy-loaded inside the handler to avoid importing every router at module
+    import time (each router imports from start, so top-level imports would
+    create cycles).
+    """
+    from app.bot.routers.ask_ai import AskAI
+    from app.bot.routers.cicero import Cicero
+    from app.bot.routers.contract import ContractCheck
+    from app.bot.routers.employee import FindEmployee
+    from app.bot.routers.free_slots import BookSlot
+    from app.bot.routers.image import ImageGen
+    from app.bot.routers.jira_task import CreateTask
+    from app.bot.routers.lead import CreateLead
+    from app.bot.routers.meeting import MeetingSetup
 
-    if key == "team":
-        await _show_team(callback, bitrix)
-        return
-
-    if key == "summary":
-        await callback.answer()
-        await _run_summary(callback, ai_client, bot=bot)
-        return
-
-    if key == "meeting":
-        from app.bot.routers.meeting import MeetingSetup
-        await state.set_state(MeetingSetup.waiting_for_command)
-        await callback.message.answer(
+    return {
+        "employee": (
+            FindEmployee.waiting_for_name,
+            "👤 <b>Найди сотрудника</b>\n\nНапиши имя или фамилию:",
+            None,
+        ),
+        "meeting": (
+            MeetingSetup.waiting_for_command,
             "📅 <b>Создать встречу</b>\n\n"
             "Напиши время и участников:\n"
             "<code>14:00 @nick1 @nick2</code>\n\n"
             "Или просто время — найду коллег по имени.",
-            reply_markup=BACK_MENU_KB,
-        )
-        await callback.answer()
-        return
-
-    if key == "freetime":
-        from app.bot.routers.free_slots import BookSlot
-        await state.set_state(BookSlot.searching_attendee)
-        await state.update_data(attendee_ids=[], attendee_names=[])
-        await callback.message.answer(
-            "🕐 <b>Найди время</b>\n\n"
-            "Напиши имя или фамилию коллеги:",
-            reply_markup=BACK_MENU_KB,
-        )
-        await callback.answer()
-        return
-
-    if key == "task":
-        from app.bot.routers.jira_task import CreateTask
-        await state.set_state(CreateTask.waiting_for_input)
-        await callback.message.answer(
+            None,
+        ),
+        "freetime": (
+            BookSlot.searching_attendee,
+            "🕐 <b>Найди время</b>\n\nНапиши имя или фамилию коллеги:",
+            {"attendee_ids": [], "attendee_names": []},
+        ),
+        "task": (
+            CreateTask.waiting_for_input,
             "📝 <b>Задача Jira</b>\n\n"
             "Опиши задачу своими словами: что делаем, для кого, к какому сроку, "
             "какие блокеры. Я переформулирую по нашему шаблону "
@@ -254,137 +239,149 @@ async def handle_hint(callback: CallbackQuery, state: FSMContext, bitrix, potok,
             "Формат:\n"
             "<code>DC &lt;твоё описание&gt;</code>\n\n"
             "Где <b>DC</b> — ключ проекта в Jira.",
-            reply_markup=BACK_MENU_KB,
-        )
-        await callback.answer()
-        return
-
-    if key == "lead":
-        from app.bot.routers.lead import CreateLead
-        await state.set_state(CreateLead.waiting_for_info)
-        await callback.message.answer(
+            None,
+        ),
+        "lead": (
+            CreateLead.waiting_for_info,
             "💼 <b>Создать лид</b>\n\n"
             "Напиши данные контакта (имя, компания, телефон, email) "
             "или запиши голосовое 🎤 — расшифрую и сам разберу поля.",
-            reply_markup=BACK_MENU_KB,
-        )
-        await callback.answer()
-        return
-
-    if key == "image":
-        from app.bot.routers.image import ImageGen
-        await state.set_state(ImageGen.waiting_for_prompt)
-        await callback.message.answer("🎨 Напиши что нарисовать:", reply_markup=BACK_MENU_KB)
-        await callback.answer()
-        return
-
-    if key == "askai":
-        from app.bot.routers.ask_ai import AskAI
-        await state.set_state(AskAI.waiting_for_question)
-        await callback.message.answer("🧠 Задай вопрос:", reply_markup=BACK_MENU_KB)
-        await callback.answer()
-        return
-
-    if key == "contract":
-        from app.bot.routers.contract import ContractCheck
-        await state.set_state(ContractCheck.waiting_for_document)
-        await callback.message.answer(
+            None,
+        ),
+        "image": (
+            ImageGen.waiting_for_prompt,
+            "🎨 Напиши что нарисовать:",
+            None,
+        ),
+        "askai": (
+            AskAI.waiting_for_question,
+            "🧠 Задай вопрос:",
+            None,
+        ),
+        "contract": (
+            ContractCheck.waiting_for_document,
             "📄 <b>Проверка договора</b>\n\n"
             "Пришли файл (PDF, DOCX или TXT) — проверю по правилам "
             "и выдам список несоответствий.",
-            reply_markup=BACK_MENU_KB,
-        )
-        await callback.answer()
-        return
-
-    if key == "cicero":
-        from app.bot.routers.cicero import Cicero
-        await state.set_state(Cicero.chatting)
-        await callback.message.answer(
+            None,
+        ),
+        "cicero": (
+            Cicero.chatting,
             "⚖️ <b>Цицерон</b> — юридический консультант\n\n"
             "Задай вопрос текстом или приложи документ (PDF/DOCX/TXT) "
             "с вопросом в подписи. Отвечу по российскому законодательству "
             "(ГК, КоАП, АПК, НК РФ, КонсультантПлюс).\n\n"
             "Можно задавать вопросы подряд. Выход — «◀️ Меню».",
-            reply_markup=BACK_MENU_KB,
+            None,
+        ),
+    }
+
+
+async def _enter_glafira(callback: CallbackQuery, state: FSMContext):
+    from app.bot.routers.glafira import GLAFIRA_ALLOWED, GLAFIRA_EXIT_KB, Glafira
+
+    if callback.from_user.id not in GLAFIRA_ALLOWED:
+        await callback.message.answer(
+            "🚧 Функция в тестовом режиме. Доступ ограничен.",
+            reply_markup=MENU_KB,
         )
         await callback.answer()
         return
+    await state.set_state(Glafira.chatting)
+    await state.update_data(messages=[])
+    await callback.message.answer(
+        "🤖 <b>Глафира</b> — AI офис-менеджер\n\n"
+        "Напиши что нужно сделать. Я управляю браузером "
+        "и могу выполнять задачи на сайтах.\n\n"
+        "Для выхода нажми «◀️ Меню».",
+        reply_markup=GLAFIRA_EXIT_KB,
+    )
+    await callback.answer()
 
+
+async def _enter_recruiter(callback: CallbackQuery, state: FSMContext, potok):
+    from app.bot.routers.recruiter import RECRUITER_ALLOWED, Recruiter
+
+    if callback.from_user.id not in RECRUITER_ALLOWED:
+        await callback.message.answer(
+            "🚧 Функция в тестовом режиме. Доступ ограничен.",
+            reply_markup=MENU_KB,
+        )
+        await callback.answer()
+        return
+    await callback.message.answer(
+        "👔 <b>Анатолий</b> — AI-рекрутёр\n\n"
+        "Оцениваю кандидатов по вакансиям из Potok.io: сравниваю резюме "
+        "с описанием вакансии через Claude, ставлю балл 0–100, выделяю "
+        "сильные и слабые стороны. Результат публикую комментарием в Potok "
+        "и добавляю префикс со скором к фамилии кандидата для сортировки.\n\n"
+        "Сейчас подтяну список вакансий — выбери нужную, "
+        "и я начну оценку резюме кандидатов."
+    )
+    wait = await callback.message.answer("👔 Загружаю вакансии...")
+    try:
+        jobs = await potok.get_jobs()
+    except Exception as e:
+        logger.error("Potok error: %s", e, exc_info=True)
+        await wait.edit_text(f"❌ Potok недоступен: {e}", reply_markup=MENU_KB)
+        await callback.answer()
+        return
+    if not jobs:
+        await wait.edit_text("👔 Нет активных вакансий.", reply_markup=MENU_KB)
+        await callback.answer()
+        return
+    buttons = [
+        [InlineKeyboardButton(
+            text=f"{j.name} ({j.total_applicants})",
+            callback_data=f"recruit:job:{j.id}",
+        )]
+        for j in jobs[:20]
+    ]
+    buttons.append([InlineKeyboardButton(text="◀️ Меню", callback_data="recruit:exit")])
+    await wait.edit_text(
+        "👔 Выбери вакансию для оценки кандидатов:",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+    )
+    await state.set_state(Recruiter.choosing_job)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("hint:"))
+async def handle_hint(
+    callback: CallbackQuery, state: FSMContext, bitrix, potok, ai_client, bot,
+):
+    key = callback.data.split(":", 1)[1]
+
+    # Specialized handlers that need service deps or extra logic.
+    if key == "team":
+        await _show_team(callback, bitrix)
+        return
     if key == "meetings":
         await _show_meetings(callback, bitrix)
         return
-
+    if key == "summary":
+        await callback.answer()
+        await _run_summary(callback, ai_client, bot=bot)
+        return
     if key == "glafira":
-        from app.bot.routers.glafira import Glafira, GLAFIRA_ALLOWED, GLAFIRA_EXIT_KB
-        if callback.from_user.id not in GLAFIRA_ALLOWED:
-            await callback.message.answer(
-                "🚧 Функция в тестовом режиме. Доступ ограничен.",
-                reply_markup=MENU_KB,
-            )
-            await callback.answer()
-            return
-        await state.set_state(Glafira.chatting)
-        await state.update_data(messages=[])
-        await callback.message.answer(
-            "🤖 <b>Глафира</b> — AI офис-менеджер\n\n"
-            "Напиши что нужно сделать. Я управляю браузером "
-            "и могу выполнять задачи на сайтах.\n\n"
-            "Для выхода нажми «◀️ Меню».",
-            reply_markup=GLAFIRA_EXIT_KB,
-        )
-        await callback.answer()
+        await _enter_glafira(callback, state)
         return
-
     if key == "recruiter":
-        from app.bot.routers.recruiter import Recruiter, RECRUITER_ALLOWED
-        if callback.from_user.id not in RECRUITER_ALLOWED:
-            await callback.message.answer(
-                "🚧 Функция в тестовом режиме. Доступ ограничен.",
-                reply_markup=MENU_KB,
-            )
-            await callback.answer()
-            return
-        await callback.message.answer(
-            "👔 <b>Анатолий</b> — AI-рекрутёр\n\n"
-            "Оцениваю кандидатов по вакансиям из Potok.io: сравниваю резюме "
-            "с описанием вакансии через Claude, ставлю балл 0–100, выделяю "
-            "сильные и слабые стороны. Результат публикую комментарием в Potok "
-            "и добавляю префикс со скором к фамилии кандидата для сортировки.\n\n"
-            "Сейчас подтяну список вакансий — выбери нужную, "
-            "и я начну оценку резюме кандидатов."
-        )
-        wait = await callback.message.answer("👔 Загружаю вакансии...")
-        try:
-            jobs = await potok.get_jobs()
-        except Exception as e:
-            logger.error("Potok error: %s", e, exc_info=True)
-            await wait.edit_text(
-                f"❌ Potok недоступен: {e}",
-                reply_markup=MENU_KB,
-            )
-            await callback.answer()
-            return
-        if not jobs:
-            await wait.edit_text("👔 Нет активных вакансий.", reply_markup=MENU_KB)
-            await callback.answer()
-            return
-        buttons = [
-            [InlineKeyboardButton(
-                text=f"{j.name} ({j.total_applicants})",
-                callback_data=f"recruit:job:{j.id}",
-            )]
-            for j in jobs[:20]
-        ]
-        buttons.append([InlineKeyboardButton(text="◀️ Меню", callback_data="recruit:exit")])
-        await wait.edit_text(
-            "👔 Выбери вакансию для оценки кандидатов:",
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
-        )
-        await state.set_state(Recruiter.choosing_job)
+        await _enter_recruiter(callback, state, potok)
+        return
+
+    # Data-driven FSM-entry hints (set state + show prompt).
+    simple = _simple_fsm_hints()
+    if key in simple:
+        fsm_state, text, init_data = simple[key]
+        await state.set_state(fsm_state)
+        if init_data:
+            await state.update_data(**init_data)
+        await callback.message.answer(text, reply_markup=BACK_MENU_KB)
         await callback.answer()
         return
 
+    # Info-only hints: HELP_TEXT for "all", static HINTS dict otherwise.
     if key == "all":
         text = f"{HELP_TEXT}\n\n<i>v{__version__}</i>"
     else:

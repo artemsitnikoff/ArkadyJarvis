@@ -361,4 +361,4 @@ Logs in Docker: `docker compose logs -f`
 - Tailscale + OpenVPN conflict: OpenVPN `redirect-gateway` kills Tailscale connectivity. Cannot run both simultaneously without server-side split tunnel config.
 - Some callback handlers (`meeting.py`, `free_slots.py`) still re-fetch `db_user` via `db.get_user()` instead of using the middleware-injected one — not broken, just duplicated DB calls
 - `meeting.py` and `free_slots.py` duplicate the attendee-picker UI (`_cancel_kb`, `_search_status_kb`, `pick:*` / `search:*` handlers, ~120 lines) — pending extraction into `app/bot/routers/_attendee_picker.py`
-- `start.py:handle_hint` is a 200-line if/elif switch over 12 hint keys — pending refactor into a dict of handlers
+- `free_slots.py` handle_slot_selected / handle_topic_input duplicate meeting create + reply assembly — should reuse `meeting._commit_meeting` + `_build_meeting_reply`

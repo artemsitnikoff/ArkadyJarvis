@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import re
 
@@ -290,8 +291,6 @@ class _BitrixUsersMixin:
     async def _load_email_guests(self):
         if self._email_guests_loaded:
             return
-
-        import asyncio
 
         try:
             result = await self._request("user.get", {"start": 0})
