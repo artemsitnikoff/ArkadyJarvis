@@ -169,10 +169,12 @@ class OpenRouterClient:
                 ],
             }],
             "response_format": {"type": "json_object"},
-            # Gemini 2.5 Pro can emit up to ~65k tokens; a 90-min meeting
-            # diarized JSON easily runs 15-30k. Too low a cap silently
-            # truncates the JSON and we get "Expecting value" at parse time.
-            "max_tokens": 32000,
+            # Gemini 2.5 Pro caps output at 65 536 tokens. A diarized JSON for
+            # a 60-min meeting runs ~25k (12k speech + 14k per-segment overhead);
+            # a 90-min meeting can hit ~40k. We pick 60k to cover the full
+            # MEETING_MAX_MINUTES=90 range with headroom. Too low → Gemini
+            # truncates silently and we get "Expecting value" at parse time.
+            "max_tokens": 60000,
         }
 
         try:
