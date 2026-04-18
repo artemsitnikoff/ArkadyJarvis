@@ -29,6 +29,19 @@ def _format_time(seconds: float) -> str:
     return f"{seconds // 60}:{seconds % 60:02d}"
 
 
+def _explain_empty_content(finish_reason: str | None, refusal: str | None) -> str:
+    """Translate an empty-content response into a short human-facing hint."""
+    if refusal:
+        return f" (модель отказала: {refusal[:120]})"
+    if finish_reason == "content_filter":
+        return " (сработал контент-фильтр — попробуй другую запись)"
+    if finish_reason == "length":
+        return " (ответ обрезан по лимиту токенов — запись слишком длинная)"
+    if finish_reason == "stop":
+        return " (модель завершила вывод с пустым ответом — возможно, в записи не распознана речь)"
+    return f" (finish_reason={finish_reason!r})"
+
+
 def _build_full_text(segments: list[dict]) -> str:
     parts = []
     for seg in segments:
@@ -194,13 +207,33 @@ class OpenRouterClient:
             data = resp.json()
             choice = data["choices"][0]
             finish_reason = choice.get("finish_reason", "?")
-            content = choice["message"]["content"]
+            message = choice.get("message") or {}
+            content = message.get("content")
+            refusal = message.get("refusal")
             if isinstance(content, list):
                 content = "".join(p.get("text", "") for p in content if p.get("type") == "text")
             logger.info(
-                "Transcribe finish_reason=%s content_len=%d usage=%s",
-                finish_reason, len(content or ""), data.get("usage"),
+                "Transcribe finish_reason=%s content_len=%s usage=%s refusal=%r",
+                finish_reason,
+                len(content) if isinstance(content, str) else "n/a",
+                data.get("usage"),
+                refusal,
             )
+
+            if not isinstance(content, str) or not content.strip():
+                # Gemini returned no usable content — usually a safety refusal,
+                # a content-filter block, or finish_reason=length with zero tokens.
+                logger.error(
+                    "Transcribe got empty content: finish_reason=%s refusal=%r "
+                    "usage=%s raw=%s",
+                    finish_reason, refusal, data.get("usage"), str(data)[:500],
+                )
+                reason_hint = _explain_empty_content(finish_reason, refusal)
+                return TranscriptionResult(
+                    success=False,
+                    error=f"модель не вернула текст{reason_hint}",
+                )
+
             parsed = parse_json_response(content)
         except Exception as e:
             # Dump enough of the raw content to diagnose truncation vs. malformed JSON.
