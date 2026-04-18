@@ -31,7 +31,7 @@ app/
       meeting.py           # FSM MeetingSetup — time/date/attendee parsing, Bitrix meeting creation
       free_slots.py        # FSM BookSlot — calendar accessibility + slot booking
       jira_task.py         # FSM CreateTask — Jira issue creation; raw input is reformatted via prompts/jira_task_template.md before ticket creation
-      lead.py              # FSM CreateLead — AI extracts fields -> Bitrix CRM with SOURCE + Telegram contact
+      lead.py              # FSM CreateLead — text or voice; voice is transcribed via OpenRouter; AI extracts fields -> Bitrix CRM with SOURCE + Telegram contact
       image.py             # FSM ImageGen — image generation via OpenRouter/Gemini, supports photo+caption editing
       ask_ai.py            # FSM AskAI — Claude answers, md_to_telegram_html conversion
       contract.py          # FSM ContractCheck — parse PDF/DOCX/TXT, check against rules in prompts/contract_check.md
@@ -53,7 +53,7 @@ app/
     jira_client.py         # JiraClient — async context manager, single integration user from settings
     document_parser.py     # Extract text from .pdf/.docx/.txt for contract check
     openclaw_client.py     # OpenClawClient — HTTP SSE client for OpenClaw gateway (per-user agent isolation via user_id)
-    openrouter_client.py   # OpenRouterClient — image generation (Gemini)
+    openrouter_client.py   # OpenRouterClient — image generation (Gemini) + voice transcription w/ diarization
     prompts.py             # load_prompt(name) — loads templates from prompts/ directory
     potok_client.py        # PotokClient — Potok.io ATS API (jobs, applicants via ajs_joins, scoring push)
     potok_models.py        # Pydantic models: Job, Applicant, Resume, CvParams, ScoringResult, ScoreBreakdown
@@ -223,9 +223,10 @@ Order matters — `buffer.py` must be last (catch-all):
 - On timeout: `proc.kill()` + `await proc.wait()` to prevent zombie processes
 
 ### OpenRouter
-- Used for image generation (Gemini 3 Pro)
-- API key: `OPENROUTER_API_KEY`
+- Used for image generation (Gemini 3 Pro Image) and voice transcription (Gemini 2.5 Pro)
+- API key: `OPENROUTER_API_KEY`, text/audio model: `OPENROUTER_MODEL` (default `google/gemini-2.5-pro`)
 - `generate_image(prompt, image_b64?)` — returns raw PNG bytes
+- `transcribe_voice(ogg_path)` — returns `TranscriptionResult` (success flag, speakers_count, segments with start/end/speaker/text, formatted `full_text` like `S1 [0:00]: …`). Used in Lead router for voice input.
 
 ### Glafira (AI Office Manager via OpenClaw)
 - **OpenClaw** — AI agent that controls browser via prompts (RPA), installed on Mac

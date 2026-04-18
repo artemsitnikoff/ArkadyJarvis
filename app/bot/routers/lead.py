@@ -1,6 +1,8 @@
 import logging
+import os
+import tempfile
 
-from aiogram import Router
+from aiogram import Bot, F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import Message
@@ -34,11 +36,51 @@ EXTRACT_PROMPT = """\
 """
 
 
+@router.message(CreateLead.waiting_for_info, F.voice)
+async def handle_lead_voice(
+    message: Message, state: FSMContext, bot: Bot, ai_client, bitrix, openrouter,
+    db_user=None,
+):
+    logger.info("*** LEAD VOICE: duration=%ss from user=%s", message.voice.duration, message.from_user.id)
+    wait = await message.reply("🎤 Расшифровываю голосовое...")
+
+    ogg_path = None
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".ogg", delete=False) as tmp:
+            ogg_path = tmp.name
+        await bot.download(message.voice, destination=ogg_path)
+
+        result = await openrouter.transcribe_voice(ogg_path)
+    finally:
+        if ogg_path and os.path.exists(ogg_path):
+            try:
+                os.unlink(ogg_path)
+            except Exception as e:
+                logger.warning("Failed to delete temp ogg %s: %s", ogg_path, e)
+
+    if not result.success:
+        await wait.edit_text(
+            f"❌ Не смог расшифровать голосовое: {result.error}\n\n"
+            "Попробуй ещё раз или напиши текстом.",
+        )
+        return
+
+    await wait.edit_text(
+        f"✅ Расшифровка (спикеров: {result.speakers_count}):\n\n"
+        f"<code>{result.full_text}</code>\n\n"
+        "Создаю лид...",
+    )
+    await state.clear()
+    await _create_lead(
+        message, result.full_text, ai_client=ai_client, bitrix=bitrix, db_user=db_user,
+    )
+
+
 @router.message(CreateLead.waiting_for_info)
 async def handle_lead_fsm(message: Message, state: FSMContext, ai_client, bitrix, db_user=None):
     text = (message.text or "").strip()
     if not text:
-        await message.reply("Напиши данные лида текстом.")
+        await message.reply("Напиши данные лида текстом или запиши голосовое.")
         return
     await state.clear()
     await _create_lead(message, text, ai_client=ai_client, bitrix=bitrix, db_user=db_user)

@@ -1,14 +1,44 @@
 import base64
 import logging
 import re
+from dataclasses import dataclass, field
+from pathlib import Path
 
 import httpx
 
 from app.config import settings
+from app.services.prompts import load_prompt
+from app.utils import parse_json_response
 
 logger = logging.getLogger("arkadyjarvis")
 
 BASE_URL = "https://openrouter.ai/api/v1/chat/completions"
+
+
+@dataclass
+class TranscriptionResult:
+    success: bool
+    error: str = ""
+    speakers_count: int = 0
+    segments: list[dict] = field(default_factory=list)
+    full_text: str = ""
+
+
+def _format_time(seconds: float) -> str:
+    seconds = max(0, int(seconds))
+    return f"{seconds // 60}:{seconds % 60:02d}"
+
+
+def _build_full_text(segments: list[dict]) -> str:
+    parts = []
+    for seg in segments:
+        speaker = seg.get("speaker", "S?")
+        start = float(seg.get("start", 0))
+        text = (seg.get("text") or "").strip()
+        if not text:
+            continue
+        parts.append(f"{speaker} [{_format_time(start)}]: {text}")
+    return "\n\n".join(parts)
 
 
 class OpenRouterClient:
@@ -114,3 +144,66 @@ class OpenRouterClient:
             raise ValueError("Модель отказала — возможно, запрос нарушает контент-политику")
 
         raise ValueError("Модель не вернула картинку, попробуй другой промпт")
+
+    async def transcribe_voice(self, ogg_path: str | Path) -> TranscriptionResult:
+        """Transcribe a Telegram voice message (.ogg / OPUS) with speaker diarization."""
+        path = Path(ogg_path)
+        try:
+            audio_b64 = base64.b64encode(path.read_bytes()).decode()
+        except Exception as e:
+            return TranscriptionResult(success=False, error=f"не смог прочитать файл: {e}")
+
+        prompt = load_prompt("voice_transcribe")
+        payload = {
+            "model": settings.openrouter_model,
+            "messages": [{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {"type": "input_audio", "input_audio": {"data": audio_b64, "format": "ogg"}},
+                ],
+            }],
+            "response_format": {"type": "json_object"},
+        }
+
+        try:
+            resp = await self._client.post(BASE_URL, json=payload)
+        except Exception as e:
+            logger.error("Transcribe HTTP error: %s", e, exc_info=True)
+            return TranscriptionResult(success=False, error=str(e))
+
+        if resp.status_code >= 400:
+            body = resp.text[:300]
+            logger.error("Transcribe %d: %s", resp.status_code, body)
+            return TranscriptionResult(
+                success=False, error=f"OpenRouter {resp.status_code}: {body}",
+            )
+
+        try:
+            data = resp.json()
+            content = data["choices"][0]["message"]["content"]
+            if isinstance(content, list):
+                content = "".join(p.get("text", "") for p in content if p.get("type") == "text")
+            parsed = parse_json_response(content)
+        except Exception as e:
+            logger.error("Transcribe parse error: %s", e, exc_info=True)
+            return TranscriptionResult(success=False, error=f"не смог разобрать ответ: {e}")
+
+        segments = parsed.get("segments") or []
+        # Sanity: ensure monotonic timestamps and end >= start
+        for seg in segments:
+            seg["start"] = max(0.0, float(seg.get("start", 0) or 0))
+            seg["end"] = max(seg["start"], float(seg.get("end", seg["start"]) or seg["start"]))
+
+        full_text = _build_full_text(segments)
+        if not full_text:
+            return TranscriptionResult(
+                success=False, error="пустая расшифровка — возможно, тишина или слишком тихо",
+            )
+
+        return TranscriptionResult(
+            success=True,
+            speakers_count=int(parsed.get("speakers_count") or 0),
+            segments=segments,
+            full_text=full_text,
+        )

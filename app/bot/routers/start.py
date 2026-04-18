@@ -264,7 +264,8 @@ async def handle_hint(callback: CallbackQuery, state: FSMContext, bitrix, potok,
         await state.set_state(CreateLead.waiting_for_info)
         await callback.message.answer(
             "💼 <b>Создать лид</b>\n\n"
-            "Напиши данные контакта (имя, компания, телефон, email):",
+            "Напиши данные контакта (имя, компания, телефон, email) "
+            "или запиши голосовое 🎤 — расшифрую и сам разберу поля.",
             reply_markup=BACK_MENU_KB,
         )
         await callback.answer()

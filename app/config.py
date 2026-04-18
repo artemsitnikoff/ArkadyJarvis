@@ -8,6 +8,8 @@ class Settings(BaseSettings):
     bot_token: SecretStr
 
     openrouter_api_key: SecretStr = SecretStr("")
+    # Text/audio model for OpenRouter (used for voice transcription, etc.)
+    openrouter_model: str = "google/gemini-2.5-pro"
 
     # Bitrix24 (shared app — singleton client)
     bitrix_client_id: str = ""
