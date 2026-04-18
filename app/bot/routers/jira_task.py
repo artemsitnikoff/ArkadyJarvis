@@ -1,3 +1,4 @@
+import html as html_mod
 import logging
 import re
 
@@ -102,13 +103,14 @@ async def _create_task(
 
         issue_key = result["key"]
         jira_base = settings.jira_url.rstrip("/")
+        esc = html_mod.escape
         await wait_msg.edit_text(
-            f"✅ Задача создана: {issue_key}\n"
-            f"📝 {summary}\n"
-            f"🔗 {jira_base}/browse/{issue_key}",
+            f"✅ Задача создана: {esc(issue_key)}\n"
+            f"📝 {esc(summary)}\n"
+            f"🔗 {jira_base}/browse/{esc(issue_key)}",
             reply_markup=MENU_KB,
         )
         logger.info("*** Jira issue created: %s", issue_key)
     except Exception as e:
         logger.error("*** ERROR creating Jira issue: %s", e, exc_info=True)
-        await message.reply(f"❌ Ошибка создания задачи: {e}")
+        await message.reply(f"❌ Ошибка создания задачи: {html_mod.escape(str(e))}")

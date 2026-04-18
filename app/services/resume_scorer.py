@@ -1,7 +1,11 @@
 import re
+from typing import TYPE_CHECKING
 
 from app.services.potok_models import Applicant, Job, ScoringResult
 from app.utils import parse_json_response
+
+if TYPE_CHECKING:
+    from app.services.ai_client import AIClient
 
 SCORING_PROMPT = """Ты — эксперт по подбору персонала в IT-компании. Оцени, насколько кандидат подходит под вакансию.
 
@@ -145,12 +149,11 @@ def _parse_response(text: str) -> dict:
     return parse_json_response(text)
 
 
-async def score_applicant(job: Job, applicant: Applicant) -> ScoringResult:
-    from app.services.ai_client import AIClient
-    ai = AIClient()
-
+async def score_applicant(
+    job: Job, applicant: Applicant, *, ai_client: "AIClient",
+) -> ScoringResult:
     prompt = _build_prompt(job, applicant)
-    response_text = await ai.complete(prompt, timeout=300)
+    response_text = await ai_client.complete(prompt, timeout=300)
     result = _parse_response(response_text)
 
     return ScoringResult(

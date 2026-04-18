@@ -1,4 +1,5 @@
 import asyncio
+import html as html_mod
 import logging
 from datetime import datetime
 
@@ -86,11 +87,12 @@ async def _do_create_meeting(
     event_id = result.get("id", "?")
     bitrix_url = f"https://{settings.bitrix_domain}/company/personal/user/{owner_user_id}/calendar/?EVENT_ID={event_id}"
 
-    reply_text = f"✅ Встреча создана: {dt:%d.%m.%Y} в {dt:%H:%M} (id: {event_id})\n🔗 {bitrix_url}"
+    esc = html_mod.escape
+    reply_text = f"✅ Встреча создана: {dt:%d.%m.%Y} в {dt:%H:%M} (id: {esc(str(event_id))})\n🔗 {bitrix_url}"
     if attendee_names:
-        reply_text += f"\n👥 Участники: {', '.join(attendee_names)}"
+        reply_text += f"\n👥 Участники: {esc(', '.join(attendee_names))}"
     if context:
-        reply_text += f"\n📝 {context}"
+        reply_text += f"\n📝 {esc(context)}"
     await message.reply(reply_text, reply_markup=MENU_KB)
 
 
@@ -190,17 +192,18 @@ async def _create_meeting_with_nicks(
     event_id = result.get("id", "?")
     bitrix_url = f"https://{settings.bitrix_domain}/company/personal/user/{owner_user_id}/calendar/?EVENT_ID={event_id}"
 
-    reply_text = f"✅ Встреча создана: {dt:%d.%m.%Y} в {dt:%H:%M} (id: {event_id})\n🔗 {bitrix_url}"
+    esc = html_mod.escape
+    reply_text = f"✅ Встреча создана: {dt:%d.%m.%Y} в {dt:%H:%M} (id: {esc(str(event_id))})\n🔗 {bitrix_url}"
     if found_names:
-        reply_text += f"\n👥 Участники: {', '.join(found_names)}"
+        reply_text += f"\n👥 Участники: {esc(', '.join(found_names))}"
     if external_emails:
-        reply_text += f"\n👥 По email: {', '.join(external_emails)}"
+        reply_text += f"\n👥 По email: {esc(', '.join(external_emails))}"
     if invite_emails:
-        reply_text += f"\n📧 В описании (пригласить вручную): {', '.join(invite_emails)}"
+        reply_text += f"\n📧 В описании (пригласить вручную): {esc(', '.join(invite_emails))}"
     if not_found:
-        reply_text += f"\n⚠️ Не найден: {', '.join(not_found)}"
+        reply_text += f"\n⚠️ Не найден: {esc(', '.join(not_found))}"
     if context:
-        reply_text += f"\n📝 {context}"
+        reply_text += f"\n📝 {esc(context)}"
     await message.reply(reply_text, reply_markup=MENU_KB)
 
 

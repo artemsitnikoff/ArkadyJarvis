@@ -1,3 +1,4 @@
+import html as html_mod
 import logging
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -388,9 +389,10 @@ async def handle_slot_selected(callback: CallbackQuery, state: FSMContext, bitri
         event_id = result.get("id", "?")
         bitrix_url = f"https://{settings.bitrix_domain}/company/personal/user/{owner_user_id}/calendar/?EVENT_ID={event_id}"
 
-        reply = f"✅ Встреча «{topic}» создана: {label}\n🔗 {bitrix_url}"
+        esc = html_mod.escape
+        reply = f"✅ Встреча «{esc(topic)}» создана: {esc(label)}\n🔗 {bitrix_url}"
         if attendee_names:
-            reply += f"\n👥 Участники: {', '.join(attendee_names)}"
+            reply += f"\n👥 Участники: {esc(', '.join(attendee_names))}"
         await callback.message.reply(reply, reply_markup=MENU_KB)
         await state.clear()
         logger.info("*** Meeting booked from free slots: %s %s attendees=%s", topic, label, attendee_ids)
@@ -435,9 +437,10 @@ async def handle_topic_input(message: Message, state: FSMContext, db_user: DbUse
     event_id = result.get("id", "?")
     bitrix_url = f"https://{settings.bitrix_domain}/company/personal/user/{owner_user_id}/calendar/?EVENT_ID={event_id}"
 
-    reply = f"✅ Встреча «{topic}» создана: {label}\n🔗 {bitrix_url}"
+    esc = html_mod.escape
+    reply = f"✅ Встреча «{esc(topic)}» создана: {esc(label)}\n🔗 {bitrix_url}"
     if attendee_names:
-        reply += f"\n👥 Участники: {', '.join(attendee_names)}"
+        reply += f"\n👥 Участники: {esc(', '.join(attendee_names))}"
     await message.reply(reply, reply_markup=MENU_KB)
     await state.clear()
     logger.info("*** Meeting booked from free slots: %s %s attendees=%s", topic, label, attendee_ids)

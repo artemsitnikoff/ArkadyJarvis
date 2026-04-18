@@ -1,3 +1,4 @@
+import html as html_mod
 import logging
 import os
 import tempfile
@@ -67,7 +68,7 @@ async def handle_lead_voice(
 
     await wait.edit_text(
         f"✅ Расшифровка (спикеров: {result.speakers_count}):\n\n"
-        f"<code>{result.full_text}</code>\n\n"
+        f"<code>{html_mod.escape(result.full_text)}</code>\n\n"
         "Создаю лид...",
     )
     await state.clear()
@@ -122,18 +123,19 @@ async def _create_lead(message: Message, text: str, *, ai_client, bitrix, db_use
     lead_id = result.get("id", "?")
     bitrix_url = f"https://{settings.bitrix_domain}/crm/lead/details/{lead_id}/"
 
-    reply_parts = [f"✅ Лид создан (id: {lead_id})"]
-    reply_parts.append(f"📋 {fields['TITLE']}")
+    esc = html_mod.escape
+    reply_parts = [f"✅ Лид создан (id: {esc(str(lead_id))})"]
+    reply_parts.append(f"📋 {esc(fields['TITLE'])}")
     reply_parts.append(f"🔗 {bitrix_url}")
     name = " ".join(filter(None, [fields.get("NAME"), fields.get("LAST_NAME")]))
     if name:
-        reply_parts.append(f"👤 {name}")
+        reply_parts.append(f"👤 {esc(name)}")
     if fields.get("COMPANY_TITLE"):
-        reply_parts.append(f"🏢 {fields['COMPANY_TITLE']}")
+        reply_parts.append(f"🏢 {esc(fields['COMPANY_TITLE'])}")
     if parsed.get("PHONE"):
-        reply_parts.append(f"📞 {parsed['PHONE']}")
+        reply_parts.append(f"📞 {esc(parsed['PHONE'])}")
     if parsed.get("EMAIL"):
-        reply_parts.append(f"📧 {parsed['EMAIL']}")
+        reply_parts.append(f"📧 {esc(parsed['EMAIL'])}")
 
     await message.reply("\n".join(reply_parts), reply_markup=MENU_KB)
     logger.info("*** Lead created: id=%s fields=%s", lead_id, fields)

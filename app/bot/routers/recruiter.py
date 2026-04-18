@@ -203,7 +203,7 @@ async def handle_job_selected(callback: CallbackQuery, state: FSMContext, potok)
 
 
 async def _run_scoring(
-    callback: CallbackQuery, state: FSMContext, potok, job, applicants,
+    callback: CallbackQuery, state: FSMContext, potok, ai_client, job, applicants,
 ):
     """Common scoring loop for both new and rescore modes."""
     await state.set_state(Recruiter.scoring)
@@ -233,7 +233,7 @@ async def _run_scoring(
         )
 
         try:
-            result = await score_applicant(job, applicant)
+            result = await score_applicant(job, applicant, ai_client=ai_client)
 
             text = _format_result_message(job_name, i, total, result, name)
             if len(text) > 4096:
@@ -277,16 +277,20 @@ async def _run_scoring(
 
 
 @router.callback_query(F.data.startswith("recruit:score:"), Recruiter.confirming)
-async def handle_score_new(callback: CallbackQuery, state: FSMContext, potok):
+async def handle_score_new(callback: CallbackQuery, state: FSMContext, potok, ai_client):
     """Score only new (unscored) candidates."""
     await callback.answer()
     data = await state.get_data()
-    await _run_scoring(callback, state, potok, data["job"], data["new_applicants"])
+    await _run_scoring(
+        callback, state, potok, ai_client, data["job"], data["new_applicants"],
+    )
 
 
 @router.callback_query(F.data.startswith("recruit:rescore:"), Recruiter.confirming)
-async def handle_rescore_all(callback: CallbackQuery, state: FSMContext, potok):
+async def handle_rescore_all(callback: CallbackQuery, state: FSMContext, potok, ai_client):
     """Re-score all candidates (including already scored)."""
     await callback.answer()
     data = await state.get_data()
-    await _run_scoring(callback, state, potok, data["job"], data["all_applicants"])
+    await _run_scoring(
+        callback, state, potok, ai_client, data["job"], data["all_applicants"],
+    )
