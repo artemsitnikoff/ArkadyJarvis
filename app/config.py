@@ -10,6 +10,9 @@ class Settings(BaseSettings):
     openrouter_api_key: SecretStr = SecretStr("")
     # Text/audio model for OpenRouter (used for voice transcription, etc.)
     openrouter_model: str = "google/gemini-2.5-pro"
+    # HTTP timeout for OpenRouter calls. Long voice transcriptions may need
+    # > 120s — crank this up if Gemini truncates replies on big audio files.
+    openrouter_timeout: float = 300.0
 
     # Bitrix24 (shared app — singleton client)
     bitrix_client_id: str = ""

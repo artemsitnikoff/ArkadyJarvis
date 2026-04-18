@@ -291,6 +291,8 @@ class _BitrixUsersMixin:
         if self._email_guests_loaded:
             return
 
+        import asyncio
+
         result = await self._request("user.get", {"start": 0})
         total_regular = result.get("total", 0)
         max_id = max(total_regular * 3, 2000)
@@ -301,8 +303,12 @@ class _BitrixUsersMixin:
             ids = list(range(start, min(start + chunk_size, max_id + 1)))
             all_chunks.append(ids)
 
-        # Group chunks into batches of 50 (Bitrix batch limit)
+        # Group chunks into batches of 50 (Bitrix batch limit) and throttle
+        # between batches to avoid overloading the Bitrix REST endpoint.
         batch_limit = 50
+        inter_batch_delay = 0.3
+        total_batches = (len(all_chunks) + batch_limit - 1) // batch_limit
+        errors = 0
         for i in range(0, len(all_chunks), batch_limit):
             batch_chunks = all_chunks[i:i + batch_limit]
             commands = {
@@ -312,7 +318,13 @@ class _BitrixUsersMixin:
 
             try:
                 results = await self._batch_request(commands)
-            except Exception:
+            except Exception as e:
+                errors += 1
+                logger.warning(
+                    "Email-guests batch %d/%d failed: %s",
+                    i // batch_limit + 1, total_batches, e,
+                )
+                await asyncio.sleep(inter_batch_delay)
                 continue
 
             for key, user_map in results.items():
@@ -323,8 +335,14 @@ class _BitrixUsersMixin:
                         email = u["email"].lower()
                         self._email_guests_cache[email] = (u["id"], u.get("name", ""))
 
+            if i + batch_limit < len(all_chunks):
+                await asyncio.sleep(inter_batch_delay)
+
         self._email_guests_loaded = True
-        logger.info("Loaded %d email guests from Bitrix", len(self._email_guests_cache))
+        logger.info(
+            "Loaded %d email guests from Bitrix (batches=%d, errors=%d)",
+            len(self._email_guests_cache), total_batches, errors,
+        )
 
     async def resolve_email_user(self, email: str) -> tuple[int | None, str | None]:
         uid, name = await self.find_user_by_email(email)

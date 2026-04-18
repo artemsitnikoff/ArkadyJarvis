@@ -395,9 +395,9 @@ async def handle_hint(callback: CallbackQuery, state: FSMContext, bitrix, potok,
 
 async def _run_summary(callback: CallbackQuery, ai_client, bot=None):
     """Run summarization. In DM: overview of all groups. In group: summarize current chat."""
-    from datetime import datetime
     from zoneinfo import ZoneInfo
-    from app.summarizer import summarize_from_buffer, summarize_messages, build_daily_overview
+
+    from app.summarizer import build_daily_overview, summarize_from_buffer, summarize_messages
 
     await callback.answer()
     tz = ZoneInfo(settings.timezone)
@@ -462,11 +462,10 @@ def _work_status_line(person: dict) -> str:
         if start:
             try:
                 # Try ISO format: 2024-03-15T09:00:00+07:00
-                from datetime import datetime as _dt
                 if "T" in start:
-                    dt = _dt.fromisoformat(start)
+                    dt = datetime.fromisoformat(start)
                 else:
-                    dt = _dt.strptime(start, "%d.%m.%Y %H:%M:%S")
+                    dt = datetime.strptime(start, "%d.%m.%Y %H:%M:%S")
                 time_str = f" (с {dt.strftime('%H:%M')})"
             except (ValueError, TypeError):
                 pass

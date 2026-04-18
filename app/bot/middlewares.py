@@ -1,5 +1,4 @@
 import logging
-import re
 from typing import Any, Awaitable, Callable
 
 from aiogram import BaseMiddleware
@@ -8,6 +7,14 @@ from aiogram.types import CallbackQuery, Message, TelegramObject
 from app import db
 
 logger = logging.getLogger("arkadyjarvis")
+
+# Slash commands that don't require auth. Everything else (menu buttons,
+# /summary in groups, etc.) is either gated by handler-level access checks
+# (GLAFIRA_ALLOWED, RECRUITER_ALLOWED) or relies on db_user being present.
+PUBLIC_COMMANDS = {"/start", "/help"}
+
+# /summary is the only text command that needs auth+is not a slash-menu button.
+AUTH_COMMANDS = {"/summary"}
 
 
 class ErrorMiddleware(BaseMiddleware):
@@ -46,56 +53,23 @@ class ErrorMiddleware(BaseMiddleware):
             return None
 
 
-PUBLIC_COMMANDS = {"/start", "/help"}
-
-# Triggers that require authorization
-AUTH_TRIGGERS = [
-    re.compile(r"(?i)^(сделай|создай)\s+встречу"),
-    re.compile(r"(?i)^найди\s+время"),
-    re.compile(r"(?i)^(сделай|создай)\s+задачу"),
-    re.compile(r"(?i)^(сделай|создай)\s+лид"),
-    re.compile(r"(?i)^(нарисуй|сгенерируй|картинк)"),
-    re.compile(r"(?i)^(спроси\s+ai|вопрос)\s"),
-]
-
-
-def _needs_auth(text: str) -> bool:
-    """Check if this message is a command/trigger that requires auth."""
-    first_word = text.split()[0].split("@")[0] if text else ""
-    if first_word in {"/summary"}:
-        return True
-    if text.lower().strip() == "суммаризация":
-        return True
-    return any(p.match(text) for p in AUTH_TRIGGERS)
-
-
-def _would_trigger_response(text: str) -> bool:
-    """Check if this message would trigger any bot response."""
-    if not text:
-        return False
-    stripped = text.strip()
-    # Any /command
-    if stripped.startswith("/"):
-        return True
-    lower = stripped.lower()
-    # суммаризация trigger
-    if lower == "суммаризация":
-        return True
-    # ситников (auto_reply) — substring match
-    if "ситников" in lower:
-        return True
-    # AUTH_TRIGGERS (meetings, tasks, leads, images, AI)
-    return any(p.match(stripped) for p in AUTH_TRIGGERS)
+def _first_word(text: str) -> str:
+    return text.split()[0].split("@")[0] if text else ""
 
 
 class AuthMiddleware(BaseMiddleware):
-    """Inject `db_user` into handler data for both messages and callbacks,
-    and gate auth-required message triggers.
+    """Inject `db_user` into handler data and gate auth-required commands.
 
-    Only /start and /help are public. Group messages without triggers
-    pass through freely (for buffering). Callback queries always get
-    `db_user` injected — individual callbacks enforce their own access
-    rules (e.g. GLAFIRA_ALLOWED, RECRUITER_ALLOWED).
+    Messages:
+      - /start and /help pass through without auth;
+      - In muted groups the bot stays silent for any slash command
+        (and replies only to explicit /commands with a short mute notice);
+      - /summary requires an authorized user.
+
+    Callback queries:
+      - always get `db_user` injected;
+      - handlers enforce their own access rules (GLAFIRA_ALLOWED,
+        RECRUITER_ALLOWED, etc.).
     """
 
     async def __call__(
@@ -104,8 +78,7 @@ class AuthMiddleware(BaseMiddleware):
         event: TelegramObject,
         data: dict[str, Any],
     ) -> Any:
-        # Callback queries — inject db_user for handlers, no auth gate
-        # (handlers themselves decide whether auth is needed).
+        # Callback queries — inject db_user and hand over to handlers.
         if isinstance(event, CallbackQuery):
             user = await db.get_user(event.from_user.id) if event.from_user else None
             data["db_user"] = user
@@ -115,15 +88,17 @@ class AuthMiddleware(BaseMiddleware):
             return await handler(event, data)
 
         # ── Message handling ─────────────────────────────────────
-        # Public commands — always allow
-        if event.text and event.text.split()[0].split("@")[0] in PUBLIC_COMMANDS:
+        first = _first_word(event.text or "")
+
+        # Public slash commands — always allow.
+        if first in PUBLIC_COMMANDS:
             return await handler(event, data)
 
-        # Muted groups — bot collects messages but doesn't respond to triggers
+        # Muted groups — bot collects messages but refuses to respond to
+        # slash commands with a short notice; everything else is buffered.
         if event.chat.type in ("group", "supergroup"):
             if await db.is_group_muted(event.chat.id):
-                text = event.text or event.caption or ""
-                if _would_trigger_response(text):
+                if first.startswith("/"):
                     await event.reply(
                         "Мне запретили отвечать в этой группе. "
                         "Группа внесена в список исключений."
@@ -131,19 +106,16 @@ class AuthMiddleware(BaseMiddleware):
                     return None
                 return await handler(event, data)
 
-        # Load user if exists
+        # Load user if exists.
         user = await db.get_user(event.from_user.id) if event.from_user else None
         data["db_user"] = user
 
-        # Check if this message needs auth (text or photo caption)
-        text = event.text or event.caption or ""
-        if _needs_auth(text):
-            if not user or not user.get("bitrix_user_id"):
-                # In groups — short reply, in PM — full message
-                if event.chat.type in ("group", "supergroup"):
-                    await event.reply("Сначала авторизуйся: напиши мне /start в личку")
-                else:
-                    await event.answer("Сначала авторизуйся через /start")
-                return None
+        # Auth-required slash commands.
+        if first in AUTH_COMMANDS and (not user or not user.get("bitrix_user_id")):
+            if event.chat.type in ("group", "supergroup"):
+                await event.reply("Сначала авторизуйся: напиши мне /start в личку")
+            else:
+                await event.answer("Сначала авторизуйся через /start")
+            return None
 
         return await handler(event, data)

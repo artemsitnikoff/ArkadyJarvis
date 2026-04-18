@@ -1,13 +1,20 @@
+import asyncio
 import json
 import logging
 import time
 from pathlib import Path
 
+from aiogram.exceptions import TelegramRetryAfter
 from fastapi import APIRouter, Header, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from app import db
 from app.config import settings
+
+# Telegram bot API allows ≈30 broadcast messages/sec. We throttle conservatively
+# at 20/sec (50 ms between sends) — well under the limit and lets a 500-user
+# broadcast finish in ~25 s without floodwaits.
+_BROADCAST_INTERVAL = 0.05
 
 logger = logging.getLogger("arkadyjarvis")
 router = APIRouter()
@@ -154,12 +161,26 @@ async def bitrix_broadcast(
     sent = 0
     failed = 0
     for user in users:
+        tg_id = user["telegram_id"]
         try:
-            await bot.send_message(user["telegram_id"], body.text)
+            await bot.send_message(tg_id, body.text)
             sent += 1
+        except TelegramRetryAfter as e:
+            # Telegram asked us to back off — wait then retry once.
+            logger.warning(
+                "Broadcast rate-limited (tg=%s), sleeping %ss", tg_id, e.retry_after,
+            )
+            await asyncio.sleep(e.retry_after)
+            try:
+                await bot.send_message(tg_id, body.text)
+                sent += 1
+            except Exception as retry_err:
+                logger.warning("Broadcast retry failed for tg=%s: %s", tg_id, retry_err)
+                failed += 1
         except Exception as e:
-            logger.warning("Broadcast failed for tg=%s: %s", user["telegram_id"], e)
+            logger.warning("Broadcast failed for tg=%s: %s", tg_id, e)
             failed += 1
+        await asyncio.sleep(_BROADCAST_INTERVAL)
 
     logger.info("Webhook broadcast: sent=%d, failed=%d", sent, failed)
     return BroadcastResponse(ok=True, sent=sent, failed=failed)

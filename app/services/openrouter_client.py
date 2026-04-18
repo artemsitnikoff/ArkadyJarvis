@@ -46,7 +46,7 @@ class OpenRouterClient:
 
     def __init__(self):
         self._client = httpx.AsyncClient(
-            timeout=120,
+            timeout=settings.openrouter_timeout,
             headers={
                 "Authorization": f"Bearer {settings.openrouter_api_key.get_secret_value()}",
                 "Content-Type": "application/json",

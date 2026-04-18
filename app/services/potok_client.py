@@ -1,4 +1,5 @@
 import asyncio
+import html as html_mod
 import logging
 import re
 
@@ -6,6 +7,11 @@ import httpx
 
 from app.config import settings
 from app.services.potok_models import Applicant, Job, ScoringResult
+
+# Limit concurrent applicant fetches across the whole client — Potok
+# rate-limits aggressively, and parallel score_new/rescore_all flows could
+# otherwise double the load on the /applicants/{id} endpoint.
+_FETCH_SEMAPHORE = asyncio.Semaphore(5)
 
 logger = logging.getLogger("arkadyjarvis")
 
@@ -93,22 +99,23 @@ class PotokClient:
         return ids
 
     async def _fetch_applicant(self, applicant_id: int, retries: int = 3) -> dict:
-        """Fetch single applicant by ID with retry on 429."""
-        last_status = None
-        for attempt in range(retries + 1):
-            resp = await self._client.get(f"/api/v3/applicants/{applicant_id}.json")
-            last_status = resp.status_code
-            if resp.status_code == 429:
-                if attempt < retries:
-                    delay = float(resp.headers.get("Retry-After", 2))
-                    await asyncio.sleep(delay)
-                    continue
-            resp.raise_for_status()
-            return resp.json()
-        raise RuntimeError(
-            f"Potok: applicant {applicant_id} unreachable after {retries + 1} "
-            f"attempts (last status {last_status})"
-        )
+        """Fetch single applicant by ID with retry on 429. Concurrency-limited."""
+        async with _FETCH_SEMAPHORE:
+            last_status = None
+            for attempt in range(retries + 1):
+                resp = await self._client.get(f"/api/v3/applicants/{applicant_id}.json")
+                last_status = resp.status_code
+                if resp.status_code == 429:
+                    if attempt < retries:
+                        delay = float(resp.headers.get("Retry-After", 2))
+                        await asyncio.sleep(delay)
+                        continue
+                resp.raise_for_status()
+                return resp.json()
+            raise RuntimeError(
+                f"Potok: applicant {applicant_id} unreachable after {retries + 1} "
+                f"attempts (last status {last_status})"
+            )
 
     async def get_applicants_for_job(
         self,
@@ -163,15 +170,16 @@ class PotokClient:
             else "Слабо"
         )
 
+        esc = html_mod.escape
         breakdown_html = ""
         if result.breakdown:
             rows = ""
             for b in result.breakdown:
                 rows += (
                     f"<tr>"
-                    f"<td style='padding:4px 8px'>{b.criterion}</td>"
+                    f"<td style='padding:4px 8px'>{esc(b.criterion)}</td>"
                     f"<td style='padding:4px 8px;text-align:center'><b>{b.score}</b></td>"
-                    f"<td style='padding:4px 8px'>{b.comment}</td>"
+                    f"<td style='padding:4px 8px'>{esc(b.comment)}</td>"
                     f"</tr>"
                 )
             breakdown_html = (
@@ -192,12 +200,18 @@ class PotokClient:
                 f"</table>"
             )
 
-        strengths = "".join(f"<li>{s}</li>" for s in result.strengths) if result.strengths else "<li>нет</li>"
-        weaknesses = "".join(f"<li>{s}</li>" for s in result.weaknesses) if result.weaknesses else "<li>нет</li>"
+        strengths = (
+            "".join(f"<li>{esc(s)}</li>" for s in result.strengths)
+            if result.strengths else "<li>нет</li>"
+        )
+        weaknesses = (
+            "".join(f"<li>{esc(s)}</li>" for s in result.weaknesses)
+            if result.weaknesses else "<li>нет</li>"
+        )
 
         comment = (
             f"<h3>🤖 Оценка AI: {result.score}/100 ({label})</h3>"
-            f"<p>{result.reasoning}</p>"
+            f"<p>{esc(result.reasoning)}</p>"
             f"{breakdown_html}"
             f"<br>"
             f"<b>✅ Сильные стороны:</b>"

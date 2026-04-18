@@ -98,7 +98,7 @@ def _format_skills(cv_params) -> str:
     return ", ".join(skills) if skills else "Не указаны"
 
 
-def _extract_recruiter_instructions(description: str) -> tuple[str, str]:
+def extract_recruiter_instructions(description: str) -> tuple[str, str]:
     if not description:
         return description, ""
     match = re.search(r"(?:Важно для CLAUDE[:\s])(.*)", description, re.DOTALL | re.IGNORECASE)
@@ -115,7 +115,7 @@ def _build_prompt(job: Job, applicant: Applicant) -> str:
         cv_params = applicant.resumes[0].cv_params
 
     raw_desc = job.description or "Не указано"
-    clean_desc, instructions = _extract_recruiter_instructions(raw_desc)
+    clean_desc, instructions = extract_recruiter_instructions(raw_desc)
 
     recruiter_block = ""
     if instructions:

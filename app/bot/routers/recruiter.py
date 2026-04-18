@@ -14,7 +14,7 @@ from aiogram.types import (
 from app.bot.routers.start import MENU_KB
 from app.config import settings
 from app.services.resume_scorer import score_applicant
-from app.services.resume_scorer import _extract_recruiter_instructions
+from app.services.resume_scorer import extract_recruiter_instructions
 
 logger = logging.getLogger("arkadyjarvis")
 router = Router()
@@ -121,7 +121,7 @@ async def handle_job_selected(callback: CallbackQuery, state: FSMContext, potok)
         return
 
     raw_desc = job.description or ""
-    clean_desc, recruiter_instructions = _extract_recruiter_instructions(raw_desc)
+    clean_desc, recruiter_instructions = extract_recruiter_instructions(raw_desc)
     job_name = html_mod.escape(job.name)
 
     info_lines = [f"👔 <b>{job_name}</b>", ""]

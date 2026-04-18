@@ -60,7 +60,33 @@ def _search_results_kb(users: list[dict]) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-# ── Helper ────────────────────────────────────────────────────
+# ── Helpers ───────────────────────────────────────────────────
+
+def _build_meeting_reply(
+    dt: datetime,
+    event_id,
+    bitrix_url: str,
+    *,
+    found_names: list[str] | None = None,
+    external_emails: list[str] | None = None,
+    invite_emails: list[str] | None = None,
+    not_found: list[str] | None = None,
+    context: str = "",
+) -> str:
+    esc = html_mod.escape
+    text = f"✅ Встреча создана: {dt:%d.%m.%Y} в {dt:%H:%M} (id: {esc(str(event_id))})\n🔗 {bitrix_url}"
+    if found_names:
+        text += f"\n👥 Участники: {esc(', '.join(found_names))}"
+    if external_emails:
+        text += f"\n👥 По email: {esc(', '.join(external_emails))}"
+    if invite_emails:
+        text += f"\n📧 В описании (пригласить вручную): {esc(', '.join(invite_emails))}"
+    if not_found:
+        text += f"\n⚠️ Не найден: {esc(', '.join(not_found))}"
+    if context:
+        text += f"\n📝 {esc(context)}"
+    return text
+
 
 async def _do_create_meeting(
     message: Message,
@@ -87,12 +113,11 @@ async def _do_create_meeting(
     event_id = result.get("id", "?")
     bitrix_url = f"https://{settings.bitrix_domain}/company/personal/user/{owner_user_id}/calendar/?EVENT_ID={event_id}"
 
-    esc = html_mod.escape
-    reply_text = f"✅ Встреча создана: {dt:%d.%m.%Y} в {dt:%H:%M} (id: {esc(str(event_id))})\n🔗 {bitrix_url}"
-    if attendee_names:
-        reply_text += f"\n👥 Участники: {esc(', '.join(attendee_names))}"
-    if context:
-        reply_text += f"\n📝 {esc(context)}"
+    reply_text = _build_meeting_reply(
+        dt, event_id, bitrix_url,
+        found_names=attendee_names,
+        context=context,
+    )
     await message.reply(reply_text, reply_markup=MENU_KB)
 
 
@@ -192,18 +217,14 @@ async def _create_meeting_with_nicks(
     event_id = result.get("id", "?")
     bitrix_url = f"https://{settings.bitrix_domain}/company/personal/user/{owner_user_id}/calendar/?EVENT_ID={event_id}"
 
-    esc = html_mod.escape
-    reply_text = f"✅ Встреча создана: {dt:%d.%m.%Y} в {dt:%H:%M} (id: {esc(str(event_id))})\n🔗 {bitrix_url}"
-    if found_names:
-        reply_text += f"\n👥 Участники: {esc(', '.join(found_names))}"
-    if external_emails:
-        reply_text += f"\n👥 По email: {esc(', '.join(external_emails))}"
-    if invite_emails:
-        reply_text += f"\n📧 В описании (пригласить вручную): {esc(', '.join(invite_emails))}"
-    if not_found:
-        reply_text += f"\n⚠️ Не найден: {esc(', '.join(not_found))}"
-    if context:
-        reply_text += f"\n📝 {esc(context)}"
+    reply_text = _build_meeting_reply(
+        dt, event_id, bitrix_url,
+        found_names=found_names,
+        external_emails=external_emails,
+        invite_emails=invite_emails,
+        not_found=not_found,
+        context=context,
+    )
     await message.reply(reply_text, reply_markup=MENU_KB)
 
 
