@@ -38,6 +38,7 @@ app/
       contract.py          # FSM ContractCheck — parse PDF/DOCX/TXT, check against rules in prompts/contract_check.md
       employee.py          # FSM FindEmployee + employee card display
       cicero.py            # FSM Cicero — legal consultant (RU law), persistent chat with optional document attachments
+      socrates.py          # FSM Socrates — meeting analyser (Yandex.Disk/direct URL → ffmpeg → transcript → review → expertise)
       glafira.py           # Glafira (AI office manager) — FSM chatting mode, OpenClaw streaming
       recruiter.py         # Анатолий (AI recruiter) — Potok.io integration, candidate scoring via injected AIClient
       work.py              # Work day start logic (start_work_day callback handler with AI greeting)
@@ -55,6 +56,9 @@ app/
       _users.py             # _BitrixUsersMixin — user lookup, email guests, find_user_by_nickname, get_my_team
     jira_client.py         # JiraClient — async context manager (timeout=30s); retries create_issue without assignee on "cannot be assigned"
     document_parser.py     # Extract text from .pdf/.docx/.txt for contract check and Cicero
+    ffmpeg_tool.py         # ffmpeg/ffprobe wrappers (convert_to_opus, probe_duration) — Socrates stage 0
+    meeting_downloader.py  # Download recording from Yandex.Disk public API or direct URL
+    meeting_pipeline.py    # Socrates orchestration: transcribe → review → expertise
     openclaw_client.py     # OpenClawClient — HTTP SSE client for OpenClaw gateway (per-user agent isolation via user_id)
     openrouter_client.py   # OpenRouterClient — image generation (Gemini 3 Pro Image) + voice transcription w/ diarization (Gemini 2.5 Pro)
     prompts.py             # load_prompt(name) — loads templates from prompts/ directory
@@ -99,7 +103,7 @@ scripts/
 
 ### Router Registration Order (in `create.py`)
 Order matters — `buffer.py` must be last (catch-all):
-1. start → 2. summarize → 3. meeting → 4. free_slots → 5. jira_task → 6. lead → 7. image → 8. ask_ai → 9. contract → 10. employee → 11. cicero → 12. glafira → 13. recruiter → 14. group → 15. buffer
+1. start → 2. summarize → 3. meeting → 4. free_slots → 5. jira_task → 6. lead → 7. image → 8. ask_ai → 9. contract → 10. employee → 11. cicero → 12. socrates → 13. glafira → 14. recruiter → 15. group → 16. buffer
 
 ### Authorization Flow
 1. User sends `/start` → bot looks up `@username` in Bitrix field (configured via `BITRIX_TELEGRAM_FIELD`, default `UF_USR_1678964886664`)
@@ -174,6 +178,28 @@ All MENU_KB buttons are interactive — clicking opens a working mode via FSM st
 - Prompt + text sent to `AIClient.complete(timeout=300)`
 - Document text truncated to 120K chars to fit context
 - Short answers sent as HTML text; long answers sent as `.md` attachment with a short preview caption (avoids breaking HTML entities across chunks)
+
+### Socrates (Meeting Analyser)
+- Entry: "Сократ" button → FSM `Socrates.waiting_for_url` — user posts a URL to the recording
+- Telegram bot uploads cap at 20 MB, so **only URLs are accepted** (Yandex.Disk public links are auto-resolved via `cloud-api.yandex.net`; direct HTTPs URLs work too)
+- Stage 0: `meeting_downloader.download_meeting()` streams to a temp dir (ceiling 1 GiB) → `ffmpeg_tool.convert_to_opus()` produces mono 16 kHz opus @ 24 kbps → `probe_duration()` via ffprobe
+- Meetings longer than `MEETING_MAX_MINUTES` (default 90) are rejected with a clear message — long recordings would overflow the OpenRouter base64 payload
+- Stage 1: `OpenRouterClient.transcribe_voice()` → diarized markdown transcript
+- Stage 2: Claude CLI with `prompts/meeting_review.md` → meeting review
+- Stage 3: Claude CLI with `prompts/meeting_expertise.md` + transcript + review → executor's expertise (checklist, red flags, questions for the next meeting)
+- All three artifacts are delivered as `.md` file attachments
+- Temp directory (downloaded file + ogg) is wiped in `finally`
+- `ffmpeg` is installed in the Docker image (apt package)
+
+### Prompt files
+- `contract_check.md` — contract validation checklist
+- `cicero.md` — legal consultant system prompt
+- `jira_task_template.md` — raw task description → structured Jira ticket
+- `voice_transcribe.md` — diarization prompt (used by both Lead voice input and Socrates stage 1)
+- `wednesday_frog.md` — Wed 10:00 meme generator
+- `monday_poster.md` — Mon 09:00 constructivist IT poster
+- `meeting_review.md` — Socrates stage 2 (review)
+- `meeting_expertise.md` — Socrates stage 3 (executor's expertise)
 
 ### Cicero (Legal Consultant)
 - Entry: "Цицерон" button → FSM `Cicero.chatting` (persistent — multiple questions in a row)
@@ -318,6 +344,8 @@ Webhook: `WEBHOOK_TOKEN` (shared secret for incoming B24 webhooks, header `X-Web
 Access control: `GLAFIRA_ALLOWED` (comma-separated Telegram IDs), `RECRUITER_ALLOWED` (comma-separated Telegram IDs)
 
 Scheduled content: `WEDNESDAY_FROG_CHAT_ID` (default 0 = disabled), `MONDAY_POSTER_CHAT_ID` (default 0 = disabled)
+
+Socrates: `FFMPEG_BIN` (default `ffmpeg`), `MEETING_MAX_MINUTES` (default 90)
 
 Other: `DB_PATH` (default `data/arkadyjarvis.db`), `SUMMARY_HOUR` (default 19), `SUMMARY_MINUTE` (default 0), `TIMEZONE` (default `Asia/Novosibirsk`)
 

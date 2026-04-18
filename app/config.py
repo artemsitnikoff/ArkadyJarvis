@@ -68,6 +68,10 @@ class Settings(BaseSettings):
     # Monday motivational Soviet-style poster — sent every Monday 09:00 local time. 0 = disabled.
     monday_poster_chat_id: int = 0
 
+    # Socrates meeting analyser
+    ffmpeg_bin: str = "ffmpeg"
+    meeting_max_minutes: int = 90  # reject longer recordings (OpenRouter base64 limit)
+
     @field_validator("summary_hour")
     @classmethod
     def validate_summary_hour(cls, v: int) -> int:

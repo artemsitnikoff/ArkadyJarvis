@@ -1,7 +1,8 @@
 FROM python:3.11-slim
 
 # Node.js + Claude CLI for resume scoring (Recruiter Anatoly)
-RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates && \
+# ffmpeg for Socrates meeting pipeline (video/audio → opus conversion)
+RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates ffmpeg && \
     curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
     apt-get install -y --no-install-recommends nodejs && \
     npm install -g @anthropic-ai/claude-code && \

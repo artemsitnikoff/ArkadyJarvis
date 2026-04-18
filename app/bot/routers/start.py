@@ -49,6 +49,9 @@ MENU_KB = InlineKeyboardMarkup(inline_keyboard=[
         InlineKeyboardButton(text="⚖️ Цицерон", callback_data="hint:cicero"),
     ],
     [
+        InlineKeyboardButton(text="🎓 Сократ", callback_data="hint:socrates"),
+    ],
+    [
         InlineKeyboardButton(text="🤖 Глафира", callback_data="hint:glafira"),
         InlineKeyboardButton(text="👔 Анатолий", callback_data="hint:recruiter"),
     ],
@@ -209,6 +212,7 @@ def _simple_fsm_hints() -> dict[str, tuple]:
     from app.bot.routers.jira_task import CreateTask
     from app.bot.routers.lead import CreateLead
     from app.bot.routers.meeting import MeetingSetup
+    from app.bot.routers.socrates import Socrates
 
     return {
         "employee": (
@@ -272,6 +276,18 @@ def _simple_fsm_hints() -> dict[str, tuple]:
             "с вопросом в подписи. Отвечу по российскому законодательству "
             "(ГК, КоАП, АПК, НК РФ, КонсультантПлюс).\n\n"
             "Можно задавать вопросы подряд. Выход — «◀️ Меню».",
+            None,
+        ),
+        "socrates": (
+            Socrates.waiting_for_url,
+            "🎓 <b>Сократ</b> — аналитик встреч\n\n"
+            "Пришли <b>ссылку</b> на запись встречи (Яндекс.Диск / Telemost / "
+            "прямой URL). Я скачаю её, сожму, расшифрую с диаризацией и дам:\n"
+            "1. Транскрипт\n"
+            "2. Ревью встречи\n"
+            "3. Исполнительскую экспертизу\n\n"
+            "⚠️ Встречи длиннее 90 минут пока не обрабатываю. "
+            "Файл-видео напрямую не принимаю (Telegram режет upload на 20 МБ).",
             None,
         ),
     }

@@ -27,6 +27,7 @@ def create_dispatcher() -> Dispatcher:
     from app.bot.routers.contract import router as contract_router
     from app.bot.routers.employee import router as employee_router
     from app.bot.routers.cicero import router as cicero_router
+    from app.bot.routers.socrates import router as socrates_router
     from app.bot.routers.glafira import router as glafira_router
     from app.bot.routers.recruiter import router as recruiter_router
     from app.bot.routers.group import router as group_router
@@ -44,6 +45,7 @@ def create_dispatcher() -> Dispatcher:
         contract_router,
         employee_router,
         cicero_router,
+        socrates_router,
         glafira_router,
         recruiter_router,
         group_router,
