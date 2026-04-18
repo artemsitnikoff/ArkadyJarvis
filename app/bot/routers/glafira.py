@@ -3,6 +3,7 @@ import html as html_mod
 import logging
 
 from aiogram import F, Router
+from aiogram.exceptions import TelegramBadRequest, TelegramRetryAfter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
@@ -88,8 +89,13 @@ async def handle_glafira_message(
                     )
                     last_edit_len = len(full_text)
                     last_edit_time = now
-                except Exception:
-                    pass
+                except TelegramRetryAfter as e:
+                    logger.warning("Glafira stream rate-limited, backing off %ss", e.retry_after)
+                    await asyncio.sleep(e.retry_after)
+                except TelegramBadRequest as e:
+                    # Ignore "message is not modified"; log other parse issues
+                    if "not modified" not in str(e):
+                        logger.warning("Glafira stream edit_text failed: %s", e)
 
         # Final edit with complete text
         if full_text.strip():
@@ -100,9 +106,9 @@ async def handle_glafira_message(
                     final_msg,
                     reply_markup=GLAFIRA_EXIT_KB,
                 )
-            except Exception:
-                # Already showing same text — ignore "message is not modified"
-                pass
+            except TelegramBadRequest as e:
+                if "not modified" not in str(e):
+                    logger.warning("Glafira final edit_text failed: %s", e)
         else:
             await wait_msg.edit_text(
                 "🤖 Глафира не ответила. Попробуй переформулировать.",

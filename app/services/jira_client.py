@@ -17,7 +17,7 @@ class JiraClient:
     """
 
     def __init__(self):
-        self._http = httpx.AsyncClient()
+        self._http = httpx.AsyncClient(timeout=30.0)
         self._base_url = settings.jira_url.rstrip("/")
         self._auth = (
             settings.jira_username,

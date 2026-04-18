@@ -191,15 +191,13 @@ async def buffer_message(
            VALUES (?, ?, ?, ?, ?)""",
         (chat_id, sender_id, sender_name, text, sent_at.isoformat()),
     )
-    # No commit here — WAL mode handles reads without it.
-    # SQLite auto-commits on read or explicit flush.
+    await db.commit()
 
 
 async def get_buffered_messages(
     chat_id: int, since: datetime | None = None
 ) -> list[dict]:
     db = get_db()
-    await db.commit()  # flush pending inserts before reading
     if since:
         sql = "SELECT * FROM message_buffer WHERE chat_id = ? AND sent_at >= ? ORDER BY sent_at"
         params = (chat_id, since.isoformat())

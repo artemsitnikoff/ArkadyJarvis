@@ -3,34 +3,44 @@ import re
 from typing import Any, Awaitable, Callable
 
 from aiogram import BaseMiddleware
-from aiogram.types import Message
+from aiogram.types import CallbackQuery, Message, TelegramObject
 
 from app import db
-from app.db import DbUser
 
 logger = logging.getLogger("arkadyjarvis")
 
 
 class ErrorMiddleware(BaseMiddleware):
-    """Catch unhandled exceptions in handlers, log them, reply with generic error."""
+    """Catch unhandled exceptions in handlers (both messages and callbacks),
+    log them and reply with a generic error message to the user."""
 
     async def __call__(
         self,
-        handler: Callable[[Message, dict[str, Any]], Awaitable[Any]],
-        event: Message,
+        handler: Callable[[TelegramObject, dict[str, Any]], Awaitable[Any]],
+        event: TelegramObject,
         data: dict[str, Any],
     ) -> Any:
         try:
             return await handler(event, data)
         except Exception:
+            chat_id: Any = "?"
+            user_id: Any = "?"
+            if isinstance(event, Message):
+                chat_id = event.chat.id
+                user_id = event.from_user.id if event.from_user else "?"
+            elif isinstance(event, CallbackQuery):
+                chat_id = event.message.chat.id if event.message else "?"
+                user_id = event.from_user.id if event.from_user else "?"
+
             logger.error(
-                "Unhandled error in chat=%s user=%s",
-                event.chat.id,
-                event.from_user.id if event.from_user else "?",
-                exc_info=True,
+                "Unhandled error in chat=%s user=%s", chat_id, user_id, exc_info=True,
             )
+
             try:
-                await event.reply("❌ Произошла ошибка. Попробуй ещё раз.")
+                if isinstance(event, Message):
+                    await event.reply("❌ Произошла ошибка. Попробуй ещё раз.")
+                elif isinstance(event, CallbackQuery):
+                    await event.answer("❌ Произошла ошибка", show_alert=True)
             except Exception:
                 pass
             return None
@@ -79,19 +89,32 @@ def _would_trigger_response(text: str) -> bool:
 
 
 class AuthMiddleware(BaseMiddleware):
-    """Check authorization for all bot commands and triggers.
+    """Inject `db_user` into handler data for both messages and callbacks,
+    and gate auth-required message triggers.
 
     Only /start and /help are public. Group messages without triggers
-    pass through freely (for buffering). Auto-replies (ситников) also
-    pass through without auth.
+    pass through freely (for buffering). Callback queries always get
+    `db_user` injected — individual callbacks enforce their own access
+    rules (e.g. GLAFIRA_ALLOWED, RECRUITER_ALLOWED).
     """
 
     async def __call__(
         self,
-        handler: Callable[[Message, dict[str, Any]], Awaitable[Any]],
-        event: Message,
+        handler: Callable[[TelegramObject, dict[str, Any]], Awaitable[Any]],
+        event: TelegramObject,
         data: dict[str, Any],
     ) -> Any:
+        # Callback queries — inject db_user for handlers, no auth gate
+        # (handlers themselves decide whether auth is needed).
+        if isinstance(event, CallbackQuery):
+            user = await db.get_user(event.from_user.id) if event.from_user else None
+            data["db_user"] = user
+            return await handler(event, data)
+
+        if not isinstance(event, Message):
+            return await handler(event, data)
+
+        # ── Message handling ─────────────────────────────────────
         # Public commands — always allow
         if event.text and event.text.split()[0].split("@")[0] in PUBLIC_COMMANDS:
             return await handler(event, data)

@@ -94,8 +94,10 @@ class PotokClient:
 
     async def _fetch_applicant(self, applicant_id: int, retries: int = 3) -> dict:
         """Fetch single applicant by ID with retry on 429."""
+        last_status = None
         for attempt in range(retries + 1):
             resp = await self._client.get(f"/api/v3/applicants/{applicant_id}.json")
+            last_status = resp.status_code
             if resp.status_code == 429:
                 if attempt < retries:
                     delay = float(resp.headers.get("Retry-After", 2))
@@ -103,6 +105,10 @@ class PotokClient:
                     continue
             resp.raise_for_status()
             return resp.json()
+        raise RuntimeError(
+            f"Potok: applicant {applicant_id} unreachable after {retries + 1} "
+            f"attempts (last status {last_status})"
+        )
 
     async def get_applicants_for_job(
         self,

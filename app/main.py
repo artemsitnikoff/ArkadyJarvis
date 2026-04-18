@@ -54,8 +54,12 @@ async def lifespan(app: FastAPI):
     dp["potok"] = potok
 
     # Register middlewares on the dispatcher (order: error wraps auth wraps handler)
+    # Applied to both messages and callback_query so callback handlers also get
+    # error isolation and `db_user` injection.
     dp.message.outer_middleware(ErrorMiddleware())
+    dp.callback_query.outer_middleware(ErrorMiddleware())
     dp.message.outer_middleware(AuthMiddleware())
+    dp.callback_query.outer_middleware(AuthMiddleware())
 
     # Start aiogram polling as a background task
     polling_task = asyncio.create_task(

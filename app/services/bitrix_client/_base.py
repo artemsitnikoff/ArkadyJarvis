@@ -19,7 +19,7 @@ class _BitrixBase:
     """Token management and HTTP request layer for Bitrix24."""
 
     def __init__(self):
-        self._http = httpx.AsyncClient()
+        self._http = httpx.AsyncClient(timeout=30.0)
         self._token_lock = asyncio.Lock()
 
     async def close(self):
