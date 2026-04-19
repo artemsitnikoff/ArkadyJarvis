@@ -92,9 +92,10 @@ async def _assert_public_url(url: str) -> str:
     Note: there is still a small TOCTOU window between this function
     and httpx's own getaddrinfo inside `client.stream`. Full mitigation
     would require a pinned-IP transport (custom httpcore connection
-    pool). For a closed-access internal bot (SOCRATES_ALLOWED + our
-    Tailscale-only infra) this is acceptable; revisit before opening
-    Socrates to untrusted users.
+    pool). Compensating controls for the current deployment:
+    Bitrix-tied /start auth (only authorised users can reach this
+    code) + internal Tailscale-only infra. Revisit before opening
+    the bot to untrusted users.
     """
     parsed = urlparse(url)
     if parsed.scheme not in ("http", "https"):

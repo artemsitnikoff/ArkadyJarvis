@@ -6,9 +6,13 @@ from datetime import datetime
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message
 
 from app.bot.routers._attendee_picker import (
+    ADD_ME_CB,
+    DONE_CB,
+    MORE_CB,
+    PICK_CB_PREFIX,
     cancel_kb as _picker_cancel_kb,
     search_results_kb as _picker_results_kb,
     search_status_kb as _picker_status_kb,
@@ -34,7 +38,6 @@ class MeetingSetup(StatesGroup):
 # ── Keyboards (thin wrappers over the shared picker) ────────
 
 _CANCEL_CB = "mtg:cancel"
-_DONE_CB = "search:done"
 _DONE_LABEL = "📅 Создать встречу"
 
 
@@ -44,7 +47,7 @@ def _cancel_kb(show_add_me: bool = True) -> InlineKeyboardMarkup:
 
 def _search_status_kb(attendee_names: list[str], show_add_me: bool = True) -> InlineKeyboardMarkup:
     return _picker_status_kb(
-        _CANCEL_CB, _DONE_CB, _DONE_LABEL, show_add_me=show_add_me,
+        _CANCEL_CB, DONE_CB, _DONE_LABEL, show_add_me=show_add_me,
     )
 
 
@@ -54,7 +57,7 @@ def _search_results_kb(users: list[dict]) -> InlineKeyboardMarkup:
 
 # ── Helpers ───────────────────────────────────────────────────
 
-def _build_meeting_reply(
+def build_meeting_reply(
     dt: datetime,
     event_id,
     bitrix_url: str,
@@ -80,22 +83,26 @@ def _build_meeting_reply(
     return text
 
 
-async def _commit_meeting(
+async def commit_meeting(
     bitrix,
     owner_user_id: int,
     dt: datetime,
     title: str,
     description: str,
     attendee_ids: list[int],
+    duration_minutes: int | None = None,
 ) -> tuple[object, str]:
     """Create a Bitrix meeting and return (event_id, bitrix_url)."""
-    result = await bitrix.create_meeting(
+    kwargs = dict(
         title=title,
         date=dt,
         owner_user_id=owner_user_id,
         description=description,
         attendee_ids=attendee_ids if attendee_ids else None,
     )
+    if duration_minutes is not None:
+        kwargs["duration_minutes"] = duration_minutes
+    result = await bitrix.create_meeting(**kwargs)
     event_id = result.get("id", "?")
     bitrix_url = (
         f"https://{settings.bitrix_domain}/company/personal/user/"
@@ -115,13 +122,13 @@ async def _do_create_meeting(
 ):
     """Create a Bitrix meeting and send confirmation message."""
     title = context[:80] if context else "Встреча"
-    event_id, bitrix_url = await _commit_meeting(
+    event_id, bitrix_url = await commit_meeting(
         bitrix, db_user["bitrix_user_id"], dt,
         title=title,
         description=context or "",
         attendee_ids=attendee_ids,
     )
-    reply_text = _build_meeting_reply(
+    reply_text = build_meeting_reply(
         dt, event_id, bitrix_url,
         found_names=attendee_names,
         context=context,
@@ -213,14 +220,14 @@ async def _create_meeting_with_nicks(
     if invite_emails:
         description += "\n\nПригласить по email: " + ", ".join(invite_emails)
 
-    event_id, bitrix_url = await _commit_meeting(
+    event_id, bitrix_url = await commit_meeting(
         bitrix, db_user["bitrix_user_id"], dt,
         title=title,
         description=description,
         attendee_ids=attendee_ids,
     )
 
-    reply_text = _build_meeting_reply(
+    reply_text = build_meeting_reply(
         dt, event_id, bitrix_url,
         found_names=found_names,
         external_emails=external_emails,
@@ -262,7 +269,7 @@ async def handle_mtg_search_input(message: Message, state: FSMContext, db_user: 
     await message.reply("Выбери коллегу:", reply_markup=_search_results_kb(users))
 
 
-@router.callback_query(F.data.startswith("pick:"), MeetingSetup.searching_attendee)
+@router.callback_query(F.data.startswith(PICK_CB_PREFIX), MeetingSetup.searching_attendee)
 async def handle_mtg_pick_user(callback: CallbackQuery, state: FSMContext):
     parts = callback.data.split(":", 2)
     if len(parts) < 3:
@@ -291,7 +298,7 @@ async def handle_mtg_pick_user(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.callback_query(F.data == "search:addme", MeetingSetup.searching_attendee)
+@router.callback_query(F.data == ADD_ME_CB, MeetingSetup.searching_attendee)
 async def handle_mtg_add_me(callback: CallbackQuery, state: FSMContext):
     db_user = await db.get_user(callback.from_user.id)
     bitrix_id = db_user["bitrix_user_id"]
@@ -314,7 +321,7 @@ async def handle_mtg_add_me(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.callback_query(F.data == "search:more", MeetingSetup.searching_attendee)
+@router.callback_query(F.data == MORE_CB, MeetingSetup.searching_attendee)
 async def handle_mtg_add_more(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     attendee_ids: list[int] = data.get("attendee_ids", [])
@@ -324,7 +331,7 @@ async def handle_mtg_add_more(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.callback_query(F.data == "search:done", MeetingSetup.searching_attendee)
+@router.callback_query(F.data == DONE_CB, MeetingSetup.searching_attendee)
 async def handle_mtg_done(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     attendee_ids: list[int] = data.get("attendee_ids", [])

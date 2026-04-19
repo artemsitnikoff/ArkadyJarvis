@@ -391,5 +391,4 @@ Logs in Docker: `docker compose logs -f`
 - Potok API SSL: uses Russian CA certificates — works from prod (Ubuntu), may fail from Mac without Russian CA bundle
 - Tailscale + OpenVPN conflict: OpenVPN `redirect-gateway` kills Tailscale connectivity. Cannot run both simultaneously without server-side split tunnel config.
 - Some callback handlers (`meeting.py`, `free_slots.py`) still re-fetch `db_user` via `db.get_user()` instead of using the middleware-injected one — not broken, just duplicated DB calls
-- `free_slots.py` handle_slot_selected / handle_topic_input duplicate meeting create + reply assembly — should reuse `meeting._commit_meeting` + `_build_meeting_reply`
 - Socrates SSRF guard has a narrow TOCTOU DNS-rebinding window: `_assert_public_url` resolves the host and then httpx resolves it again on connect. Fully closing this needs a pinned-IP transport (custom httpcore pool). Compensating controls: authorised users only (Bitrix-tied `/start` auth) + internal Tailscale-only deployment.

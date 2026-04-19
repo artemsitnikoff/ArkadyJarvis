@@ -9,10 +9,15 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from app.bot.routers._attendee_picker import (
+    ADD_ME_CB,
+    DONE_CB,
+    MORE_CB,
+    PICK_CB_PREFIX,
     cancel_kb as _picker_cancel_kb,
     search_results_kb as _picker_results_kb,
     search_status_kb as _picker_status_kb,
 )
+from app.bot.routers.meeting import build_meeting_reply, commit_meeting
 from app.bot.routers.start import MENU_KB
 from app.config import settings
 from app import db
@@ -35,7 +40,6 @@ class BookSlot(StatesGroup):
 # ── Keyboards ────────────────────────────────────────────────
 
 _CANCEL_CB = "book:cancel"
-_DONE_CB = "search:done"
 _DONE_LABEL = "🔍 Искать слоты"
 
 
@@ -45,7 +49,7 @@ def _cancel_kb(show_add_me: bool = True) -> InlineKeyboardMarkup:
 
 def _search_status_kb(attendee_names: list[str], show_add_me: bool = True) -> InlineKeyboardMarkup:
     return _picker_status_kb(
-        _CANCEL_CB, _DONE_CB, _DONE_LABEL, show_add_me=show_add_me,
+        _CANCEL_CB, DONE_CB, _DONE_LABEL, show_add_me=show_add_me,
     )
 
 
@@ -232,7 +236,7 @@ async def handle_search_input(message: Message, state: FSMContext, db_user: DbUs
     await message.reply("Выбери коллегу:", reply_markup=_search_results_kb(users))
 
 
-@router.callback_query(F.data.startswith("pick:"), BookSlot.searching_attendee)
+@router.callback_query(F.data.startswith(PICK_CB_PREFIX), BookSlot.searching_attendee)
 async def handle_pick_user(callback: CallbackQuery, state: FSMContext):
     # pick:<bitrix_id>:<name>
     parts = callback.data.split(":", 2)
@@ -262,7 +266,7 @@ async def handle_pick_user(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.callback_query(F.data == "search:addme", BookSlot.searching_attendee)
+@router.callback_query(F.data == ADD_ME_CB, BookSlot.searching_attendee)
 async def handle_add_me(callback: CallbackQuery, state: FSMContext):
     db_user = await db.get_user(callback.from_user.id)
     bitrix_id = db_user["bitrix_user_id"]
@@ -285,7 +289,7 @@ async def handle_add_me(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.callback_query(F.data == "search:more", BookSlot.searching_attendee)
+@router.callback_query(F.data == MORE_CB, BookSlot.searching_attendee)
 async def handle_add_more(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     attendee_ids: list[int] = data.get("attendee_ids", [])
@@ -295,7 +299,7 @@ async def handle_add_more(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.callback_query(F.data == "search:done", BookSlot.searching_attendee)
+@router.callback_query(F.data == DONE_CB, BookSlot.searching_attendee)
 async def handle_search_done(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     attendee_ids: list[int] = data.get("attendee_ids", [])
@@ -363,28 +367,21 @@ async def handle_slot_selected(callback: CallbackQuery, state: FSMContext, bitri
         await callback.answer()
 
         db_user = await db.get_user(callback.from_user.id)
-        owner_user_id = db_user["bitrix_user_id"]
         attendee_ids = data["attendee_ids"]
         attendee_names = data.get("attendee_names", [])
 
-        result = await bitrix.create_meeting(
-            title=topic,
-            date=slot_start,
-            owner_user_id=owner_user_id,
-            duration_minutes=duration,
+        await _book_slot_meeting(
+            target=callback.message,
+            bitrix=bitrix,
+            owner_user_id=db_user["bitrix_user_id"],
+            slot_start=slot_start,
+            duration=duration,
+            topic=topic,
+            label=label,
             attendee_ids=attendee_ids,
+            attendee_names=attendee_names,
         )
-
-        event_id = result.get("id", "?")
-        bitrix_url = f"https://{settings.bitrix_domain}/company/personal/user/{owner_user_id}/calendar/?EVENT_ID={event_id}"
-
-        esc = html_mod.escape
-        reply = f"✅ Встреча «{esc(topic)}» создана: {esc(label)}\n🔗 {bitrix_url}"
-        if attendee_names:
-            reply += f"\n👥 Участники: {esc(', '.join(attendee_names))}"
-        await callback.message.reply(reply, reply_markup=MENU_KB)
         await state.clear()
-        logger.info("*** Meeting booked from free slots: %s %s attendees=%s", topic, label, attendee_ids)
         return
 
     # Direct @nick flow — ask for topic after slot selection
@@ -413,26 +410,59 @@ async def handle_topic_input(message: Message, state: FSMContext, db_user: DbUse
     attendee_names = data.get("attendee_names", [])
     label = data.get("slot_label", "")
 
-    owner_user_id = db_user["bitrix_user_id"]
-
-    result = await bitrix.create_meeting(
-        title=topic,
-        date=slot_start,
-        owner_user_id=owner_user_id,
-        duration_minutes=duration,
+    await _book_slot_meeting(
+        target=message,
+        bitrix=bitrix,
+        owner_user_id=db_user["bitrix_user_id"],
+        slot_start=slot_start,
+        duration=duration,
+        topic=topic,
+        label=label,
         attendee_ids=attendee_ids,
+        attendee_names=attendee_names,
     )
-
-    event_id = result.get("id", "?")
-    bitrix_url = f"https://{settings.bitrix_domain}/company/personal/user/{owner_user_id}/calendar/?EVENT_ID={event_id}"
-
-    esc = html_mod.escape
-    reply = f"✅ Встреча «{esc(topic)}» создана: {esc(label)}\n🔗 {bitrix_url}"
-    if attendee_names:
-        reply += f"\n👥 Участники: {esc(', '.join(attendee_names))}"
-    await message.reply(reply, reply_markup=MENU_KB)
     await state.clear()
-    logger.info("*** Meeting booked from free slots: %s %s attendees=%s", topic, label, attendee_ids)
+
+
+async def _book_slot_meeting(
+    *,
+    target: Message,
+    bitrix,
+    owner_user_id: int,
+    slot_start: datetime,
+    duration: int,
+    topic: str,
+    label: str,
+    attendee_ids: list[int],
+    attendee_names: list[str],
+) -> None:
+    """Reuse meeting.commit_meeting + build_meeting_reply for the free-slots flow.
+
+    Prepends the slot label to the standard reply so the "Выбрано: DD.MM HH:MM"
+    context stays visible.
+    """
+    event_id, bitrix_url = await commit_meeting(
+        bitrix,
+        owner_user_id=owner_user_id,
+        dt=slot_start,
+        title=topic,
+        description=topic,
+        attendee_ids=attendee_ids,
+        duration_minutes=duration,
+    )
+    reply = build_meeting_reply(
+        slot_start, event_id, bitrix_url,
+        found_names=attendee_names,
+    )
+    # Slot label replaces the default date string so "Выбрано: DD.MM HH:MM–HH:MM"
+    # стоит как первая строка.
+    esc = html_mod.escape
+    reply = f"🗓 Слот: {esc(label)}\n" + reply
+    await target.reply(reply, reply_markup=MENU_KB)
+    logger.info(
+        "*** Meeting booked from free slots: %s %s attendees=%s",
+        topic, label, attendee_ids,
+    )
 
 
 @router.callback_query(F.data.startswith("book:"))
