@@ -9,9 +9,8 @@ User flow:
 Telegram Bot API caps uploads at 20 MB, so direct file uploads are not
 supported — the recording MUST be shared via a link.
 
-Access is gated via SOCRATES_ALLOWED — Socrates runs Gemini + Claude
-twice + downloads ≤ 1 GiB, so we keep it behind an allow-list like
-Glafira and Anatoly.
+Open to every authorised user (no allow-list). Per-user concurrency
+lock prevents the same user from stacking pipelines.
 """
 
 import asyncio
@@ -39,14 +38,6 @@ router = Router()
 
 URL_RE = re.compile(r"^https?://\S+$", re.IGNORECASE)
 
-
-def _parse_allowed_ids(csv: str) -> set[int]:
-    if not csv.strip():
-        return set()
-    return {int(x.strip()) for x in csv.split(",") if x.strip().isdigit()}
-
-
-SOCRATES_ALLOWED = _parse_allowed_ids(settings.socrates_allowed)
 
 # Per-user concurrency limit: one pipeline at a time per Telegram user.
 # Prevents a user from firing 10 parallel 90-min pipelines (each spends
@@ -83,14 +74,6 @@ class _StageAbort(Exception):
 async def handle_meeting_url(
     message: Message, state: FSMContext, openrouter, ai_client,
 ):
-    if SOCRATES_ALLOWED and message.from_user.id not in SOCRATES_ALLOWED:
-        await state.clear()
-        await message.reply(
-            "🚧 Сократ в тестовом режиме. Доступ ограничен.",
-            reply_markup=MENU_KB,
-        )
-        return
-
     url = (message.text or "").strip()
     if not URL_RE.match(url):
         await message.reply(

@@ -53,7 +53,6 @@ class Settings(BaseSettings):
     # Access control (comma-separated Telegram IDs)
     glafira_allowed: str = ""  # e.g. "33570147,367140321"
     recruiter_allowed: str = ""  # e.g. "33570147,367140321,421632942"
-    socrates_allowed: str = ""  # empty = disabled; Socrates spends $$ per call
 
     # Database
     db_path: str = "data/arkadyjarvis.db"
