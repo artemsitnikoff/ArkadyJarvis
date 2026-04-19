@@ -68,10 +68,34 @@ async def handle_meeting_url(
 
         size_mb = size_bytes / (1024 * 1024)
         await wait_msg.edit_text(
-            f"🎚 Скачано {size_mb:.1f} МБ. Конвертирую аудио (ffmpeg)...",
+            f"🎚 Скачано {size_mb:.1f} МБ. Проверяю длительность...",
         )
 
-        # ── Stage 0b: ffmpeg ─────────────────────────────────────
+        # ── Stage 0b: reject too-long recordings BEFORE ffmpeg ──
+        # Probe the original file so we don't waste CPU on converting a
+        # 10-hour video just to reject it afterwards.
+        try:
+            duration_sec = await probe_duration(raw_path)
+        except FFmpegError as e:
+            logger.warning("probe_duration on raw file failed: %s — will retry on ogg", e)
+            duration_sec = 0.0
+
+        duration_min = duration_sec / 60
+        if duration_sec > 0 and duration_min > settings.meeting_max_minutes:
+            await wait_msg.edit_text(
+                f"❌ Запись длиннее {settings.meeting_max_minutes} мин "
+                f"({duration_min:.1f} мин). В текущей итерации такие длинные "
+                f"встречи не обрабатываются.",
+                reply_markup=MENU_KB,
+            )
+            return
+
+        await wait_msg.edit_text(
+            f"🎚 Скачано {size_mb:.1f} МБ, {duration_min:.1f} мин. "
+            "Конвертирую аудио (ffmpeg)...",
+        )
+
+        # ── Stage 0c: ffmpeg ─────────────────────────────────────
         try:
             await convert_to_opus(raw_path, ogg_path)
         except FFmpegError as e:
@@ -82,16 +106,20 @@ async def handle_meeting_url(
             )
             return
 
-        duration_sec = await probe_duration(ogg_path)
-        duration_min = duration_sec / 60
-        if duration_min > settings.meeting_max_minutes:
-            await wait_msg.edit_text(
-                f"❌ Запись длиннее {settings.meeting_max_minutes} мин "
-                f"({duration_min:.1f} мин). В текущей итерации такие длинные "
-                f"встречи не обрабатываются.",
-                reply_markup=MENU_KB,
-            )
-            return
+        # If the original probe failed, try again on the converted audio.
+        if duration_sec == 0.0:
+            try:
+                duration_sec = await probe_duration(ogg_path)
+                duration_min = duration_sec / 60
+                if duration_min > settings.meeting_max_minutes:
+                    await wait_msg.edit_text(
+                        f"❌ Запись длиннее {settings.meeting_max_minutes} мин "
+                        f"({duration_min:.1f} мин).",
+                        reply_markup=MENU_KB,
+                    )
+                    return
+            except FFmpegError:
+                pass  # keep 0 — pipeline can still run
 
         ogg_size_mb = ogg_path.stat().st_size / (1024 * 1024)
         await wait_msg.edit_text(
@@ -103,8 +131,8 @@ async def handle_meeting_url(
         async def on_progress(msg: str):
             try:
                 await wait_msg.edit_text(f"🧠 {msg}")
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("socrates on_progress suppressed: %s", e)
 
         try:
             artifacts = await process_meeting(

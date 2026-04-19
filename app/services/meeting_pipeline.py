@@ -5,10 +5,11 @@ here we start from a compact `.ogg` file plus a human-readable `source_name`
 and a pre-computed `duration_sec` from ffprobe.
 """
 
+import inspect
 import logging
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
 
 from app.services.prompts import load_prompt
 
@@ -44,7 +45,7 @@ def _build_transcript_md(
     )
 
 
-ProgressCallback = Callable[[str], None] | None
+ProgressCallback = Callable[[str], Awaitable[None] | None] | None
 
 
 async def process_meeting(
@@ -66,7 +67,7 @@ async def process_meeting(
         if on_progress:
             try:
                 res = on_progress(msg)
-                if hasattr(res, "__await__"):
+                if inspect.isawaitable(res):
                     await res
             except Exception as e:
                 logger.warning("progress callback failed: %s", e)

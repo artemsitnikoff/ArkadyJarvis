@@ -32,7 +32,12 @@ async def probe_duration(path: str | Path) -> float:
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
-    stdout, stderr = await proc.communicate()
+    try:
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=60)
+    except asyncio.TimeoutError:
+        proc.kill()
+        await proc.wait()
+        raise FFmpegError("ffprobe не уложился в 60с") from None
     if proc.returncode != 0:
         raise FFmpegError(f"ffprobe failed: {stderr.decode()[:300]}")
     try:
@@ -42,10 +47,15 @@ async def probe_duration(path: str | Path) -> float:
         raise FFmpegError(f"ffprobe: unable to parse duration: {e}") from e
 
 
+FFMPEG_TIMEOUT_SEC = 1800  # 30 min — covers 2 GB inputs on modest hardware
+
+
 async def convert_to_opus(input_path: str | Path, output_path: str | Path) -> None:
     """Convert video / audio to mono 16 kHz opus @ 24 kbps.
 
-    Drops any video stream (`-vn`). Overwrites output (`-y`).
+    Drops any video stream (`-vn`). Overwrites output (`-y`). Bounded
+    by FFMPEG_TIMEOUT_SEC; the subprocess is killed on timeout so we
+    don't accumulate zombie ffmpeg instances on pathological inputs.
     """
     input_path = str(input_path)
     output_path = str(output_path)
@@ -66,7 +76,16 @@ async def convert_to_opus(input_path: str | Path, output_path: str | Path) -> No
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
-    _, stderr = await proc.communicate()
+    try:
+        _, stderr = await asyncio.wait_for(
+            proc.communicate(), timeout=FFMPEG_TIMEOUT_SEC,
+        )
+    except asyncio.TimeoutError:
+        proc.kill()
+        await proc.wait()
+        raise FFmpegError(
+            f"ffmpeg не уложился в {FFMPEG_TIMEOUT_SEC}с — процесс убит",
+        ) from None
     if proc.returncode != 0:
         raise FFmpegError(f"ffmpeg failed: {stderr.decode()[-500:]}")
     logger.info("ffmpeg: %s -> %s OK", input_path, output_path)

@@ -1,4 +1,6 @@
+import asyncio
 import base64
+import json
 import logging
 import re
 from dataclasses import dataclass, field
@@ -149,8 +151,7 @@ class OpenRouterClient:
                     text_reason = " ".join(parts).strip()
                     break
 
-        import json as _json
-        snippet = _json.dumps(data, ensure_ascii=False)[:1000]
+        snippet = json.dumps(data, ensure_ascii=False)[:1000]
         logger.error("No image in response: %s", snippet)
 
         if text_reason:
@@ -167,7 +168,10 @@ class OpenRouterClient:
         """Transcribe a Telegram voice message (.ogg / OPUS) with speaker diarization."""
         path = Path(ogg_path)
         try:
-            audio_b64 = base64.b64encode(path.read_bytes()).decode()
+            # 20+ MB base64 encode is CPU-bound — keep it off the event loop.
+            audio_b64 = await asyncio.to_thread(
+                lambda: base64.b64encode(path.read_bytes()).decode()
+            )
         except Exception as e:
             return TranscriptionResult(success=False, error=f"не смог прочитать файл: {e}")
 
@@ -203,6 +207,11 @@ class OpenRouterClient:
                 success=False, error=f"OpenRouter {resp.status_code}: {body}",
             )
 
+        # Hoist finish_reason + content out of the try-block so error logging
+        # doesn't rely on locals().get(...).
+        finish_reason: str = "?"
+        content: str | None = None
+        refusal = None
         try:
             data = resp.json()
             choice = data["choices"][0]
@@ -243,13 +252,13 @@ class OpenRouterClient:
                 "Transcribe parse error: %s | finish_reason=%s | content_len=%s | "
                 "head=%r | tail=%r",
                 e,
-                locals().get("finish_reason", "?"),
+                finish_reason,
                 len(content) if isinstance(content, str) else "n/a",
                 head, tail,
                 exc_info=True,
             )
             hint = ""
-            if locals().get("finish_reason") == "length":
+            if finish_reason == "length":
                 hint = " (ответ обрезан по лимиту токенов — попробуй более короткую запись)"
             return TranscriptionResult(
                 success=False, error=f"не смог разобрать ответ: {e}{hint}",
