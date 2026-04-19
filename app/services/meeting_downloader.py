@@ -83,6 +83,18 @@ async def _assert_public_url(url: str) -> str:
 
     Returns the sanitised host (for logging). Raises DownloadError on
     any blocked address, unresolvable host, or unsupported scheme.
+
+    We intentionally do NOT cache getaddrinfo results here: a DNS
+    rebinding attacker could poison the cache with a public address
+    at validation time and serve a private one at connect time. Each
+    call gets a fresh resolution.
+
+    Note: there is still a small TOCTOU window between this function
+    and httpx's own getaddrinfo inside `client.stream`. Full mitigation
+    would require a pinned-IP transport (custom httpcore connection
+    pool). For a closed-access internal bot (SOCRATES_ALLOWED + our
+    Tailscale-only infra) this is acceptable; revisit before opening
+    Socrates to untrusted users.
     """
     parsed = urlparse(url)
     if parsed.scheme not in ("http", "https"):
@@ -178,16 +190,22 @@ async def _stream_to_file(resp: httpx.Response, dest: Path) -> int:
     """Write the streamed response body to `dest` without blocking the event loop.
 
     Uses `asyncio.to_thread` for each write so a 500 MB download doesn't
-    stall the polling loop.
+    stall the polling loop. On any failure the partial file is removed
+    so we never leave junk behind if the caller doesn't run its own
+    cleanup.
     """
     total = 0
-    with open(dest, "wb") as fh:
-        async for chunk in resp.aiter_bytes(chunk_size=1024 * 256):
-            await asyncio.to_thread(fh.write, chunk)
-            total += len(chunk)
-            if total > MAX_DOWNLOAD_BYTES:
-                raise DownloadError(
-                    f"Download exceeded safety ceiling "
-                    f"({MAX_DOWNLOAD_BYTES // 1024 // 1024} МБ)"
-                )
-    return total
+    try:
+        with open(dest, "wb") as fh:
+            async for chunk in resp.aiter_bytes(chunk_size=1024 * 256):
+                await asyncio.to_thread(fh.write, chunk)
+                total += len(chunk)
+                if total > MAX_DOWNLOAD_BYTES:
+                    raise DownloadError(
+                        f"Download exceeded safety ceiling "
+                        f"({MAX_DOWNLOAD_BYTES // 1024 // 1024} МБ)"
+                    )
+        return total
+    except BaseException:
+        dest.unlink(missing_ok=True)
+        raise

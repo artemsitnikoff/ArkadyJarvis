@@ -14,11 +14,13 @@ twice + downloads ≤ 1 GiB, so we keep it behind an allow-list like
 Glafira and Anatoly.
 """
 
+import asyncio
 import logging
 import re
 import shutil
 import tempfile
 from pathlib import Path
+from typing import NoReturn
 
 from aiogram import F, Router
 from aiogram.exceptions import TelegramRetryAfter
@@ -45,6 +47,21 @@ def _parse_allowed_ids(csv: str) -> set[int]:
 
 
 SOCRATES_ALLOWED = _parse_allowed_ids(settings.socrates_allowed)
+
+# Per-user concurrency limit: one pipeline at a time per Telegram user.
+# Prevents a user from firing 10 parallel 90-min pipelines (each spends
+# Gemini + Claude ×2 + ≤1 GiB traffic).
+_USER_LOCKS: dict[int, asyncio.Lock] = {}
+_LOCKS_GUARD = asyncio.Lock()
+
+
+async def _get_user_lock(user_id: int) -> asyncio.Lock:
+    async with _LOCKS_GUARD:
+        lock = _USER_LOCKS.get(user_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            _USER_LOCKS[user_id] = lock
+        return lock
 
 
 class Socrates(StatesGroup):
@@ -82,28 +99,39 @@ async def handle_meeting_url(
         )
         return
 
+    user_lock = await _get_user_lock(message.from_user.id)
+    if user_lock.locked():
+        await state.clear()
+        await message.reply(
+            "⏳ Уже обрабатываю твою предыдущую запись. Дождись окончания "
+            "и пришли следующую ссылку.",
+            reply_markup=MENU_KB,
+        )
+        return
+
     await state.clear()
     logger.info("*** SOCRATES: url=%s from user=%s", url[:120], message.from_user.id)
 
-    wait_msg = await message.reply("📥 Скачиваю запись...")
-    tmpdir = Path(tempfile.mkdtemp(prefix="socrates_"))
-    raw_path = tmpdir / "source.bin"
-    ogg_path = tmpdir / "audio.ogg"
+    async with user_lock:
+        wait_msg = await message.reply("📥 Скачиваю запись...")
+        tmpdir = Path(tempfile.mkdtemp(prefix="socrates_"))
+        raw_path = tmpdir / "source.bin"
+        ogg_path = tmpdir / "audio.ogg"
 
-    try:
-        size_mb = await _download_stage(url, raw_path, wait_msg)
-        duration_sec = await _convert_and_probe_stage(
-            raw_path, ogg_path, size_mb, wait_msg,
-        )
-        artifacts = await _run_pipeline_stage(
-            ogg_path, duration_sec, url, openrouter, ai_client, wait_msg,
-        )
-        await _deliver_artifacts(message, wait_msg, artifacts)
-    except _StageAbort:
-        # User already notified by the stage helper.
-        return
-    finally:
-        shutil.rmtree(tmpdir, ignore_errors=True)
+        try:
+            size_mb = await _download_stage(url, raw_path, wait_msg)
+            duration_sec = await _convert_and_probe_stage(
+                raw_path, ogg_path, size_mb, wait_msg,
+            )
+            artifacts = await _run_pipeline_stage(
+                ogg_path, duration_sec, url, openrouter, ai_client, wait_msg,
+            )
+            await _deliver_artifacts(message, wait_msg, artifacts)
+        except _StageAbort:
+            # User already notified by the stage helper.
+            return
+        finally:
+            shutil.rmtree(tmpdir, ignore_errors=True)
 
 
 @router.message(Socrates.waiting_for_url)
@@ -145,12 +173,19 @@ async def _convert_and_probe_stage(
     if duration_sec > 0:
         await _reject_if_too_long(duration_sec, wait_msg)
 
-    duration_min = duration_sec / 60
-    await _safe_edit(
-        wait_msg,
-        f"🎚 Скачано {size_mb:.1f} МБ, {duration_min:.1f} мин. "
-        "Конвертирую аудио (ffmpeg)...",
-    )
+    if duration_sec > 0:
+        duration_min = duration_sec / 60
+        await _safe_edit(
+            wait_msg,
+            f"🎚 Скачано {size_mb:.1f} МБ, {duration_min:.1f} мин. "
+            "Конвертирую аудио (ffmpeg)...",
+        )
+    else:
+        # Duration unknown — don't show "0.0 мин", just say we're converting.
+        await _safe_edit(
+            wait_msg,
+            f"🎚 Скачано {size_mb:.1f} МБ. Конвертирую аудио (ffmpeg)...",
+        )
 
     try:
         await convert_to_opus(raw_path, ogg_path)
@@ -250,11 +285,12 @@ async def _safe_edit(wait_msg: Message, text: str) -> None:
         logger.debug("socrates edit suppressed: %s", e)
 
 
-async def _abort(wait_msg: Message, user_message: str) -> None:
+async def _abort(wait_msg: Message, user_message: str) -> NoReturn:
     """Send a final error message and stop the pipeline.
 
     Raises _StageAbort so the caller's try/finally runs cleanup but
-    the remaining stages are skipped.
+    the remaining stages are skipped. Typed NoReturn so callers
+    (and type-checkers) understand this never falls through.
     """
     try:
         await wait_msg.edit_text(user_message, reply_markup=MENU_KB)
@@ -265,5 +301,12 @@ async def _abort(wait_msg: Message, user_message: str) -> None:
 
 def _source_name_from_url(url: str) -> str:
     # Keep it short and safe — file-system basename without query string.
+    # For Yandex.Disk links the tail is an opaque hash (`XYZ123abc`), which
+    # looks ugly in the transcript header; collapse those to a readable label.
+    from urllib.parse import urlparse
+
+    host = (urlparse(url).hostname or "").lower()
+    if host in {"disk.yandex.ru", "disk.yandex.com", "yadi.sk"}:
+        return "Yandex.Disk"
     tail = url.split("?", 1)[0].rstrip("/").split("/")[-1]
     return tail or "meeting"

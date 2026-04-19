@@ -52,9 +52,9 @@ async def probe_duration(path: str | Path) -> float:
         await proc.wait()
         raise FFmpegError("ffprobe не уложился в 60с") from None
     if proc.returncode != 0:
-        raise FFmpegError(f"ffprobe failed: {stderr.decode()[:300]}")
+        raise FFmpegError(f"ffprobe failed: {stderr.decode(errors='replace')[:300]}")
     try:
-        data = json.loads(stdout.decode())
+        data = json.loads(stdout.decode(errors="replace"))
         return float(data["format"]["duration"])
     except (KeyError, ValueError, json.JSONDecodeError) as e:
         raise FFmpegError(f"ffprobe: unable to parse duration: {e}") from e
@@ -100,5 +100,7 @@ async def convert_to_opus(input_path: str | Path, output_path: str | Path) -> No
             f"ffmpeg не уложился в {FFMPEG_TIMEOUT_SEC}с — процесс убит",
         ) from None
     if proc.returncode != 0:
-        raise FFmpegError(f"ffmpeg failed: {stderr.decode()[-500:]}")
+        raise FFmpegError(
+            f"ffmpeg failed: {stderr.decode(errors='replace')[-500:]}"
+        )
     logger.info("ffmpeg: %s -> %s OK", input_path, output_path)

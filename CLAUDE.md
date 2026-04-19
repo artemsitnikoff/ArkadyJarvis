@@ -31,6 +31,7 @@ app/
       summarize.py         # /summary command — on-demand chat summarization
       meeting.py           # FSM MeetingSetup — time/date/attendee parsing, Bitrix meeting creation
       free_slots.py        # FSM BookSlot — calendar accessibility + slot booking
+      _attendee_picker.py  # Shared inline-keyboard helpers for meeting + free_slots attendee search
       jira_task.py         # FSM CreateTask — raw input reformatted via prompts/jira_task_template.md before ticket creation
       lead.py              # FSM CreateLead — text OR voice; voice transcribed via OpenRouter; AI extracts fields -> Bitrix CRM
       image.py             # FSM ImageGen — image generation via Gemini 3 Pro Image, supports photo+caption editing
@@ -390,5 +391,5 @@ Logs in Docker: `docker compose logs -f`
 - Potok API SSL: uses Russian CA certificates — works from prod (Ubuntu), may fail from Mac without Russian CA bundle
 - Tailscale + OpenVPN conflict: OpenVPN `redirect-gateway` kills Tailscale connectivity. Cannot run both simultaneously without server-side split tunnel config.
 - Some callback handlers (`meeting.py`, `free_slots.py`) still re-fetch `db_user` via `db.get_user()` instead of using the middleware-injected one — not broken, just duplicated DB calls
-- `meeting.py` and `free_slots.py` duplicate the attendee-picker UI (`_cancel_kb`, `_search_status_kb`, `pick:*` / `search:*` handlers, ~120 lines) — pending extraction into `app/bot/routers/_attendee_picker.py`
 - `free_slots.py` handle_slot_selected / handle_topic_input duplicate meeting create + reply assembly — should reuse `meeting._commit_meeting` + `_build_meeting_reply`
+- Socrates SSRF guard has a narrow TOCTOU DNS-rebinding window: `_assert_public_url` resolves the host and then httpx resolves it again on connect. Fully closing this needs a pinned-IP transport (custom httpcore pool). Compensating controls today: `SOCRATES_ALLOWED` closed allow-list + internal Tailscale-only deployment. Revisit before opening Socrates to untrusted users.

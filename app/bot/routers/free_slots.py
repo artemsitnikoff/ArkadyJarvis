@@ -8,6 +8,11 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
+from app.bot.routers._attendee_picker import (
+    cancel_kb as _picker_cancel_kb,
+    search_results_kb as _picker_results_kb,
+    search_status_kb as _picker_status_kb,
+)
 from app.bot.routers.start import MENU_KB
 from app.config import settings
 from app import db
@@ -29,39 +34,23 @@ class BookSlot(StatesGroup):
 
 # ── Keyboards ────────────────────────────────────────────────
 
+_CANCEL_CB = "book:cancel"
+_DONE_CB = "search:done"
+_DONE_LABEL = "🔍 Искать слоты"
+
+
 def _cancel_kb(show_add_me: bool = True) -> InlineKeyboardMarkup:
-    """Cancel keyboard, optionally with '+ Я' button."""
-    rows: list[list[InlineKeyboardButton]] = []
-    if show_add_me:
-        rows.append([InlineKeyboardButton(text="+ Я", callback_data="search:addme")])
-    rows.append([InlineKeyboardButton(text="❌ Отмена", callback_data="book:cancel")])
-    return InlineKeyboardMarkup(inline_keyboard=rows)
+    return _picker_cancel_kb(_CANCEL_CB, show_add_me=show_add_me)
 
 
 def _search_status_kb(attendee_names: list[str], show_add_me: bool = True) -> InlineKeyboardMarkup:
-    """Keyboard shown after picking a user: add more / search slots / cancel."""
-    rows: list[list[InlineKeyboardButton]] = []
-    first_row = [
-        InlineKeyboardButton(text="+ Ещё участник", callback_data="search:more"),
-        InlineKeyboardButton(text="🔍 Искать слоты", callback_data="search:done"),
-    ]
-    if show_add_me:
-        first_row.insert(0, InlineKeyboardButton(text="+ Я", callback_data="search:addme"))
-    rows.append(first_row)
-    rows.append([InlineKeyboardButton(text="❌ Отмена", callback_data="book:cancel")])
-    return InlineKeyboardMarkup(inline_keyboard=rows)
+    return _picker_status_kb(
+        _CANCEL_CB, _DONE_CB, _DONE_LABEL, show_add_me=show_add_me,
+    )
 
 
 def _search_results_kb(users: list[dict]) -> InlineKeyboardMarkup:
-    """Keyboard with found users to pick from."""
-    rows: list[list[InlineKeyboardButton]] = []
-    for u in users:
-        rows.append([InlineKeyboardButton(
-            text=u["name"],
-            callback_data=f"pick:{u['id']}:{u['name'][:40]}",
-        )])
-    rows.append([InlineKeyboardButton(text="❌ Отмена", callback_data="book:cancel")])
-    return InlineKeyboardMarkup(inline_keyboard=rows)
+    return _picker_results_kb(users, _CANCEL_CB)
 
 
 # ── Helpers ───────────────────────────────────────────────────
