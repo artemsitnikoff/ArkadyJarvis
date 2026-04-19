@@ -181,6 +181,8 @@ All MENU_KB buttons are interactive — clicking opens a working mode via FSM st
 
 ### Socrates (Meeting Analyser)
 - Entry: "Сократ" button → FSM `Socrates.waiting_for_url` — user posts a URL to the recording
+- Access gated via `SOCRATES_ALLOWED` (comma-separated Telegram IDs). Empty → feature refuses with "Доступ ограничен"
+- Every URL (original + Yandex-resolved + each redirect hop) passes an SSRF guard: DNS resolution + private-address blocklist (loopback / RFC1918 / link-local / CGNAT 100.64.0.0/10 / IPv6 ULA / IPv4-mapped IPv6). `follow_redirects=False` with a manual 5-hop loop re-validates every target
 - Telegram bot uploads cap at 20 MB, so **only URLs are accepted** (Yandex.Disk public links are auto-resolved via `cloud-api.yandex.net`; direct HTTPs URLs work too)
 - Stage 0: `meeting_downloader.download_meeting()` streams to a temp dir (ceiling 1 GiB) → `ffmpeg_tool.convert_to_opus()` produces mono 16 kHz opus @ 24 kbps → `probe_duration()` via ffprobe
 - Meetings longer than `MEETING_MAX_MINUTES` (default 90) are rejected with a clear message — long recordings would overflow the OpenRouter base64 payload
@@ -341,7 +343,7 @@ Jira (integration user): `JIRA_URL`, `JIRA_USERNAME`, `JIRA_PASSWORD`
 
 Webhook: `WEBHOOK_TOKEN` (shared secret for incoming B24 webhooks, header `X-Webhook-Token`)
 
-Access control: `GLAFIRA_ALLOWED` (comma-separated Telegram IDs), `RECRUITER_ALLOWED` (comma-separated Telegram IDs)
+Access control: `GLAFIRA_ALLOWED` (comma-separated Telegram IDs), `RECRUITER_ALLOWED` (comma-separated Telegram IDs), `SOCRATES_ALLOWED` (comma-separated Telegram IDs; empty = Socrates disabled — each run costs Gemini + Claude ×2 + up to 1 GiB download)
 
 Scheduled content: `WEDNESDAY_FROG_CHAT_ID` (default 0 = disabled), `MONDAY_POSTER_CHAT_ID` (default 0 = disabled)
 

@@ -18,11 +18,24 @@ class FFmpegError(RuntimeError):
     pass
 
 
+def _ffprobe_path() -> str:
+    """Return the ffprobe binary that lives next to the configured ffmpeg.
+
+    Using `Path.with_name("ffprobe")` correctly handles both bare `"ffmpeg"`
+    (returns `"ffprobe"`) and absolute paths like `/opt/ffmpeg/bin/ffmpeg`
+    (returns `/opt/ffmpeg/bin/ffprobe`). String `.replace()` would mangle
+    the directory component in the latter case.
+    """
+    bin_ = settings.ffmpeg_bin
+    if not bin_ or bin_ == "ffmpeg":
+        return "ffprobe"
+    return str(Path(bin_).with_name("ffprobe"))
+
+
 async def probe_duration(path: str | Path) -> float:
     """Return duration of a media file in seconds. Raises FFmpegError."""
     path = str(path)
-    # ffprobe is shipped alongside ffmpeg; we use the same bin directory.
-    ffprobe = settings.ffmpeg_bin.replace("ffmpeg", "ffprobe") or "ffprobe"
+    ffprobe = _ffprobe_path()
     proc = await asyncio.create_subprocess_exec(
         ffprobe,
         "-v", "error",

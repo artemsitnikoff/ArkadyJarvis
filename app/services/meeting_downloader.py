@@ -60,7 +60,22 @@ def _is_blocked_address(addr: str) -> bool:
         ip = ipaddress.ip_address(addr)
     except ValueError:
         return False
-    return any(ip in net for net in _BLOCKED_NETS)
+    # Normalise IPv4-mapped IPv6 (`::ffff:10.0.0.1`) so it's tested against
+    # the IPv4 blocklist instead of slipping through as "public IPv6".
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped:
+        ip = ip.ipv4_mapped
+    if any(ip in net for net in _BLOCKED_NETS):
+        return True
+    # Belt + braces: stdlib flags catch extra reserved / multicast /
+    # unspecified ranges that aren't in the explicit blocklist.
+    return (
+        ip.is_private
+        or ip.is_loopback
+        or ip.is_link_local
+        or ip.is_reserved
+        or ip.is_multicast
+        or ip.is_unspecified
+    )
 
 
 async def _assert_public_url(url: str) -> str:
@@ -93,6 +108,9 @@ async def _assert_public_url(url: str) -> str:
 
 async def _resolve_yandex_disk(public_url: str) -> str:
     """Resolve a public Yandex.Disk URL to a direct download URL."""
+    # Re-validate the API endpoint itself — defence in depth even though the
+    # constant is ours. Catches a future typo / DNS poisoning of cloud-api.
+    await _assert_public_url(YANDEX_DISK_API)
     async with httpx.AsyncClient(timeout=30) as client:
         resp = await client.get(YANDEX_DISK_API, params={"public_key": public_url})
         if resp.status_code >= 400:
