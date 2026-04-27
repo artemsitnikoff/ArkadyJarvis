@@ -3,6 +3,11 @@
 Supports:
 - Yandex.Disk public links (`disk.yandex.ru/d/...`, `yadi.sk/d/...`) —
   resolved to a direct download URL via the public cloud-api.
+- Google Drive share links (`drive.google.com/file/d/{ID}/view`,
+  `drive.google.com/open?id={ID}`, `drive.google.com/uc?id={ID}`) —
+  rewritten to the `drive.usercontent.google.com/download` endpoint
+  with `confirm=t` so the virus-scan warning page is bypassed for
+  publicly shared files.
 - Any direct HTTP(S) URL (e.g. S3 pre-signed links, Telemost exports
   exposed as direct downloads).
 
@@ -17,9 +22,10 @@ bot's Tailscale / internal network.
 import asyncio
 import ipaddress
 import logging
+import re
 import socket
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 import httpx
 
@@ -29,6 +35,17 @@ YANDEX_DISK_API = "https://cloud-api.yandex.net/v1/disk/public/resources/downloa
 MAX_DOWNLOAD_BYTES = 1024 * 1024 * 1024  # 1 GiB safety ceiling
 
 YANDEX_DISK_HOSTS = {"disk.yandex.ru", "disk.yandex.com", "yadi.sk"}
+GOOGLE_DRIVE_HOSTS = {"drive.google.com", "docs.google.com"}
+
+# Drive file IDs are base64url-style. Same charset is used to validate
+# `?id=...` query values too — the URL goes back into our request, so we
+# sanitise it at the boundary instead of trusting whatever shape the user
+# pasted.
+_GDRIVE_ID_CHARSET = re.compile(r"^[A-Za-z0-9_-]+$")
+# `/file/d/{ID}/...` — most common share URL shape. Intentionally NOT
+# anchored at start: also matches domain-aware links like
+# `/a/{domain}/file/d/{ID}/view`.
+_GDRIVE_FILE_PATH_RE = re.compile(r"/file/d/([A-Za-z0-9_-]+)")
 
 # Anything resolving into these ranges is considered internal and blocked.
 # Covers loopback, link-local, RFC1918, Tailscale CGNAT, IPv6 unique-local & link-local.
@@ -53,6 +70,33 @@ class DownloadError(RuntimeError):
 def _is_yandex_disk(url: str) -> bool:
     host = urlparse(url).hostname or ""
     return host.lower() in YANDEX_DISK_HOSTS
+
+
+def _is_google_drive(url: str) -> bool:
+    # We check only the user-facing share hosts. The post-resolve host
+    # `drive.usercontent.google.com` is intentionally NOT here — we only
+    # ever reach it after `_resolve_google_drive` has already rewritten
+    # the URL, so re-detecting it would loop the resolver.
+    host = (urlparse(url).hostname or "").lower()
+    return host in GOOGLE_DRIVE_HOSTS
+
+
+def _extract_gdrive_id(url: str) -> str | None:
+    """Pull the Drive file ID out of common share-URL shapes.
+
+    Returns None for unrecognised shapes or values that don't match the
+    base64url charset — better to fail loudly upstream than to splice
+    arbitrary user input into an outgoing URL.
+    """
+    parsed = urlparse(url)
+    m = _GDRIVE_FILE_PATH_RE.search(parsed.path)
+    if m:
+        return m.group(1)
+    qs = parse_qs(parsed.query)
+    val = qs.get("id")
+    if val and val[0] and _GDRIVE_ID_CHARSET.match(val[0]):
+        return val[0]
+    return None
 
 
 def _is_blocked_address(addr: str) -> bool:
@@ -136,6 +180,27 @@ async def _resolve_yandex_disk(public_url: str) -> str:
         return href
 
 
+def _resolve_google_drive(public_url: str) -> str:
+    """Rewrite a Google Drive share URL into a direct-download URL.
+
+    Uses `drive.usercontent.google.com/download?...&confirm=t` — the
+    modern endpoint that bypasses the virus-scan warning HTML page for
+    publicly accessible files. The host is later re-validated by the
+    SSRF guard like every other URL.
+    """
+    file_id = _extract_gdrive_id(public_url)
+    if not file_id:
+        raise DownloadError(
+            "Не смог извлечь Google Drive file ID из URL. "
+            "Поддерживаются ссылки вида drive.google.com/file/d/{ID}/view, "
+            "drive.google.com/open?id={ID}, drive.google.com/uc?id={ID}."
+        )
+    return (
+        f"https://drive.usercontent.google.com/download"
+        f"?id={file_id}&export=download&confirm=t"
+    )
+
+
 async def download_meeting(url: str, dest: str | Path) -> int:
     """Download a recording to `dest`. Returns the final byte count.
 
@@ -145,7 +210,12 @@ async def download_meeting(url: str, dest: str | Path) -> int:
     dest = Path(dest)
     await _assert_public_url(url)
 
-    direct_url = await _resolve_yandex_disk(url) if _is_yandex_disk(url) else url
+    if _is_yandex_disk(url):
+        direct_url = await _resolve_yandex_disk(url)
+    elif _is_google_drive(url):
+        direct_url = _resolve_google_drive(url)
+    else:
+        direct_url = url
     await _assert_public_url(direct_url)
 
     # Log only the host — pre-signed URLs carry secrets in the query string.
@@ -169,6 +239,17 @@ async def download_meeting(url: str, dest: str | Path) -> int:
                 if resp.status_code >= 400:
                     raise DownloadError(
                         f"Download failed {resp.status_code} на host={log_host}"
+                    )
+                # Sanity check: if we ended up with an HTML page (Drive
+                # warning page, viewer page, "access denied" stub), fail
+                # fast with a readable error instead of feeding garbage
+                # to ffmpeg.
+                content_type = (resp.headers.get("content-type") or "").lower()
+                if content_type.startswith(("text/html", "application/xhtml")):
+                    raise DownloadError(
+                        "Сервер вернул HTML-страницу вместо файла. "
+                        "Проверь, что ссылка ведёт на сам файл и доступ "
+                        "открыт по ссылке (а не «по запросу»)."
                     )
                 # Optional pre-check on declared size.
                 declared = resp.headers.get("content-length")

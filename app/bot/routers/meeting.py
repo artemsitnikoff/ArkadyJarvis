@@ -19,7 +19,6 @@ from app.bot.routers._attendee_picker import (
 )
 from app.bot.routers.start import MENU_KB
 from app.config import settings
-from app import db
 from app.db import DbUser
 from app.utils import parse_attendees, parse_meeting_time
 
@@ -270,7 +269,9 @@ async def handle_mtg_search_input(message: Message, state: FSMContext, db_user: 
 
 
 @router.callback_query(F.data.startswith(PICK_CB_PREFIX), MeetingSetup.searching_attendee)
-async def handle_mtg_pick_user(callback: CallbackQuery, state: FSMContext):
+async def handle_mtg_pick_user(
+    callback: CallbackQuery, state: FSMContext, db_user: DbUser | None = None,
+):
     parts = callback.data.split(":", 2)
     if len(parts) < 3:
         await callback.answer("Ошибка данных кнопки", show_alert=True)
@@ -288,8 +289,10 @@ async def handle_mtg_pick_user(callback: CallbackQuery, state: FSMContext):
         attendee_names.append(name)
         await state.update_data(attendee_ids=attendee_ids, attendee_names=attendee_names)
 
-    db_user = await db.get_user(callback.from_user.id)
-    add_me = db_user and db_user["bitrix_user_id"] not in attendee_ids
+    add_me = bool(
+        db_user and db_user.get("bitrix_user_id")
+        and db_user["bitrix_user_id"] not in attendee_ids
+    )
     selected = ", ".join(attendee_names)
     await callback.message.edit_text(
         f"Выбраны: {selected}",
@@ -299,8 +302,12 @@ async def handle_mtg_pick_user(callback: CallbackQuery, state: FSMContext):
 
 
 @router.callback_query(F.data == ADD_ME_CB, MeetingSetup.searching_attendee)
-async def handle_mtg_add_me(callback: CallbackQuery, state: FSMContext):
-    db_user = await db.get_user(callback.from_user.id)
+async def handle_mtg_add_me(
+    callback: CallbackQuery, state: FSMContext, db_user: DbUser | None = None,
+):
+    if not db_user or not db_user.get("bitrix_user_id"):
+        await callback.answer("Сначала авторизуйся через /start", show_alert=True)
+        return
     bitrix_id = db_user["bitrix_user_id"]
     name = db_user["display_name"]
 
@@ -322,11 +329,15 @@ async def handle_mtg_add_me(callback: CallbackQuery, state: FSMContext):
 
 
 @router.callback_query(F.data == MORE_CB, MeetingSetup.searching_attendee)
-async def handle_mtg_add_more(callback: CallbackQuery, state: FSMContext):
+async def handle_mtg_add_more(
+    callback: CallbackQuery, state: FSMContext, db_user: DbUser | None = None,
+):
     data = await state.get_data()
     attendee_ids: list[int] = data.get("attendee_ids", [])
-    db_user = await db.get_user(callback.from_user.id)
-    add_me = db_user and db_user["bitrix_user_id"] not in attendee_ids
+    add_me = bool(
+        db_user and db_user.get("bitrix_user_id")
+        and db_user["bitrix_user_id"] not in attendee_ids
+    )
     await callback.message.edit_text("Напиши имя или фамилию коллеги:", reply_markup=_cancel_kb(show_add_me=add_me))
     await callback.answer()
 
@@ -346,7 +357,9 @@ async def handle_mtg_done(callback: CallbackQuery, state: FSMContext):
 
 
 @router.message(MeetingSetup.waiting_for_title, F.text)
-async def handle_mtg_title_input(message: Message, state: FSMContext, bitrix):
+async def handle_mtg_title_input(
+    message: Message, state: FSMContext, bitrix, db_user: DbUser | None = None,
+):
     title = (message.text or "").strip()
     if not title:
         await message.reply("Напиши тему встречи текстом:")
@@ -364,7 +377,6 @@ async def handle_mtg_title_input(message: Message, state: FSMContext, bitrix):
     else:
         context = title
 
-    db_user = await db.get_user(message.from_user.id)
     await _do_create_meeting(message, db_user, bitrix, dt, context, attendee_ids, attendee_names)
     await state.clear()
     logger.info("*** Meeting created via interactive search: %s attendees=%s", title, attendee_ids)

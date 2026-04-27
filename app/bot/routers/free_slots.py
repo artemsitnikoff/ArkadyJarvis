@@ -20,7 +20,6 @@ from app.bot.routers._attendee_picker import (
 from app.bot.routers.meeting import build_meeting_reply, commit_meeting
 from app.bot.routers.start import MENU_KB
 from app.config import settings
-from app import db
 from app.db import DbUser
 from app.utils import DAY_NAMES_RU, merge_intervals, parse_bitrix_dt
 
@@ -237,7 +236,9 @@ async def handle_search_input(message: Message, state: FSMContext, db_user: DbUs
 
 
 @router.callback_query(F.data.startswith(PICK_CB_PREFIX), BookSlot.searching_attendee)
-async def handle_pick_user(callback: CallbackQuery, state: FSMContext):
+async def handle_pick_user(
+    callback: CallbackQuery, state: FSMContext, db_user: DbUser | None = None,
+):
     # pick:<bitrix_id>:<name>
     parts = callback.data.split(":", 2)
     if len(parts) < 3:
@@ -256,8 +257,10 @@ async def handle_pick_user(callback: CallbackQuery, state: FSMContext):
         attendee_names.append(name)
         await state.update_data(attendee_ids=attendee_ids, attendee_names=attendee_names)
 
-    db_user = await db.get_user(callback.from_user.id)
-    add_me = db_user and db_user["bitrix_user_id"] not in attendee_ids
+    add_me = bool(
+        db_user and db_user.get("bitrix_user_id")
+        and db_user["bitrix_user_id"] not in attendee_ids
+    )
     selected = ", ".join(attendee_names)
     await callback.message.edit_text(
         f"Выбраны: {selected}",
@@ -267,8 +270,12 @@ async def handle_pick_user(callback: CallbackQuery, state: FSMContext):
 
 
 @router.callback_query(F.data == ADD_ME_CB, BookSlot.searching_attendee)
-async def handle_add_me(callback: CallbackQuery, state: FSMContext):
-    db_user = await db.get_user(callback.from_user.id)
+async def handle_add_me(
+    callback: CallbackQuery, state: FSMContext, db_user: DbUser | None = None,
+):
+    if not db_user or not db_user.get("bitrix_user_id"):
+        await callback.answer("Сначала авторизуйся через /start", show_alert=True)
+        return
     bitrix_id = db_user["bitrix_user_id"]
     name = db_user["display_name"]
 
@@ -290,11 +297,15 @@ async def handle_add_me(callback: CallbackQuery, state: FSMContext):
 
 
 @router.callback_query(F.data == MORE_CB, BookSlot.searching_attendee)
-async def handle_add_more(callback: CallbackQuery, state: FSMContext):
+async def handle_add_more(
+    callback: CallbackQuery, state: FSMContext, db_user: DbUser | None = None,
+):
     data = await state.get_data()
     attendee_ids: list[int] = data.get("attendee_ids", [])
-    db_user = await db.get_user(callback.from_user.id)
-    add_me = db_user and db_user["bitrix_user_id"] not in attendee_ids
+    add_me = bool(
+        db_user and db_user.get("bitrix_user_id")
+        and db_user["bitrix_user_id"] not in attendee_ids
+    )
     await callback.message.edit_text("Напиши имя или фамилию коллеги:", reply_markup=_cancel_kb(show_add_me=add_me))
     await callback.answer()
 
@@ -338,7 +349,9 @@ async def handle_day_header(callback: CallbackQuery):
 
 
 @router.callback_query(F.data.startswith("book:"), BookSlot.waiting_for_slot)
-async def handle_slot_selected(callback: CallbackQuery, state: FSMContext, bitrix):
+async def handle_slot_selected(
+    callback: CallbackQuery, state: FSMContext, bitrix, db_user: DbUser | None = None,
+):
     # Parse callback_data: book:DDMM:HHMM:HHMM
     parts = callback.data.split(":")
     if len(parts) != 4:
@@ -363,10 +376,12 @@ async def handle_slot_selected(callback: CallbackQuery, state: FSMContext, bitri
     topic = data.get("topic")
     if topic:
         # Title already provided (interactive search flow) — create meeting directly
+        if not db_user or not db_user.get("bitrix_user_id"):
+            await callback.answer("Сначала авторизуйся через /start", show_alert=True)
+            return
         await callback.message.edit_text(f"Создаю встречу «{topic}» на {label}...")
         await callback.answer()
 
-        db_user = await db.get_user(callback.from_user.id)
         attendee_ids = data["attendee_ids"]
         attendee_names = data.get("attendee_names", [])
 

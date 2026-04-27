@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import os
 import time
 from pathlib import Path
 from urllib.parse import urlencode
@@ -42,7 +43,12 @@ class _BitrixBase:
             "expires_at": int(time.time()) + int(data.get("expires_in", 3600)),
         }
         TOKENS_FILE.parent.mkdir(parents=True, exist_ok=True)
-        TOKENS_FILE.write_text(json.dumps(tokens, indent=2))
+        # Atomic rename — a kill mid-write would leave a half-JSON file
+        # and brick the entire Bitrix client until someone restores it
+        # manually.
+        tmp = TOKENS_FILE.with_suffix(TOKENS_FILE.suffix + ".tmp")
+        tmp.write_text(json.dumps(tokens, indent=2))
+        os.replace(tmp, TOKENS_FILE)
         logger.info("Bitrix tokens saved (endpoint: %s)", tokens["client_endpoint"])
 
     async def _refresh_access_token(self, refresh_token: str) -> dict:

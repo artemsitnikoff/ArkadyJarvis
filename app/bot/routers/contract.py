@@ -41,11 +41,14 @@ async def handle_contract_document(message: Message, state: FSMContext, bot: Bot
     try:
         text = extract_text(file_bytes, filename)
     except UnsupportedDocumentError as e:
+        # Curated message from our own exception class — safe to show.
         await wait_msg.edit_text(f"❌ {e}", reply_markup=MENU_KB)
         return
-    except Exception as e:
-        logger.error("*** ERROR parsing contract: %s", e, exc_info=True)
-        await wait_msg.edit_text(f"❌ Не удалось прочитать файл: {e}", reply_markup=MENU_KB)
+    except Exception:
+        logger.error("*** ERROR parsing contract", exc_info=True)
+        await wait_msg.edit_text(
+            "❌ Не удалось прочитать файл.", reply_markup=MENU_KB,
+        )
         return
 
     if not text.strip():
@@ -66,9 +69,11 @@ async def handle_contract_document(message: Message, state: FSMContext, bot: Bot
 
     try:
         answer = await ai_client.complete(full_prompt, timeout=300)
-    except Exception as e:
-        logger.error("*** ERROR checking contract: %s", e, exc_info=True)
-        await wait_msg.edit_text(f"❌ Ошибка проверки: {e}", reply_markup=MENU_KB)
+    except Exception:
+        logger.error("*** ERROR checking contract", exc_info=True)
+        await wait_msg.edit_text(
+            "❌ Ошибка проверки. Попробуй ещё раз.", reply_markup=MENU_KB,
+        )
         return
 
     html_answer = md_to_telegram_html(answer)

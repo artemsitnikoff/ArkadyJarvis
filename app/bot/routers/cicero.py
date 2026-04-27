@@ -43,11 +43,14 @@ async def handle_cicero_document(message: Message, state: FSMContext, bot: Bot, 
     try:
         doc_text = extract_text(buffer.getvalue(), filename)
     except UnsupportedDocumentError as e:
+        # Curated message from our own exception class — safe to show.
         await wait_msg.edit_text(f"❌ {e}", reply_markup=EXIT_KB)
         return
-    except Exception as e:
-        logger.error("*** ERROR parsing cicero doc: %s", e, exc_info=True)
-        await wait_msg.edit_text(f"❌ Не удалось прочитать файл: {e}", reply_markup=EXIT_KB)
+    except Exception:
+        logger.error("*** ERROR parsing cicero doc", exc_info=True)
+        await wait_msg.edit_text(
+            "❌ Не удалось прочитать файл.", reply_markup=EXIT_KB,
+        )
         return
 
     if not doc_text.strip():
@@ -73,9 +76,11 @@ async def handle_cicero_document(message: Message, state: FSMContext, bot: Bot, 
 
     try:
         answer = await ai_client.complete(full_prompt, timeout=300)
-    except Exception as e:
-        logger.error("*** ERROR cicero doc: %s", e, exc_info=True)
-        await wait_msg.edit_text(f"❌ Ошибка: {e}", reply_markup=EXIT_KB)
+    except Exception:
+        logger.error("*** ERROR cicero doc", exc_info=True)
+        await wait_msg.edit_text(
+            "❌ AI не ответил. Попробуй ещё раз.", reply_markup=EXIT_KB,
+        )
         return
 
     await _send_answer(message, wait_msg, answer)
@@ -96,9 +101,11 @@ async def handle_cicero_text(message: Message, state: FSMContext, ai_client):
 
     try:
         answer = await ai_client.complete(full_prompt, timeout=300)
-    except Exception as e:
-        logger.error("*** ERROR cicero text: %s", e, exc_info=True)
-        await wait_msg.edit_text(f"❌ Ошибка: {e}", reply_markup=EXIT_KB)
+    except Exception:
+        logger.error("*** ERROR cicero text", exc_info=True)
+        await wait_msg.edit_text(
+            "❌ AI не ответил. Попробуй ещё раз.", reply_markup=EXIT_KB,
+        )
         return
 
     await _send_answer(message, wait_msg, answer)

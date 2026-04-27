@@ -28,6 +28,13 @@ router = APIRouter()
 TOKENS_FILE = Path(__file__).resolve().parent.parent.parent / "data" / "bitrix_tokens.json"
 
 
+def _read_tokens_file() -> str | None:
+    """Sync read of the tokens file, designed to run in a worker thread."""
+    if not TOKENS_FILE.exists():
+        return None
+    return TOKENS_FILE.read_text()
+
+
 # ── Health ──────────────────────────────────────────────────────────────────
 
 
@@ -44,15 +51,17 @@ async def health():
     except Exception as e:
         checks["db"] = f"error: {e}"
 
-    # Bitrix token expiry check
+    # Bitrix token expiry check — file IO is offloaded to a thread so
+    # k8s liveness / cron probes don't stall the event loop.
     try:
-        if TOKENS_FILE.exists():
-            tokens = json.loads(TOKENS_FILE.read_text())
+        tokens_text = await asyncio.to_thread(_read_tokens_file)
+        if tokens_text is None:
+            checks["bitrix_token"] = "no token file"
+        else:
+            tokens = json.loads(tokens_text)
             expires_at = tokens.get("expires_at", 0)
             remaining = expires_at - int(time.time())
             checks["bitrix_token"] = "ok" if remaining > 60 else f"expires in {remaining}s"
-        else:
-            checks["bitrix_token"] = "no token file"
     except Exception as e:
         checks["bitrix_token"] = f"error: {e}"
 

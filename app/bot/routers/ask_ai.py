@@ -33,6 +33,11 @@ async def _ask_and_reply(message: Message, question: str, *, ai_client):
         answer = await ai_client.complete(question)
         html_answer = md_to_telegram_html(answer)
         await wait_msg.edit_text(html_answer, reply_markup=MENU_KB)
-    except Exception as e:
-        logger.error("*** ERROR asking AI: %s", e, exc_info=True)
-        await wait_msg.edit_text(f"❌ Ошибка: {e}")
+    except Exception:
+        # Claude CLI errors can include stderr / oauth flow hints — keep
+        # them out of the user-facing message.
+        logger.error("*** ERROR asking AI", exc_info=True)
+        await wait_msg.edit_text(
+            "❌ Не получилось обратиться к AI. Попробуй ещё раз.",
+            reply_markup=MENU_KB,
+        )

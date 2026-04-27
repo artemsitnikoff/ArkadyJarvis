@@ -39,7 +39,14 @@ def _load() -> dict:
 
 
 def _save(data: dict) -> None:
-    TOKEN_FILE.write_text(json.dumps(data, indent=2))
+    # Atomic rename: write to a temp file in the same directory, then
+    # os.replace() onto the real path. Refresh tokens are single-use, so
+    # a half-written file (kill mid-write) would brick the bot until
+    # someone manually re-authenticates.
+    TOKEN_FILE.parent.mkdir(parents=True, exist_ok=True)
+    tmp = TOKEN_FILE.with_suffix(TOKEN_FILE.suffix + ".tmp")
+    tmp.write_text(json.dumps(data, indent=2))
+    os.replace(tmp, TOKEN_FILE)
 
 
 def init_token_file() -> None:

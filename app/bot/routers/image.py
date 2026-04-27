@@ -72,6 +72,11 @@ async def _generate_and_send(
         photo = BufferedInputFile(image_bytes, filename="image.png")
         await message.answer_photo(photo, reply_markup=MENU_KB)
         await wait_msg.delete()
-    except Exception as e:
-        logger.error("*** ERROR generating image: %s", e, exc_info=True)
-        await wait_msg.edit_text(f"❌ Ошибка генерации: {e}")
+    except Exception:
+        # OpenRouter errors can include API-key fragments / model-policy
+        # JSON — keep them server-side only.
+        logger.error("*** ERROR generating image", exc_info=True)
+        await wait_msg.edit_text(
+            "❌ Не удалось сгенерировать картинку. Попробуй ещё раз.",
+            reply_markup=MENU_KB,
+        )

@@ -284,12 +284,14 @@ async def _abort(wait_msg: Message, user_message: str) -> NoReturn:
 
 def _source_name_from_url(url: str) -> str:
     # Keep it short and safe — file-system basename without query string.
-    # For Yandex.Disk links the tail is an opaque hash (`XYZ123abc`), which
+    # For Yandex.Disk / Google Drive links the tail is an opaque hash, which
     # looks ugly in the transcript header; collapse those to a readable label.
     from urllib.parse import urlparse
 
     host = (urlparse(url).hostname or "").lower()
     if host in {"disk.yandex.ru", "disk.yandex.com", "yadi.sk"}:
         return "Yandex.Disk"
+    if host in {"drive.google.com", "docs.google.com", "drive.usercontent.google.com"}:
+        return "Google Drive"
     tail = url.split("?", 1)[0].rstrip("/").split("/")[-1]
     return tail or "meeting"

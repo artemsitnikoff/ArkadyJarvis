@@ -111,6 +111,12 @@ async def _create_task(
             reply_markup=MENU_KB,
         )
         logger.info("*** Jira issue created: %s", issue_key)
-    except Exception as e:
-        logger.error("*** ERROR creating Jira issue: %s", e, exc_info=True)
-        await message.reply(f"❌ Ошибка создания задачи: {html_mod.escape(str(e))}")
+    except Exception:
+        # Jira exceptions can carry URLs / JSON payload fragments / auth
+        # hints in str(e) — show a fixed message and rely on the log for
+        # diagnosis.
+        logger.error("*** ERROR creating Jira issue", exc_info=True)
+        await message.reply(
+            "❌ Не удалось создать задачу. Детали — в логах бота.",
+            reply_markup=MENU_KB,
+        )

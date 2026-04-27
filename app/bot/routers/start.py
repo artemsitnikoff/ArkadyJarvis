@@ -15,6 +15,7 @@ from aiogram.types import (
 
 from app import db
 from app.config import settings
+from app.db import DbUser
 from app.version import __version__
 
 logger = logging.getLogger("arkadyjarvis")
@@ -161,9 +162,10 @@ async def handle_noop(callback: CallbackQuery):
 
 
 @router.callback_query(F.data.startswith("work:"))
-async def handle_work(callback: CallbackQuery, bitrix, ai_client):
+async def handle_work(
+    callback: CallbackQuery, bitrix, ai_client, db_user: DbUser | None = None,
+):
     from app.bot.routers.work import start_work_day
-    db_user = await db.get_user(callback.from_user.id)
     await start_work_day(callback, bitrix, ai_client, db_user)
 
 
@@ -337,19 +339,20 @@ async def _enter_recruiter(callback: CallbackQuery, state: FSMContext, potok):
 @router.callback_query(F.data.startswith("hint:"))
 async def handle_hint(
     callback: CallbackQuery, state: FSMContext, bitrix, potok, ai_client, bot,
+    db_user: DbUser | None = None,
 ):
     key = callback.data.split(":", 1)[1]
 
     # Specialized handlers that need service deps or extra logic.
     if key == "team":
-        await _show_team(callback, bitrix)
+        await _show_team(callback, bitrix, db_user=db_user)
         return
     if key == "meetings":
-        await _show_meetings(callback, bitrix)
+        await _show_meetings(callback, bitrix, db_user=db_user)
         return
     if key == "summary":
         await callback.answer()
-        await _run_summary(callback, ai_client, bot=bot)
+        await _run_summary(callback, ai_client, bot=bot, db_user=db_user)
         return
     if key == "glafira":
         await _enter_glafira(callback, state)
@@ -378,7 +381,9 @@ async def handle_hint(
     await callback.answer()
 
 
-async def _run_summary(callback: CallbackQuery, ai_client, bot=None):
+async def _run_summary(
+    callback: CallbackQuery, ai_client, bot=None, *, db_user: DbUser | None = None,
+):
     """Run summarization. In DM: overview of all groups. In group: summarize current chat."""
     from zoneinfo import ZoneInfo
 
@@ -421,7 +426,6 @@ async def _run_summary(callback: CallbackQuery, ai_client, bot=None):
                 await wait_msg.edit_text("Нет сообщений в группах за сегодня.", reply_markup=MENU_KB)
                 return
 
-            db_user = await db.get_user(tg_id)
             user_name = db_user.get("display_name", "") if db_user else ""
             overview = await build_daily_overview(
                 user_summaries, ai_client=ai_client, user_name=user_name,
@@ -429,9 +433,11 @@ async def _run_summary(callback: CallbackQuery, ai_client, bot=None):
             await wait_msg.edit_text(
                 f"#summary\n📊 <b>Обзор дня</b>\n\n{overview}", reply_markup=MENU_KB,
             )
-    except Exception as e:
-        logger.error("Summary error: %s", e, exc_info=True)
-        await callback.message.answer(f"❌ Ошибка суммаризации: {e}", reply_markup=MENU_KB)
+    except Exception:
+        logger.error("Summary error", exc_info=True)
+        await callback.message.answer(
+            "❌ Не удалось собрать сводку. Попробуй ещё раз.", reply_markup=MENU_KB,
+        )
 
 
 def _work_status_line(person: dict) -> str:
@@ -471,8 +477,9 @@ def _work_status_line(person: dict) -> str:
     return label
 
 
-async def _show_team(callback: CallbackQuery, bitrix):
-    db_user = await db.get_user(callback.from_user.id)
+async def _show_team(
+    callback: CallbackQuery, bitrix, *, db_user: DbUser | None = None,
+):
     if not db_user or not db_user.get("bitrix_user_id"):
         await callback.message.answer("❌ Сначала авторизуйся: /start")
         await callback.answer()
@@ -523,8 +530,9 @@ async def _show_team(callback: CallbackQuery, bitrix):
     await wait_msg.edit_text("\n".join(lines), reply_markup=kb)
 
 
-async def _show_meetings(callback: CallbackQuery, bitrix):
-    db_user = await db.get_user(callback.from_user.id)
+async def _show_meetings(
+    callback: CallbackQuery, bitrix, *, db_user: DbUser | None = None,
+):
     if not db_user or not db_user.get("bitrix_user_id"):
         await callback.message.answer("❌ Сначала авторизуйся: /start")
         await callback.answer()

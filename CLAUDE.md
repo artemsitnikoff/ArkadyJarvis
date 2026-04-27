@@ -184,7 +184,8 @@ All MENU_KB buttons are interactive — clicking opens a working mode via FSM st
 - Entry: "Сократ" button → FSM `Socrates.waiting_for_url` — user posts a URL to the recording
 - Open to every authorised user. A per-user `asyncio.Lock` prevents one user from stacking parallel pipelines (each run spends Gemini + Claude ×2 + up to 1 GiB download)
 - Every URL (original + Yandex-resolved + each redirect hop) passes an SSRF guard: DNS resolution + private-address blocklist (loopback / RFC1918 / link-local / CGNAT 100.64.0.0/10 / IPv6 ULA / IPv4-mapped IPv6). `follow_redirects=False` with a manual 5-hop loop re-validates every target
-- Telegram bot uploads cap at 20 MB, so **only URLs are accepted** (Yandex.Disk public links are auto-resolved via `cloud-api.yandex.net`; direct HTTPs URLs work too)
+- Telegram bot uploads cap at 20 MB, so **only URLs are accepted**. Auto-resolved sources: Yandex.Disk public links (via `cloud-api.yandex.net`) and Google Drive share links (`/file/d/{ID}/view`, `?id={ID}` → rewritten to `drive.usercontent.google.com/download?...&confirm=t`, which bypasses the virus-scan warning page for public files). Direct HTTPS URLs work too.
+- After redirects resolve, the response `Content-Type` is checked: if it starts with `text/html`, we abort with a readable error instead of letting ffmpeg choke on an HTML page (Drive viewer / "request access" stub / etc.)
 - Stage 0: `meeting_downloader.download_meeting()` streams to a temp dir (ceiling 1 GiB) → `ffmpeg_tool.convert_to_opus()` produces mono 16 kHz opus @ 24 kbps → `probe_duration()` via ffprobe
 - Meetings longer than `MEETING_MAX_MINUTES` (default 90) are rejected with a clear message — long recordings would overflow the OpenRouter base64 payload
 - Stage 1: `OpenRouterClient.transcribe_voice()` → diarized markdown transcript
