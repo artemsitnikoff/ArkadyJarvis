@@ -23,47 +23,32 @@ async def main():
 
     async with httpx.AsyncClient(base_url=settings.potok_base_url, headers=headers, timeout=30) as client:
 
-        endpoints = [
-            f"/api/v3/applicants/{APPLICANT_ID}/events.json",
-            f"/api/v2/applicants/{APPLICANT_ID}/events.json",
-            f"/api/v3/events.json?applicant_id={APPLICANT_ID}",
-            f"/api/v3/applicants/{APPLICANT_ID}.json",
-        ]
+        # We now know events live in applicant detail under "events" key
+        url = f"/api/v3/applicants/{APPLICANT_ID}.json"
+        resp = await client.get(url)
+        print(f"\nGET {url}  →  {resp.status_code}")
+        data = resp.json()
+        events = data.get("events", [])
+        print(f"Total events: {len(events)}")
 
-        for url in endpoints:
-            resp = await client.get(url)
-            print(f"\n{'='*60}")
-            print(f"GET {url}  →  {resp.status_code}")
-            if resp.status_code == 200:
-                print(f"  Raw body ({len(resp.content)} bytes): {resp.text[:500]!r}")
-                if not resp.content:
-                    print("  (empty body)")
-                    continue
-                data = resp.json()
-                # Print structure
-                if isinstance(data, dict):
-                    print(f"Keys: {list(data.keys())}")
-                    # Show events/objects if present
-                    for key in ("objects", "events", "comments"):
-                        if key in data:
-                            items = data[key]
-                            print(f"  [{key}]: {len(items)} items")
-                            for item in items[:3]:
-                                print(f"    id={item.get('id')} type={item.get('type')} body_len={len(item.get('body',''))}")
-                                body = item.get("body", "")
-                                if "JARVIS" in body:
-                                    print(f"    *** FOUND JARVIS MARKER ***")
-                                    match = re.search(r"<!-- JARVIS:QUESTIONS:(.*?) -->", body, re.DOTALL)
-                                    if match:
-                                        print(f"    Questions: {json.loads(match.group(1))}")
-                                    else:
-                                        print(f"    Body snippet: {body[:300]}")
-                    # If applicant detail — check events field
-                    if "events" not in data and "objects" not in data:
-                        print(f"  Full keys: {json.dumps(list(data.keys()), ensure_ascii=False)}")
-                elif isinstance(data, list):
-                    print(f"  List of {len(data)} items")
-            else:
-                print(f"  Body: {resp.text[:200]}")
+        for event in events:
+            eid = event.get("id")
+            etype = event.get("type")
+            body = event.get("body") or ""
+            print(f"\n  Event id={eid} type={etype} body_len={len(body)}")
+            if "JARVIS" in body:
+                print(f"  *** FOUND JARVIS MARKER ***")
+                match = re.search(r"<!-- JARVIS:QUESTIONS:(.*?) -->", body, re.DOTALL)
+                if match:
+                    questions = json.loads(match.group(1))
+                    print(f"  Questions ({len(questions)}):")
+                    for q in questions:
+                        print(f"    - {q}")
+                else:
+                    print(f"  Marker found but regex didn't match. Body snippet:")
+                    idx = body.find("JARVIS")
+                    print(f"  ...{body[max(0,idx-20):idx+200]}...")
+            elif etype == "Event::Comment":
+                print(f"  Body snippet: {body[:150]!r}")
 
 asyncio.run(main())

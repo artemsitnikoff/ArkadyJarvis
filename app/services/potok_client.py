@@ -301,19 +301,12 @@ class PotokClient:
             logger.info("Potok: questions for %s served from cache", applicant_id)
             return self._questions_cache[applicant_id]
 
-        # Fallback: parse from Potok event comments
+        # Fallback: parse from Potok applicant detail (events embedded in response)
         try:
-            resp = await self._client.get(
-                f"/api/v3/applicants/{applicant_id}/events.json"
-            )
-            if resp.status_code == 404:
-                resp = await self._client.get(
-                    "/api/v3/events.json",
-                    params={"applicant_id": applicant_id},
-                )
+            resp = await self._client.get(f"/api/v3/applicants/{applicant_id}.json")
             resp.raise_for_status()
             data = resp.json()
-            events = data.get("objects", data if isinstance(data, list) else [])
+            events = data.get("events", [])
             logger.info("Potok: fetched %d events for applicant %s", len(events), applicant_id)
         except Exception as e:
             logger.warning("Potok: failed to fetch events for applicant %s: %s", applicant_id, e)
