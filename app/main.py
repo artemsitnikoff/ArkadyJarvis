@@ -18,6 +18,7 @@ from app.services.openclaw_client import OpenClawClient
 from app.services.openrouter_client import OpenRouterClient
 from app.services.claude_token import init_token_file
 from app.services.potok_client import PotokClient
+from app.services.userbot import UserbotClient
 from app.version import __version__
 
 logging.basicConfig(
@@ -47,11 +48,23 @@ async def lifespan(app: FastAPI):
     openclaw = OpenClawClient()
     potok = PotokClient()
 
+    userbot: UserbotClient | None = None
+    if settings.telethon_session:
+        try:
+            userbot = UserbotClient()
+            await userbot.start()
+        except Exception as e:
+            logger.warning("Userbot disabled: %s", e)
+            userbot = None
+    else:
+        logger.info("Userbot: TELETHON_SESSION not set, userbot disabled")
+
     dp["ai_client"] = ai_client
     dp["bitrix"] = bitrix
     dp["openrouter"] = openrouter
     dp["openclaw"] = openclaw
     dp["potok"] = potok
+    dp["userbot"] = userbot
 
     # Register middlewares on the dispatcher (order: error wraps auth wraps handler)
     # Applied to both messages and callback_query so callback handlers also get
@@ -135,6 +148,8 @@ async def lifespan(app: FastAPI):
     await openrouter.close()
     await openclaw.close()
     await potok.close()
+    if userbot:
+        await userbot.stop()
     await close_db()
     logger.info("Shutdown complete")
 

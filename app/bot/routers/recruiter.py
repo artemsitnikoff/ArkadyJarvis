@@ -32,10 +32,18 @@ def _parse_allowed_ids(csv: str) -> set[int]:
 RECRUITER_ALLOWED = _parse_allowed_ids(settings.recruiter_allowed)
 
 
+CONTACT_MESSAGE_TEMPLATE = (
+    "Добрый день! 👋\n\n"
+    "Рассмотрел ваш профиль на вакансию «{job_name}» и хотел бы обсудить её подробнее.\n\n"
+    "Удобно пообщаться?"
+)
+
+
 class Recruiter(StatesGroup):
     choosing_job = State()
     confirming = State()
     scoring = State()
+    contacting = State()
 
 
 def _filter_by_stage(applicants: list[Applicant], job_id: int, stage_name: str) -> list[Applicant]:
@@ -259,7 +267,7 @@ async def handle_job_selected(callback: CallbackQuery, state: FSMContext, potok)
 
 
 @router.callback_query(F.data.startswith("recruit:contact:"), Recruiter.confirming)
-async def handle_contact_candidates(callback: CallbackQuery, state: FSMContext):
+async def handle_contact_candidates(callback: CallbackQuery, state: FSMContext, userbot):
     await callback.answer()
     data = await state.get_data()
     contact_applicants = data.get("contact_applicants", [])
@@ -273,18 +281,87 @@ async def handle_contact_candidates(callback: CallbackQuery, state: FSMContext):
         await state.clear()
         return
 
+    await state.set_state(Recruiter.contacting)
+
+    userbot_ok = userbot is not None
     await callback.message.answer(
         f"📋 <b>Кандидаты для контакта: {len(contact_applicants)}</b>\n"
         f"Вакансия: {html_mod.escape(job.name)}\n"
         f"Стадия: «{INTERVIEW_STAGE_NAME}»"
+        + ("" if userbot_ok else "\n\n⚠️ Userbot не настроен — кнопка «Написать» недоступна")
     )
 
     for applicant in contact_applicants:
         text = _format_contact_card(applicant)
-        await callback.message.answer(text)
+        phones = applicant.phones or []
+        if userbot_ok and phones:
+            kb = InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(
+                    text=f"✉️ Написать",
+                    callback_data=f"recruit:message:{applicant.id}",
+                )
+            ]])
+        else:
+            kb = None
+        await callback.message.answer(text, reply_markup=kb)
 
-    await callback.message.answer("✅ Все кандидаты показаны.", reply_markup=MENU_KB)
-    await state.clear()
+    exit_kb = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="◀️ Меню", callback_data="recruit:exit")
+    ]])
+    await callback.message.answer(
+        "Нажми «✉️ Написать» чтобы отправить сообщение кандидату со своего Telegram.",
+        reply_markup=exit_kb,
+    )
+
+
+@router.callback_query(F.data.startswith("recruit:message:"), Recruiter.contacting)
+async def handle_send_message(callback: CallbackQuery, state: FSMContext, userbot):
+    applicant_id = int(callback.data.split(":")[-1])
+    data = await state.get_data()
+    contact_applicants = data.get("contact_applicants", [])
+    job = data["job"]
+
+    applicant = next((a for a in contact_applicants if a.id == applicant_id), None)
+    if not applicant:
+        await callback.answer("Кандидат не найден", show_alert=True)
+        return
+
+    phones = applicant.phones or []
+    if not phones:
+        await callback.answer("У кандидата нет телефона в Potok", show_alert=True)
+        return
+
+    if not userbot:
+        await callback.answer("Userbot не настроен", show_alert=True)
+        return
+
+    await callback.answer("Отправляю...")
+
+    text = CONTACT_MESSAGE_TEMPLATE.format(job_name=job.name)
+    success = await userbot.send_message(phones[0], text)
+
+    if success:
+        try:
+            await callback.message.edit_reply_markup(
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                    InlineKeyboardButton(text="✅ Отправлено", callback_data="recruit:noop")
+                ]])
+            )
+        except Exception:
+            pass
+        await callback.message.answer(
+            f"✅ Сообщение отправлено <b>{html_mod.escape(applicant.display_name)}</b>"
+        )
+    else:
+        await callback.message.answer(
+            f"❌ Не удалось отправить <b>{html_mod.escape(applicant.display_name)}</b> "
+            f"— нет Telegram или приватность закрыта"
+        )
+
+
+@router.callback_query(F.data == "recruit:noop")
+async def handle_noop(callback: CallbackQuery):
+    await callback.answer()
 
 
 async def _run_scoring(
