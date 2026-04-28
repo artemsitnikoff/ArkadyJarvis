@@ -344,14 +344,10 @@ async def handle_send_message(callback: CallbackQuery, state: FSMContext, userbo
     intro = f"{name_part} представляю компанию {company}. Рассматриваю вас на вакансию «{job.name}»."
     await userbot.send_message(phone, intro)
 
-    sent = 0
-    for q in questions:
-        if await userbot.send_message(phone, q):
-            sent += 1
-        else:
-            break
+    combined = "\n\n".join(f"{i}. {q}" for i, q in enumerate(questions, 1))
+    success = await userbot.send_message(phone, combined)
 
-    if sent > 0:
+    if success:
         try:
             await callback.message.edit_reply_markup(
                 reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
@@ -363,7 +359,7 @@ async def handle_send_message(callback: CallbackQuery, state: FSMContext, userbo
 
         await callback.message.answer(
             f"✅ Отправлено <b>{html_mod.escape(applicant.display_name)}</b>: "
-            f"{sent} вопрос{'ов' if sent != 1 else ''}"
+            f"{len(questions)} вопрос{'ов' if len(questions) != 1 else ''}"
         )
     else:
         await callback.message.answer(
