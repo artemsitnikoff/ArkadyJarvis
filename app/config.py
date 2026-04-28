@@ -72,6 +72,8 @@ class Settings(BaseSettings):
     telethon_api_id: int = 0
     telethon_api_hash: str = ""
     telethon_session: str = ""  # StringSession — generate via scripts/create_userbot_session.py
+    recruiter_company: str = "Digital Clouds"  # shown in first contact message to candidate
+    recruiter_name: str = ""  # recruiter's first name, e.g. "Артём"
 
     # Socrates meeting analyser
     ffmpeg_bin: str = "ffmpeg"

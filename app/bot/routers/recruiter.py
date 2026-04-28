@@ -338,6 +338,12 @@ async def handle_send_message(callback: CallbackQuery, state: FSMContext, userbo
         await callback.answer("Нет вопросов для этого кандидата — сначала оцените его", show_alert=True)
         return
 
+    # Intro: company + vacancy context
+    company = settings.recruiter_company
+    name_part = f"Меня зовут {settings.recruiter_name}, я" if settings.recruiter_name else "Я"
+    intro = f"{name_part} представляю компанию {company}. Рассматриваю вас на вакансию «{job.name}»."
+    await userbot.send_message(phone, intro)
+
     sent = 0
     for q in questions:
         if await userbot.send_message(phone, q):
