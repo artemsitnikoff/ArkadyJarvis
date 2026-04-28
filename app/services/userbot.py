@@ -8,6 +8,8 @@ from telethon.errors import (
     UserPrivacyRestrictedError,
 )
 from telethon.sessions import StringSession
+from telethon.tl.functions.contacts import ImportContactsRequest, DeleteContactsRequest
+from telethon.tl.types import InputPhoneContact
 
 from app.config import settings
 
@@ -50,9 +52,27 @@ class UserbotClient:
             logger.warning("Userbot: empty phone after normalization")
             return False
         try:
-            await self._client.send_message(phone, text)
-            logger.info("Userbot: sent message to %s", phone)
+            # Import contact temporarily so Telethon can resolve the phone to a Telegram user
+            result = await self._client(ImportContactsRequest([
+                InputPhoneContact(client_id=0, phone=phone, first_name="Candidate", last_name="")
+            ]))
+
+            if not result.users:
+                logger.warning("Userbot: phone %s not found on Telegram", phone)
+                return False
+
+            user = result.users[0]
+            await self._client.send_message(user, text)
+            logger.info("Userbot: sent message to %s (@%s)", phone, user.username)
+
+            # Clean up — remove the temporarily added contact
+            try:
+                await self._client(DeleteContactsRequest(id=[user]))
+            except Exception:
+                pass
+
             return True
+
         except (UserPrivacyRestrictedError, InputUserDeactivatedError) as e:
             logger.warning("Userbot: cannot message %s: %s", phone, e)
             return False
