@@ -35,6 +35,10 @@ async def main():
             print(f"\n{'='*60}")
             print(f"GET {url}  →  {resp.status_code}")
             if resp.status_code == 200:
+                print(f"  Raw body ({len(resp.content)} bytes): {resp.text[:500]!r}")
+                if not resp.content:
+                    print("  (empty body)")
+                    continue
                 data = resp.json()
                 # Print structure
                 if isinstance(data, dict):
