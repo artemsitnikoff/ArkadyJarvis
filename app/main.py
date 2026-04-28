@@ -10,7 +10,7 @@ from app.api.routes import router as api_router
 from app.bot.create import create_bot, create_dispatcher
 from app.bot.middlewares import AuthMiddleware, ErrorMiddleware
 from app.config import settings
-from app.db import close_db, init_db
+from app.db import close_db, get_recruiter_contact, init_db
 from app.scheduler.jobs import daily_summary_job, monday_poster_job, wednesday_frog_job
 from app.services.ai_client import AIClient
 from app.services.bitrix_client import BitrixClient
@@ -53,6 +53,22 @@ async def lifespan(app: FastAPI):
         try:
             userbot = UserbotClient()
             await userbot.start()
+
+            async def _on_candidate_reply(sender_id: int, text: str) -> None:
+                contact = await get_recruiter_contact(sender_id)
+                if contact:
+                    logger.info(
+                        "Userbot: reply from applicant %s (tg_id=%s)",
+                        contact["applicant_name"], sender_id,
+                    )
+                    await potok.post_candidate_reply(
+                        contact["applicant_id"],
+                        contact["job_id"],
+                        contact["applicant_name"],
+                        text,
+                    )
+
+            userbot.set_reply_handler(_on_candidate_reply)
         except Exception as e:
             logger.warning("Userbot disabled: %s", e)
             userbot = None

@@ -13,6 +13,7 @@ from aiogram.types import (
 
 from app.bot.routers.start import MENU_KB
 from app.config import settings
+from app.db import save_recruiter_contact
 from app.services.potok_client import score_label
 from app.services.potok_models import Applicant
 from app.services.resume_scorer import extract_recruiter_instructions, score_applicant
@@ -332,10 +333,18 @@ async def handle_send_message(callback: CallbackQuery, state: FSMContext, userbo
     await callback.answer("Отправляю...")
 
     phone = phones[0]
-    questions = await potok.get_applicant_questions(applicant_id)
 
+    # Resolve phone → telegram_user_id (needed for reply tracking)
+    user_id = await userbot.resolve_phone(phone)
+    if not user_id:
+        await callback.message.answer(
+            f"❌ <b>{html_mod.escape(applicant.display_name)}</b> — номер не найден в Telegram"
+        )
+        return
+
+    questions = await potok.get_applicant_questions(applicant_id)
     if not questions:
-        await callback.answer("Нет вопросов для этого кандидата — сначала оцените его", show_alert=True)
+        await callback.answer("Нет вопросов — сначала оцените кандидата", show_alert=True)
         return
 
     # Intro: company + vacancy context
@@ -346,12 +355,21 @@ async def handle_send_message(callback: CallbackQuery, state: FSMContext, userbo
         f"Рассматриваю вас на вакансию «{job.name}». "
         f"Ваше резюме очень заинтересовало нас, но перед собеседованием у нас есть небольшие вопросы."
     )
-    await userbot.send_message(phone, intro)
+    await userbot.send_to_user(user_id, intro)
 
     combined = "\n\n".join(f"{i}. {q}" for i, q in enumerate(questions, 1))
-    success = await userbot.send_message(phone, combined)
+    success = await userbot.send_to_user(user_id, combined)
 
     if success:
+        await save_recruiter_contact(
+            telegram_user_id=user_id,
+            phone=phone,
+            applicant_id=applicant_id,
+            job_id=job.id,
+            job_name=job.name,
+            applicant_name=applicant.display_name,
+        )
+
         try:
             await callback.message.edit_reply_markup(
                 reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
@@ -363,12 +381,12 @@ async def handle_send_message(callback: CallbackQuery, state: FSMContext, userbo
 
         await callback.message.answer(
             f"✅ Отправлено <b>{html_mod.escape(applicant.display_name)}</b>: "
-            f"{len(questions)} вопрос{'ов' if len(questions) != 1 else ''}"
+            f"вводное + {len(questions)} вопросов. Ответы будут сохраняться в Potok."
         )
     else:
         await callback.message.answer(
             f"❌ Не удалось отправить <b>{html_mod.escape(applicant.display_name)}</b> "
-            f"— нет Telegram или приватность закрыта"
+            f"— приватность закрыта"
         )
 
 

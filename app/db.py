@@ -51,6 +51,16 @@ CREATE INDEX IF NOT EXISTS idx_buffer_chat_date ON message_buffer(chat_id, sent_
 CREATE TABLE IF NOT EXISTS muted_groups (
     chat_id INTEGER PRIMARY KEY
 );
+
+CREATE TABLE IF NOT EXISTS recruiter_contacts (
+    telegram_user_id INTEGER PRIMARY KEY,
+    phone            TEXT NOT NULL,
+    applicant_id     INTEGER NOT NULL,
+    job_id           INTEGER NOT NULL,
+    job_name         TEXT,
+    applicant_name   TEXT,
+    created_at       TEXT DEFAULT (datetime('now'))
+);
 """
 
 
@@ -249,3 +259,39 @@ async def remove_muted_group(chat_id: int) -> None:
     db = get_db()
     await db.execute("DELETE FROM muted_groups WHERE chat_id = ?", (chat_id,))
     await db.commit()
+
+
+# ── Recruiter contacts ────────────────────────────────────────
+
+async def save_recruiter_contact(
+    telegram_user_id: int,
+    phone: str,
+    applicant_id: int,
+    job_id: int,
+    job_name: str,
+    applicant_name: str,
+) -> None:
+    db = get_db()
+    await db.execute(
+        """INSERT INTO recruiter_contacts
+               (telegram_user_id, phone, applicant_id, job_id, job_name, applicant_name)
+           VALUES (?, ?, ?, ?, ?, ?)
+           ON CONFLICT(telegram_user_id) DO UPDATE SET
+               phone = excluded.phone,
+               applicant_id = excluded.applicant_id,
+               job_id = excluded.job_id,
+               job_name = excluded.job_name,
+               applicant_name = excluded.applicant_name,
+               created_at = datetime('now')""",
+        (telegram_user_id, phone, applicant_id, job_id, job_name, applicant_name),
+    )
+    await db.commit()
+
+
+async def get_recruiter_contact(telegram_user_id: int) -> dict | None:
+    db = get_db()
+    async with db.execute(
+        "SELECT * FROM recruiter_contacts WHERE telegram_user_id = ?", (telegram_user_id,)
+    ) as cur:
+        row = await cur.fetchone()
+        return dict(row) if row else None

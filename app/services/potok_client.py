@@ -291,6 +291,25 @@ class PotokClient:
                     result.applicant_id, result.score, e,
                 )
 
+    async def post_candidate_reply(
+        self, applicant_id: int, job_id: int, applicant_name: str, text: str
+    ) -> None:
+        """Save candidate's Telegram reply as a comment event in Potok."""
+        esc = html_mod.escape
+        body = (
+            f"<p><b>💬 Ответ кандидата ({esc(applicant_name)}):</b></p>"
+            f"<p>{esc(text)}</p>"
+        )
+        event = {
+            "applicant_id": applicant_id,
+            "body": body,
+            "type": "Event::Comment",
+            "job_id": job_id,
+        }
+        resp = await self._client.post("/api/v3/events.json", json={"event": event})
+        resp.raise_for_status()
+        logger.info("Potok: saved reply from applicant %s", applicant_id)
+
     async def get_applicant_questions(self, applicant_id: int) -> list[str]:
         """Return AI-generated interview questions for an applicant.
 
