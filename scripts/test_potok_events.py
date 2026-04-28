@@ -36,19 +36,37 @@ async def main():
             etype = event.get("type")
             body = event.get("body") or ""
             print(f"\n  Event id={eid} type={etype} body_len={len(body)}")
-            if "JARVIS" in body:
-                print(f"  *** FOUND JARVIS MARKER ***")
-                match = re.search(r"<!-- JARVIS:QUESTIONS:(.*?) -->", body, re.DOTALL)
-                if match:
-                    questions = json.loads(match.group(1))
-                    print(f"  Questions ({len(questions)}):")
+
+            if etype != "Event::Comment" or not body:
+                continue
+
+            # Try JARVIS marker
+            match = re.search(r"<!-- JARVIS:QUESTIONS:(.*?) -->", body, re.DOTALL)
+            if match:
+                questions = json.loads(match.group(1))
+                print(f"  ✅ JARVIS marker found! Questions ({len(questions)}):")
+                for q in questions:
+                    print(f"    - {q}")
+                continue
+
+            # Try legacy HTML parse
+            if "Вопросы для первого контакта" in body:
+                section = re.search(
+                    r"Вопросы для первого контакта.*?<ul>(.*?)</ul>",
+                    body, re.DOTALL | re.IGNORECASE,
+                )
+                if section:
+                    items = re.findall(r"<li>(.*?)</li>", section.group(1), re.DOTALL)
+                    questions = [re.sub(r"<[^>]+>", "", q).strip() for q in items if q.strip()]
+                    print(f"  ✅ Legacy HTML parse found! Questions ({len(questions)}):")
                     for q in questions:
                         print(f"    - {q}")
                 else:
-                    print(f"  Marker found but regex didn't match. Body snippet:")
-                    idx = body.find("JARVIS")
-                    print(f"  ...{body[max(0,idx-20):idx+200]}...")
-            elif etype == "Event::Comment":
-                print(f"  Body snippet: {body[:150]!r}")
+                    print(f"  ⚠️  'Вопросы' heading found but <ul> not matched")
+                    idx = body.find("Вопросы")
+                    print(f"  Snippet: ...{body[max(0,idx-10):idx+300]}...")
+            elif "🤖 Оценка AI" in body:
+                print(f"  ℹ️  AI comment (no questions section)")
+                print(f"  Body snippet: {body[:200]!r}")
 
 asyncio.run(main())

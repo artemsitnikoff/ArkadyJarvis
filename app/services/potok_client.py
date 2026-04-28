@@ -312,16 +312,36 @@ class PotokClient:
             logger.warning("Potok: failed to fetch events for applicant %s: %s", applicant_id, e)
             return []
 
-        for event in reversed(events):
-            body = event.get("body", "")
+        for event in sorted(events, key=lambda e: e.get("id", 0), reverse=True):
+            body = event.get("body") or ""
+            if not body or event.get("type") != "Event::Comment":
+                continue
+
+            # New format: machine-readable JSON marker
             match = re.search(r"<!-- JARVIS:QUESTIONS:(.*?) -->", body, re.DOTALL)
             if match:
                 try:
                     questions = json.loads(match.group(1))
                     self._questions_cache[applicant_id] = questions
+                    logger.info("Potok: found %d questions via marker for %s", len(questions), applicant_id)
                     return questions
                 except Exception as e:
                     logger.warning("Potok: failed to parse questions JSON: %s", e)
+
+            # Legacy format: parse <li> items after the questions heading
+            if "Вопросы для первого контакта" in body:
+                section = re.search(
+                    r"Вопросы для первого контакта.*?<ul>(.*?)</ul>",
+                    body,
+                    re.DOTALL | re.IGNORECASE,
+                )
+                if section:
+                    items = re.findall(r"<li>(.*?)</li>", section.group(1), re.DOTALL)
+                    questions = [re.sub(r"<[^>]+>", "", q).strip() for q in items if q.strip()]
+                    if questions:
+                        self._questions_cache[applicant_id] = questions
+                        logger.info("Potok: found %d questions via HTML parse for %s", len(questions), applicant_id)
+                        return questions
 
         logger.warning("Potok: no questions found for applicant %s", applicant_id)
         return []
