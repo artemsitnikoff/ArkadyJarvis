@@ -32,12 +32,6 @@ def _parse_allowed_ids(csv: str) -> set[int]:
 RECRUITER_ALLOWED = _parse_allowed_ids(settings.recruiter_allowed)
 
 
-CONTACT_MESSAGE_TEMPLATE = (
-    "Добрый день! 👋\n\n"
-    "Рассмотрел ваш профиль на вакансию «{job_name}» и хотел бы обсудить её подробнее.\n\n"
-    "Удобно пообщаться?"
-)
-
 
 class Recruiter(StatesGroup):
     choosing_job = State()
@@ -338,15 +332,20 @@ async def handle_send_message(callback: CallbackQuery, state: FSMContext, userbo
     await callback.answer("Отправляю...")
 
     phone = phones[0]
-    text = CONTACT_MESSAGE_TEMPLATE.format(job_name=job.name)
-    success = await userbot.send_message(phone, text)
+    questions = await potok.get_applicant_questions(applicant_id)
 
-    if success:
-        # Send interview questions as follow-up messages
-        questions = await potok.get_applicant_questions(applicant_id)
-        for q in questions:
-            await userbot.send_message(phone, q)
+    if not questions:
+        await callback.answer("Нет вопросов для этого кандидата — сначала оцените его", show_alert=True)
+        return
 
+    sent = 0
+    for q in questions:
+        if await userbot.send_message(phone, q):
+            sent += 1
+        else:
+            break
+
+    if sent > 0:
         try:
             await callback.message.edit_reply_markup(
                 reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
@@ -356,10 +355,9 @@ async def handle_send_message(callback: CallbackQuery, state: FSMContext, userbo
         except Exception:
             pass
 
-        q_count = len(questions)
         await callback.message.answer(
             f"✅ Отправлено <b>{html_mod.escape(applicant.display_name)}</b>: "
-            f"приветствие + {q_count} вопрос{'ов' if q_count != 1 else ''}"
+            f"{sent} вопрос{'ов' if sent != 1 else ''}"
         )
     else:
         await callback.message.answer(
