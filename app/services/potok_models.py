@@ -171,3 +171,4 @@ class ScoringResult(BaseModel):
     strengths: list[str]
     weaknesses: list[str]
     breakdown: list[ScoreBreakdown] = []
+    questions: list[str] = []

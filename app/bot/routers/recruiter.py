@@ -72,6 +72,12 @@ def _format_result_message(
         for w in result.weaknesses:
             lines.append(f"  • {html_mod.escape(w)}")
 
+    if result.questions:
+        lines.append("")
+        lines.append("💬 <b>Вопросы для первого контакта:</b>")
+        for q in result.questions:
+            lines.append(f"  • {html_mod.escape(q)}")
+
     return "\n".join(lines)
 
 

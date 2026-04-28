@@ -54,8 +54,11 @@ SCORING_PROMPT = """Ты — эксперт по подбору персонал
     ...
   ],
   "strengths": ["<сильная сторона 1>", ...],
-  "weaknesses": ["<слабая сторона 1>", ...]
-}}"""
+  "weaknesses": ["<слабая сторона 1>", ...],
+  "questions": ["<вопрос для первого контакта в Telegram 1>", ...]
+}}
+
+Для поля "questions": сгенерируй 3-5 конкретных вопросов для первого контакта с кандидатом в Telegram. Вопросы должны уточнять пробелы или неясности в резюме, проверять ключевые навыки вакансии и помогать лучше понять реальный опыт кандидата."""
 
 
 def _format_experience(cv_params) -> str:
@@ -164,4 +167,5 @@ async def score_applicant(
         strengths=result.get("strengths", []),
         weaknesses=result.get("weaknesses", []),
         breakdown=result.get("breakdown", []),
+        questions=result.get("questions", []),
     )
