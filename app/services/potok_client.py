@@ -145,6 +145,8 @@ class PotokClient:
         # load on the /applicants/{id} endpoint. Instance-level so the
         # semaphore is tied to the client's event loop.
         self._fetch_semaphore = asyncio.Semaphore(5)
+        # questions_cache: populated during push_scoring, read at contact time
+        self._questions_cache: dict[int, list[str]] = {}
 
     async def close(self):
         await self._client.aclose()
@@ -253,6 +255,9 @@ class PotokClient:
     async def push_scoring(
         self, result: ScoringResult, job_id: int, original_last_name: str = ""
     ) -> None:
+        if result.questions:
+            self._questions_cache[result.applicant_id] = result.questions
+
         comment = _build_comment_html(result)
         event = {
             "applicant_id": result.applicant_id,
@@ -287,7 +292,16 @@ class PotokClient:
                 )
 
     async def get_applicant_questions(self, applicant_id: int) -> list[str]:
-        """Fetch AI-generated interview questions from Potok event comments."""
+        """Return AI-generated interview questions for an applicant.
+
+        Checks the in-memory cache first (populated during push_scoring in the
+        same process lifetime), then falls back to fetching Potok events.
+        """
+        if applicant_id in self._questions_cache:
+            logger.info("Potok: questions for %s served from cache", applicant_id)
+            return self._questions_cache[applicant_id]
+
+        # Fallback: parse from Potok event comments
         try:
             resp = await self._client.get(
                 f"/api/v3/applicants/{applicant_id}/events.json"
@@ -300,16 +314,21 @@ class PotokClient:
             resp.raise_for_status()
             data = resp.json()
             events = data.get("objects", data if isinstance(data, list) else [])
+            logger.info("Potok: fetched %d events for applicant %s", len(events), applicant_id)
         except Exception as e:
             logger.warning("Potok: failed to fetch events for applicant %s: %s", applicant_id, e)
             return []
 
         for event in reversed(events):
             body = event.get("body", "")
-            match = re.search(r"<!-- JARVIS:QUESTIONS:(.*?) -->", body)
+            match = re.search(r"<!-- JARVIS:QUESTIONS:(.*?) -->", body, re.DOTALL)
             if match:
                 try:
-                    return json.loads(match.group(1))
-                except Exception:
-                    pass
+                    questions = json.loads(match.group(1))
+                    self._questions_cache[applicant_id] = questions
+                    return questions
+                except Exception as e:
+                    logger.warning("Potok: failed to parse questions JSON: %s", e)
+
+        logger.warning("Potok: no questions found for applicant %s", applicant_id)
         return []
