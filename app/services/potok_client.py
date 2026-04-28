@@ -1,5 +1,6 @@
 import asyncio
 import html as html_mod
+import json
 import logging
 import re
 
@@ -65,6 +66,16 @@ def _build_comment_html(result: ScoringResult) -> str:
         if result.weaknesses else "<li>нет</li>"
     )
 
+    questions_html = ""
+    if result.questions:
+        questions_items = "".join(f"<li>{esc(q)}</li>" for q in result.questions)
+        questions_json = json.dumps(result.questions, ensure_ascii=False)
+        questions_html = (
+            f"<!-- JARVIS:QUESTIONS:{questions_json} -->"
+            f"<br><b>💬 Вопросы для первого контакта:</b>"
+            f"<ul>{questions_items}</ul>"
+        )
+
     return (
         f"<h3>🤖 Оценка AI: {result.score}/100 ({label})</h3>"
         f"<p>{esc(result.reasoning)}</p>"
@@ -74,6 +85,7 @@ def _build_comment_html(result: ScoringResult) -> str:
         f"<ul>{strengths}</ul>"
         f"<b>⚠️ Слабые стороны:</b>"
         f"<ul>{weaknesses}</ul>"
+        f"{questions_html}"
     )
 
 
@@ -273,3 +285,31 @@ class PotokClient:
                     "failed to update last_name prefix: %s",
                     result.applicant_id, result.score, e,
                 )
+
+    async def get_applicant_questions(self, applicant_id: int) -> list[str]:
+        """Fetch AI-generated interview questions from Potok event comments."""
+        try:
+            resp = await self._client.get(
+                f"/api/v3/applicants/{applicant_id}/events.json"
+            )
+            if resp.status_code == 404:
+                resp = await self._client.get(
+                    "/api/v3/events.json",
+                    params={"applicant_id": applicant_id},
+                )
+            resp.raise_for_status()
+            data = resp.json()
+            events = data.get("objects", data if isinstance(data, list) else [])
+        except Exception as e:
+            logger.warning("Potok: failed to fetch events for applicant %s: %s", applicant_id, e)
+            return []
+
+        for event in reversed(events):
+            body = event.get("body", "")
+            match = re.search(r"<!-- JARVIS:QUESTIONS:(.*?) -->", body)
+            if match:
+                try:
+                    return json.loads(match.group(1))
+                except Exception:
+                    pass
+        return []

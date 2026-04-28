@@ -315,7 +315,7 @@ async def handle_contact_candidates(callback: CallbackQuery, state: FSMContext, 
 
 
 @router.callback_query(F.data.startswith("recruit:message:"), Recruiter.contacting)
-async def handle_send_message(callback: CallbackQuery, state: FSMContext, userbot):
+async def handle_send_message(callback: CallbackQuery, state: FSMContext, userbot, potok):
     applicant_id = int(callback.data.split(":")[-1])
     data = await state.get_data()
     contact_applicants = data.get("contact_applicants", [])
@@ -337,10 +337,16 @@ async def handle_send_message(callback: CallbackQuery, state: FSMContext, userbo
 
     await callback.answer("Отправляю...")
 
+    phone = phones[0]
     text = CONTACT_MESSAGE_TEMPLATE.format(job_name=job.name)
-    success = await userbot.send_message(phones[0], text)
+    success = await userbot.send_message(phone, text)
 
     if success:
+        # Send interview questions as follow-up messages
+        questions = await potok.get_applicant_questions(applicant_id)
+        for q in questions:
+            await userbot.send_message(phone, q)
+
         try:
             await callback.message.edit_reply_markup(
                 reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
@@ -349,8 +355,11 @@ async def handle_send_message(callback: CallbackQuery, state: FSMContext, userbo
             )
         except Exception:
             pass
+
+        q_count = len(questions)
         await callback.message.answer(
-            f"✅ Сообщение отправлено <b>{html_mod.escape(applicant.display_name)}</b>"
+            f"✅ Отправлено <b>{html_mod.escape(applicant.display_name)}</b>: "
+            f"приветствие + {q_count} вопрос{'ов' if q_count != 1 else ''}"
         )
     else:
         await callback.message.answer(
