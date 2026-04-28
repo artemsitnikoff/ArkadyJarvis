@@ -14,10 +14,13 @@ from aiogram.types import (
 from app.bot.routers.start import MENU_KB
 from app.config import settings
 from app.services.potok_client import score_label
+from app.services.potok_models import Applicant
 from app.services.resume_scorer import extract_recruiter_instructions, score_applicant
 
 logger = logging.getLogger("arkadyjarvis")
 router = Router()
+
+INTERVIEW_STAGE_NAME = "Интервью с рекрутером"
 
 
 def _parse_allowed_ids(csv: str) -> set[int]:
@@ -33,6 +36,52 @@ class Recruiter(StatesGroup):
     choosing_job = State()
     confirming = State()
     scoring = State()
+
+
+def _filter_by_stage(applicants: list[Applicant], job_id: int, stage_name: str) -> list[Applicant]:
+    result = []
+    for a in applicants:
+        for join in (a.ajs_joins or []):
+            if (
+                join.job and join.job.id == job_id
+                and join.stage and join.stage.name.lower() == stage_name.lower()
+            ):
+                result.append(a)
+                break
+    return result
+
+
+def _format_contact_card(applicant: Applicant) -> str:
+    esc = html_mod.escape
+    cv_params = applicant.resumes[0].cv_params if applicant.resumes else None
+
+    lines = [f"👤 <b>{esc(applicant.display_name)}</b>"]
+
+    title = applicant.title or (cv_params.title if cv_params else None)
+    if title:
+        lines.append(f"💼 {esc(title)}")
+    if applicant.city:
+        lines.append(f"📍 {esc(applicant.city.display_name)}")
+    salary = str(applicant.salary) if applicant.salary else (str(cv_params.salary) if cv_params and cv_params.salary else None)
+    if salary:
+        lines.append(f"💰 {esc(salary)}")
+
+    if cv_params:
+        skills = cv_params.all_skills[:10]
+        if skills:
+            lines.append(f"\n🔧 <b>Навыки:</b> {esc(', '.join(skills))}")
+
+        exp_items = cv_params.experience_items[:3]
+        if exp_items:
+            lines.append("\n📋 <b>Опыт:</b>")
+            for exp in exp_items:
+                period = f"{exp.start or '?'} — {exp.end or 'н.в.'}"
+                lines.append(f"  • {esc(exp.company or '?')} — {esc(exp.position or '?')} ({period})")
+
+        if cv_params.about_me:
+            lines.append(f"\n📝 <b>О себе:</b> {esc(cv_params.about_me[:400])}")
+
+    return "\n".join(lines)
 
 
 def _format_result_message(
@@ -153,9 +202,14 @@ async def handle_job_selected(callback: CallbackQuery, state: FSMContext, potok)
         await state.clear()
         return
 
+    contact_applicants = _filter_by_stage(all_applicants, job_id, INTERVIEW_STAGE_NAME)
     total_all = len(all_applicants)
     total_new = len(new_applicants)
-    logger.info("Recruiter job %s: %d total, %d new", job_id, total_all, total_new)
+    total_contact = len(contact_applicants)
+    logger.info(
+        "Recruiter job %s: %d total, %d new, %d interview",
+        job_id, total_all, total_new, total_contact,
+    )
 
     if total_all == 0:
         info_lines[-1] = "Нет кандидатов на эту вакансию."
@@ -179,6 +233,11 @@ async def handle_job_selected(callback: CallbackQuery, state: FSMContext, potok)
         text=f"🔄 Переоценить всех ({total_all})",
         callback_data=f"recruit:rescore:{job_id}",
     )])
+    if total_contact > 0:
+        buttons.append([InlineKeyboardButton(
+            text=f"📞 Связаться с кандидатами ({total_contact})",
+            callback_data=f"recruit:contact:{job_id}",
+        )])
     buttons.append([InlineKeyboardButton(text="◀️ Меню", callback_data="recruit:exit")])
 
     try:
@@ -195,7 +254,37 @@ async def handle_job_selected(callback: CallbackQuery, state: FSMContext, potok)
         job=job,
         all_applicants=all_applicants,
         new_applicants=new_applicants,
+        contact_applicants=contact_applicants,
     )
+
+
+@router.callback_query(F.data.startswith("recruit:contact:"), Recruiter.confirming)
+async def handle_contact_candidates(callback: CallbackQuery, state: FSMContext):
+    await callback.answer()
+    data = await state.get_data()
+    contact_applicants = data.get("contact_applicants", [])
+    job = data["job"]
+
+    if not contact_applicants:
+        await callback.message.answer(
+            f"Нет кандидатов в стадии «{INTERVIEW_STAGE_NAME}».",
+            reply_markup=MENU_KB,
+        )
+        await state.clear()
+        return
+
+    await callback.message.answer(
+        f"📋 <b>Кандидаты для контакта: {len(contact_applicants)}</b>\n"
+        f"Вакансия: {html_mod.escape(job.name)}\n"
+        f"Стадия: «{INTERVIEW_STAGE_NAME}»"
+    )
+
+    for applicant in contact_applicants:
+        text = _format_contact_card(applicant)
+        await callback.message.answer(text)
+
+    await callback.message.answer("✅ Все кандидаты показаны.", reply_markup=MENU_KB)
+    await state.clear()
 
 
 async def _run_scoring(
