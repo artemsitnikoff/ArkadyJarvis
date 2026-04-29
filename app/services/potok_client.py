@@ -294,12 +294,29 @@ class PotokClient:
     async def post_candidate_reply(
         self, applicant_id: int, job_id: int, applicant_name: str, text: str
     ) -> None:
-        """Save candidate's Telegram reply as a comment event in Potok."""
+        """Save candidate's Telegram reply as a comment event in Potok.
+
+        Includes the originally asked questions for context and preserves
+        line breaks from the Telegram message.
+        """
         esc = html_mod.escape
+
+        questions = await self.get_applicant_questions(applicant_id)
+        questions_block = ""
+        if questions:
+            items = "".join(f"<li>{esc(q)}</li>" for q in questions)
+            questions_block = (
+                f"<p><b>❓ Заданные вопросы:</b></p>"
+                f"<ol>{items}</ol>"
+            )
+
+        reply_html = esc(text).replace("\n", "<br>")
         body = (
+            f"{questions_block}"
             f"<p><b>💬 Ответ кандидата ({esc(applicant_name)}):</b></p>"
-            f"<p>{esc(text)}</p>"
+            f"<p>{reply_html}</p>"
         )
+
         event = {
             "applicant_id": applicant_id,
             "body": body,
