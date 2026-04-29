@@ -112,6 +112,17 @@ def extract_recruiter_instructions(description: str) -> tuple[str, str]:
     return description, ""
 
 
+def _strip_admin_lines(description: str) -> str:
+    """Remove internal metadata lines (Владельцы, Ссылка для встречи) so they
+    don't leak into the scoring prompt and waste tokens."""
+    lines = description.split("\n")
+    cleaned = [
+        ln for ln in lines
+        if not re.match(r"^\s*(Владельцы|Ссылка для встречи)\s*:", ln, re.IGNORECASE)
+    ]
+    return "\n".join(cleaned).strip()
+
+
 def _build_prompt(job: Job, applicant: Applicant) -> str:
     cv_params = None
     if applicant.resumes:
@@ -119,6 +130,7 @@ def _build_prompt(job: Job, applicant: Applicant) -> str:
 
     raw_desc = job.description or "Не указано"
     clean_desc, instructions = extract_recruiter_instructions(raw_desc)
+    clean_desc = _strip_admin_lines(clean_desc)
 
     recruiter_block = ""
     if instructions:
