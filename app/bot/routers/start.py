@@ -57,6 +57,7 @@ MENU_KB = InlineKeyboardMarkup(inline_keyboard=[
         InlineKeyboardButton(text="👔 Анатолий", callback_data="hint:recruiter"),
     ],
     [
+        InlineKeyboardButton(text="🧪 Тест", callback_data="test:start"),
         InlineKeyboardButton(text="❓ Все команды", callback_data="hint:all"),
     ],
 ])
