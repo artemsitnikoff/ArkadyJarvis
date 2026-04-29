@@ -34,11 +34,33 @@ RECRUITER_ALLOWED = _parse_allowed_ids(settings.recruiter_allowed)
 
 
 
+MANAGER_INTERVIEW_STAGE_NAME = "Интервью с менеджером"
+
+
 class Recruiter(StatesGroup):
     choosing_job = State()
     confirming = State()
     scoring = State()
     contacting = State()
+    inviting = State()
+
+
+def _extract_owners(description: str) -> list[str]:
+    """Extract @usernames from the 'Владельцы:' line in job description."""
+    if not description:
+        return []
+    match = re.search(r"Владельцы:\s*([^\n]+)", description, re.IGNORECASE)
+    if not match:
+        return []
+    return re.findall(r"@(\w+)", match.group(1))
+
+
+def _extract_meeting_link(description: str) -> str | None:
+    """Extract meeting URL from 'Ссылка для встречи:' line."""
+    if not description:
+        return None
+    match = re.search(r"Ссылка для встречи:\s*(\S+)", description, re.IGNORECASE)
+    return match.group(1) if match else None
 
 
 def _filter_by_stage(applicants: list[Applicant], job_id: int, stage_name: str) -> list[Applicant]:
@@ -206,12 +228,14 @@ async def handle_job_selected(callback: CallbackQuery, state: FSMContext, potok)
         return
 
     contact_applicants = _filter_by_stage(all_applicants, job_id, INTERVIEW_STAGE_NAME)
+    manager_applicants = _filter_by_stage(all_applicants, job_id, MANAGER_INTERVIEW_STAGE_NAME)
     total_all = len(all_applicants)
     total_new = len(new_applicants)
     total_contact = len(contact_applicants)
+    total_manager = len(manager_applicants)
     logger.info(
-        "Recruiter job %s: %d total, %d new, %d interview",
-        job_id, total_all, total_new, total_contact,
+        "Recruiter job %s: %d total, %d new, %d recruiter-interview, %d manager-interview",
+        job_id, total_all, total_new, total_contact, total_manager,
     )
 
     if total_all == 0:
@@ -241,6 +265,11 @@ async def handle_job_selected(callback: CallbackQuery, state: FSMContext, potok)
             text=f"📞 Связаться с кандидатами ({total_contact})",
             callback_data=f"recruit:contact:{job_id}",
         )])
+    if total_manager > 0:
+        buttons.append([InlineKeyboardButton(
+            text=f"📅 Пригласить на собеседование ({total_manager})",
+            callback_data=f"recruit:invite:{job_id}",
+        )])
     buttons.append([InlineKeyboardButton(text="◀️ Меню", callback_data="recruit:exit")])
 
     try:
@@ -258,6 +287,7 @@ async def handle_job_selected(callback: CallbackQuery, state: FSMContext, potok)
         all_applicants=all_applicants,
         new_applicants=new_applicants,
         contact_applicants=contact_applicants,
+        manager_applicants=manager_applicants,
     )
 
 
@@ -393,6 +423,151 @@ async def handle_send_message(callback: CallbackQuery, state: FSMContext, userbo
 @router.callback_query(F.data == "recruit:noop")
 async def handle_noop(callback: CallbackQuery):
     await callback.answer()
+
+
+@router.callback_query(F.data.startswith("recruit:invite:"), Recruiter.confirming)
+async def handle_invite_candidates(callback: CallbackQuery, state: FSMContext, userbot):
+    """Show candidates in 'Интервью с менеджером' stage with «Пригласить» buttons."""
+    await callback.answer()
+    data = await state.get_data()
+    manager_applicants = data.get("manager_applicants", [])
+    job = data["job"]
+
+    if not manager_applicants:
+        await callback.message.answer(
+            f"Нет кандидатов в стадии «{MANAGER_INTERVIEW_STAGE_NAME}».",
+            reply_markup=MENU_KB,
+        )
+        await state.clear()
+        return
+
+    link = _extract_meeting_link(job.description or "")
+    if not link:
+        await callback.message.answer(
+            "❌ В описании вакансии нет строки «Ссылка для встречи: ...». "
+            "Добавь её в Potok и попробуй снова.",
+            reply_markup=MENU_KB,
+        )
+        await state.clear()
+        return
+
+    await state.set_state(Recruiter.inviting)
+
+    userbot_ok = userbot is not None
+    await callback.message.answer(
+        f"📅 <b>Кандидаты для приглашения: {len(manager_applicants)}</b>\n"
+        f"Вакансия: {html_mod.escape(job.name)}\n"
+        f"Стадия: «{MANAGER_INTERVIEW_STAGE_NAME}»\n"
+        f"Ссылка: {html_mod.escape(link)}"
+        + ("" if userbot_ok else "\n\n⚠️ Userbot не настроен — кнопка недоступна")
+    )
+
+    for applicant in manager_applicants:
+        text = _format_contact_card(applicant)
+        phones = applicant.phones or []
+        if userbot_ok and phones:
+            kb = InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(
+                    text="📅 Пригласить",
+                    callback_data=f"recruit:invite_send:{applicant.id}",
+                )
+            ]])
+        else:
+            kb = None
+        await callback.message.answer(text, reply_markup=kb)
+
+    exit_kb = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="◀️ Меню", callback_data="recruit:exit")
+    ]])
+    await callback.message.answer(
+        "Нажми «📅 Пригласить» чтобы отправить ссылку на запись со своего Telegram.",
+        reply_markup=exit_kb,
+    )
+
+
+@router.callback_query(F.data.startswith("recruit:invite_send:"), Recruiter.inviting)
+async def handle_invite_send(
+    callback: CallbackQuery, state: FSMContext, userbot, bitrix,
+):
+    applicant_id = int(callback.data.split(":")[-1])
+    data = await state.get_data()
+    manager_applicants = data.get("manager_applicants", [])
+    job = data["job"]
+
+    applicant = next((a for a in manager_applicants if a.id == applicant_id), None)
+    if not applicant:
+        await callback.answer("Кандидат не найден", show_alert=True)
+        return
+
+    phones = applicant.phones or []
+    if not phones:
+        await callback.answer("У кандидата нет телефона", show_alert=True)
+        return
+
+    if not userbot:
+        await callback.answer("Userbot не настроен", show_alert=True)
+        return
+
+    description = job.description or ""
+    link = _extract_meeting_link(description)
+    if not link:
+        await callback.answer("В описании нет ссылки", show_alert=True)
+        return
+
+    await callback.answer("Отправляю...")
+
+    # Resolve owner names from Bitrix
+    owner_usernames = _extract_owners(description)
+    owner_names: list[str] = []
+    for username in owner_usernames:
+        try:
+            _, full_name = await bitrix.find_user_by_nickname(username)
+            owner_names.append(full_name or f"@{username}")
+        except Exception as e:
+            logger.warning("Bitrix lookup failed for @%s: %s", username, e)
+            owner_names.append(f"@{username}")
+    owners_text = ", ".join(owner_names) if owner_names else "—"
+
+    phone = phones[0]
+    user_id = await userbot.resolve_phone(phone)
+    if not user_id:
+        await callback.message.answer(
+            f"❌ <b>{html_mod.escape(applicant.display_name)}</b> — номер не найден в Telegram"
+        )
+        return
+
+    message = (
+        f"Спасибо за ответы! Приглашаем вас на собеседование.\n"
+        f"Назначьте удобное время по ссылке: {link}\n"
+        f"Встречу проведут: {owners_text}."
+    )
+
+    success = await userbot.send_to_user(user_id, message)
+
+    if success:
+        await save_recruiter_contact(
+            telegram_user_id=user_id,
+            phone=phone,
+            applicant_id=applicant_id,
+            job_id=job.id,
+            job_name=job.name,
+            applicant_name=applicant.display_name,
+        )
+        try:
+            await callback.message.edit_reply_markup(
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                    InlineKeyboardButton(text="✅ Приглашение отправлено", callback_data="recruit:noop")
+                ]])
+            )
+        except Exception:
+            pass
+        await callback.message.answer(
+            f"✅ Приглашение отправлено <b>{html_mod.escape(applicant.display_name)}</b>"
+        )
+    else:
+        await callback.message.answer(
+            f"❌ Не удалось отправить <b>{html_mod.escape(applicant.display_name)}</b>"
+        )
 
 
 async def _run_scoring(
