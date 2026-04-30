@@ -214,7 +214,7 @@ class OpenRouterClient:
             return TranscriptionResult(
                 success=False,
                 error=f"OpenRouter {resp.status_code}: {body}",
-                retryable=resp.status_code in {429, 502, 503, 504},
+                retryable=resp.status_code == 429 or 500 <= resp.status_code < 600,
             )
 
         # Hoist finish_reason + content out of the try-block so error logging
@@ -236,7 +236,10 @@ class OpenRouterClient:
             err_type = (top_error.get("metadata") or {}).get("error_type", "")
             err_code = top_error.get("code", "")
             err_msg = top_error.get("message", "")
-            retryable = err_type in {"provider_overloaded", "rate_limit"} or err_code in {429, 502, 503, 504}
+            retryable = (
+                err_type in {"provider_overloaded", "rate_limit", "timeout"}
+                or (isinstance(err_code, int) and (err_code == 429 or 500 <= err_code < 600))
+            )
             logger.error(
                 "Transcribe top-level error: code=%s type=%s msg=%s retryable=%s",
                 err_code, err_type, err_msg, retryable,
@@ -276,7 +279,10 @@ class OpenRouterClient:
                 err_type = (choice_error.get("metadata") or {}).get("error_type", "")
                 err_code = choice_error.get("code", "")
                 err_msg = choice_error.get("message", "")
-                retryable = err_type in {"provider_overloaded", "rate_limit"} or err_code in {429, 502, 503, 504}
+                retryable = (
+                err_type in {"provider_overloaded", "rate_limit", "timeout"}
+                or (isinstance(err_code, int) and (err_code == 429 or 500 <= err_code < 600))
+            )
                 logger.error(
                     "Transcribe upstream error: code=%s type=%s msg=%s retryable=%s",
                     err_code, err_type, err_msg, retryable,
