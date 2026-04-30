@@ -22,9 +22,6 @@ logger = logging.getLogger("arkadyjarvis")
 router = Router()
 
 MENU_KB = InlineKeyboardMarkup(inline_keyboard=[
-    [InlineKeyboardButton(text="🏢  Начать день в офисе", callback_data="work:office")],
-    [InlineKeyboardButton(text="🏠  Начать день удалённо", callback_data="work:remote")],
-    [InlineKeyboardButton(text="── ── ── ── ── ──", callback_data="noop")],
     [
         InlineKeyboardButton(text="👤 Сотрудник", callback_data="hint:employee"),
         InlineKeyboardButton(text="👥 Моя команда", callback_data="hint:team"),
