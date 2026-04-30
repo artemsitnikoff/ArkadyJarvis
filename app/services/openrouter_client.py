@@ -224,6 +224,36 @@ class OpenRouterClient:
         refusal = None
         try:
             data = resp.json()
+        except Exception as e:
+            logger.error("Transcribe: failed to parse JSON: %s | body=%r", e, resp.text[:500])
+            return TranscriptionResult(
+                success=False, error=f"невалидный JSON от OpenRouter: {e}", retryable=True,
+            )
+
+        # Top-level error (no choices at all — different from in-choice error)
+        top_error = data.get("error")
+        if top_error and not data.get("choices"):
+            err_type = (top_error.get("metadata") or {}).get("error_type", "")
+            err_code = top_error.get("code", "")
+            err_msg = top_error.get("message", "")
+            retryable = err_type in {"provider_overloaded", "rate_limit"} or err_code in {429, 502, 503, 504}
+            logger.error(
+                "Transcribe top-level error: code=%s type=%s msg=%s retryable=%s",
+                err_code, err_type, err_msg, retryable,
+            )
+            return TranscriptionResult(
+                success=False,
+                error=f"OpenRouter: {err_msg or err_type or err_code}",
+                retryable=retryable,
+            )
+
+        if not data.get("choices"):
+            logger.error("Transcribe: no choices in response | raw=%s", str(data)[:500])
+            return TranscriptionResult(
+                success=False, error="OpenRouter не вернул choices", retryable=True,
+            )
+
+        try:
             choice = data["choices"][0]
             finish_reason = choice.get("finish_reason", "?")
             message = choice.get("message") or {}
