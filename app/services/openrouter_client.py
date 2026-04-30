@@ -24,6 +24,7 @@ class TranscriptionResult:
     speakers_count: int = 0
     segments: list[dict] = field(default_factory=list)
     full_text: str = ""
+    retryable: bool = False
 
 
 def _format_time(seconds: float) -> str:
@@ -165,16 +166,28 @@ class OpenRouterClient:
         raise ValueError("Модель не вернула картинку, попробуй другой промпт")
 
     async def transcribe_voice(self, ogg_path: str | Path) -> TranscriptionResult:
-        """Transcribe a Telegram voice message (.ogg / OPUS) with speaker diarization."""
+        """Transcribe a Telegram voice message (.ogg / OPUS) with speaker diarization.
+
+        Retries once on provider-overloaded errors (HTTP 200 with embedded 503
+        in the choice payload — common for Gemini under load).
+        """
         path = Path(ogg_path)
         try:
-            # 20+ MB base64 encode is CPU-bound — keep it off the event loop.
             audio_b64 = await asyncio.to_thread(
                 lambda: base64.b64encode(path.read_bytes()).decode()
             )
         except Exception as e:
             return TranscriptionResult(success=False, error=f"не смог прочитать файл: {e}")
 
+        for attempt in range(2):
+            result = await self._transcribe_once(audio_b64)
+            if result.success or not result.retryable:
+                return result
+            logger.warning("Transcribe retry %d/2 after retryable error: %s", attempt + 1, result.error)
+            await asyncio.sleep(5)
+        return result
+
+    async def _transcribe_once(self, audio_b64: str) -> TranscriptionResult:
         prompt = load_prompt("voice_transcribe")
         payload = {
             "model": settings.openrouter_model,
@@ -186,11 +199,6 @@ class OpenRouterClient:
                 ],
             }],
             "response_format": {"type": "json_object"},
-            # Gemini 2.5 Pro caps output at 65 536 tokens. A diarized JSON for
-            # a 60-min meeting runs ~25k (12k speech + 14k per-segment overhead);
-            # a 90-min meeting can hit ~40k. We pick 60k to cover the full
-            # MEETING_MAX_MINUTES=90 range with headroom. Too low → Gemini
-            # truncates silently and we get "Expecting value" at parse time.
             "max_tokens": 60000,
         }
 
@@ -198,13 +206,15 @@ class OpenRouterClient:
             resp = await self._client.post(BASE_URL, json=payload)
         except Exception as e:
             logger.error("Transcribe HTTP error: %s", e, exc_info=True)
-            return TranscriptionResult(success=False, error=str(e))
+            return TranscriptionResult(success=False, error=str(e), retryable=True)
 
         if resp.status_code >= 400:
             body = resp.text[:300]
             logger.error("Transcribe %d: %s", resp.status_code, body)
             return TranscriptionResult(
-                success=False, error=f"OpenRouter {resp.status_code}: {body}",
+                success=False,
+                error=f"OpenRouter {resp.status_code}: {body}",
+                retryable=resp.status_code in {429, 502, 503, 504},
             )
 
         # Hoist finish_reason + content out of the try-block so error logging
@@ -229,9 +239,30 @@ class OpenRouterClient:
                 refusal,
             )
 
+            # OpenRouter sometimes returns HTTP 200 with the upstream error
+            # embedded in the choice payload (provider_overloaded etc.).
+            choice_error = choice.get("error") or data.get("error")
+            if choice_error and (not isinstance(content, str) or not content.strip()):
+                err_type = (choice_error.get("metadata") or {}).get("error_type", "")
+                err_code = choice_error.get("code", "")
+                err_msg = choice_error.get("message", "")
+                retryable = err_type in {"provider_overloaded", "rate_limit"} or err_code in {429, 502, 503, 504}
+                logger.error(
+                    "Transcribe upstream error: code=%s type=%s msg=%s retryable=%s",
+                    err_code, err_type, err_msg, retryable,
+                )
+                if retryable:
+                    return TranscriptionResult(
+                        success=False,
+                        error=f"провайдер перегружен ({err_type or err_code}) — попробуй ещё раз",
+                        retryable=True,
+                    )
+                return TranscriptionResult(
+                    success=False,
+                    error=f"upstream error: {err_msg or err_type or err_code}",
+                )
+
             if not isinstance(content, str) or not content.strip():
-                # Gemini returned no usable content — usually a safety refusal,
-                # a content-filter block, or finish_reason=length with zero tokens.
                 logger.error(
                     "Transcribe got empty content: finish_reason=%s refusal=%r "
                     "usage=%s raw=%s",
