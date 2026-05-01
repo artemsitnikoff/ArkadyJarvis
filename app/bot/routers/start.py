@@ -50,8 +50,8 @@ MENU_KB = InlineKeyboardMarkup(inline_keyboard=[
         InlineKeyboardButton(text="🎓 Сократ", callback_data="hint:socrates"),
     ],
     [
-        InlineKeyboardButton(text="🤖 Глафира", callback_data="hint:glafira"),
-        InlineKeyboardButton(text="👔 Марфа", callback_data="hint:recruiter"),
+        InlineKeyboardButton(text="🤖 Марфа", callback_data="hint:glafira"),
+        InlineKeyboardButton(text="👔 Глафира", callback_data="hint:recruiter"),
     ],
     [
         InlineKeyboardButton(text="❓ Все команды", callback_data="hint:all"),
@@ -89,8 +89,8 @@ HELP_TEXT = (
     "🎓 Сократ — расшифровка встречи + ревью + экспертиза (ссылка на запись)\n\n"
 
     "<b>🤖 AI-сотрудники</b>\n"
-    "🤖 Глафира — AI офис-менеджер через браузер (ограниченный доступ)\n"
-    "👔 Марфа — AI-рекрутёр, оценивает кандидатов в Potok.io (ограниченный доступ)\n\n"
+    "🤖 Марфа — AI офис-менеджер через браузер (ограниченный доступ)\n"
+    "👔 Глафира — AI-рекрутёр, оценивает кандидатов в Potok.io (ограниченный доступ)\n\n"
 
     "<b>⚙️ Slash-команды</b>\n"
     "<code>/start</code> — авторизация в боте через Bitrix\n"
@@ -277,7 +277,7 @@ async def _enter_glafira(callback: CallbackQuery, state: FSMContext):
     await state.set_state(Glafira.chatting)
     await state.update_data(messages=[])
     await callback.message.answer(
-        "🤖 <b>Глафира</b> — AI офис-менеджер\n\n"
+        "🤖 <b>Марфа</b> — AI офис-менеджер\n\n"
         "Напиши что нужно сделать. Я управляю браузером "
         "и могу выполнять задачи на сайтах.\n\n"
         "Для выхода нажми «◀️ Меню».",
@@ -297,7 +297,7 @@ async def _enter_recruiter(callback: CallbackQuery, state: FSMContext, potok):
         await callback.answer()
         return
     await callback.message.answer(
-        "👔 <b>Марфа</b> — AI-рекрутёр\n\n"
+        "👔 <b>Глафира</b> — AI-рекрутёр\n\n"
         "Оцениваю кандидатов по вакансиям из Potok.io: сравниваю резюме "
         "с описанием вакансии через Claude, ставлю балл 0–100, выделяю "
         "сильные и слабые стороны. Результат публикую комментарием в Potok "

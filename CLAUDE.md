@@ -41,7 +41,7 @@ app/
       cicero.py            # FSM Cicero — legal consultant (RU law), persistent chat with optional document attachments
       socrates.py          # FSM Socrates — meeting analyser (Yandex.Disk/direct URL → ffmpeg → transcript → review → expertise)
       glafira.py           # Glafira (AI office manager) — FSM chatting mode, OpenClaw streaming
-      recruiter.py         # Марфа (AI recruiter) — Potok.io integration, candidate scoring via injected AIClient
+      recruiter.py         # Глафира (AI recruiter) — Potok.io integration, candidate scoring via injected AIClient
       work.py              # Work day start logic (start_work_day callback handler with AI greeting)
       group.py             # on_bot_added / on_bot_removed — tracks group_chats in DB
       buffer.py            # Catch-all (LAST router): buffers all group messages to SQLite
@@ -124,7 +124,7 @@ Defined in `start.py`. Layout (rows top → bottom):
 - Мои встречи | Картинка
 - Спроси AI | Суммаризация
 - Проверь договор | Цицерон
-- Глафира | Марфа
+- Марфа | Глафира
 - Все команды
 
 Re-sent after every successful action. Imported by other routers: `from app.bot.routers.start import MENU_KB`. Every hint response includes `BACK_MENU_KB` ("◀️ Меню") for navigation back; `back:menu` callback calls `state.clear()`.
@@ -229,10 +229,10 @@ All MENU_KB buttons are interactive — clicking opens a working mode via FSM st
 - `SOURCE_ID=OTHER`, `SOURCE_DESCRIPTION=Telegram-бот ArkadyJarvis`, creator's Telegram contact appended to `COMMENTS` for traceability
 - Final reply HTML-escaped against `<`/`&`/`>` in names/companies
 
-### Recruiter "Марфа" (Potok.io Integration)
+### Recruiter "Глафира" (Potok.io Integration)
 - **Potok.io** — ATS (Applicant Tracking System) for recruitment
 - Access control: `RECRUITER_ALLOWED` env var (comma-separated Telegram IDs)
-- Flow: "Марфа" button → intro message → load jobs from Potok → user picks job → show description + candidate counts → score new or rescore all
+- Flow: "Глафира" button → intro message → load jobs from Potok → user picks job → show description + candidate counts → score new or rescore all
 - FSM states: `Recruiter.choosing_job` → `Recruiter.confirming` → `Recruiter.scoring`
 - **Candidate loading**: uses `/api/v3/jobs/{id}/ajs_joins.json` (cursor pagination) to get all applicant IDs, then fetches details per applicant via `/api/v3/applicants/{id}.json` in parallel batches of 5 with 0.5s delay between batches (rate limit protection). Retry up to 3 times on 429 with `Retry-After`; raises `RuntimeError` if retries exhausted.
 - **Scoring**: `resume_scorer.score_applicant(job, applicant, *, ai_client)` — takes the dispatcher-injected `AIClient`, builds prompt (job desc + applicant resume/experience/skills) → Claude returns JSON with score 0-100, breakdown, strengths, weaknesses. 300s timeout.

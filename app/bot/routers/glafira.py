@@ -111,7 +111,7 @@ async def handle_glafira_message(
                     logger.warning("Glafira final edit_text failed: %s", e)
         else:
             await wait_msg.edit_text(
-                "🤖 Глафира не ответила. Попробуй переформулировать.",
+                "🤖 Марфа не ответила. Попробуй переформулировать.",
                 reply_markup=GLAFIRA_EXIT_KB,
             )
 
@@ -122,6 +122,6 @@ async def handle_glafira_message(
     except Exception as e:
         logger.error("Glafira error: %s", e, exc_info=True)
         await wait_msg.edit_text(
-            f"❌ Ошибка связи с Глафирой: {html_mod.escape(str(e))}",
+            f"❌ Ошибка связи с Марфой: {html_mod.escape(str(e))}",
             reply_markup=GLAFIRA_EXIT_KB,
         )
