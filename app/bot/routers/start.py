@@ -51,7 +51,7 @@ MENU_KB = InlineKeyboardMarkup(inline_keyboard=[
     ],
     [
         InlineKeyboardButton(text="🤖 Глафира", callback_data="hint:glafira"),
-        InlineKeyboardButton(text="👔 Анатолий", callback_data="hint:recruiter"),
+        InlineKeyboardButton(text="👔 Марфа", callback_data="hint:recruiter"),
     ],
     [
         InlineKeyboardButton(text="❓ Все команды", callback_data="hint:all"),
@@ -90,7 +90,7 @@ HELP_TEXT = (
 
     "<b>🤖 AI-сотрудники</b>\n"
     "🤖 Глафира — AI офис-менеджер через браузер (ограниченный доступ)\n"
-    "👔 Анатолий — AI-рекрутёр, оценивает кандидатов в Potok.io (ограниченный доступ)\n\n"
+    "👔 Марфа — AI-рекрутёр, оценивает кандидатов в Potok.io (ограниченный доступ)\n\n"
 
     "<b>⚙️ Slash-команды</b>\n"
     "<code>/start</code> — авторизация в боте через Bitrix\n"
@@ -297,7 +297,7 @@ async def _enter_recruiter(callback: CallbackQuery, state: FSMContext, potok):
         await callback.answer()
         return
     await callback.message.answer(
-        "👔 <b>Анатолий</b> — AI-рекрутёр\n\n"
+        "👔 <b>Марфа</b> — AI-рекрутёр\n\n"
         "Оцениваю кандидатов по вакансиям из Potok.io: сравниваю резюме "
         "с описанием вакансии через Claude, ставлю балл 0–100, выделяю "
         "сильные и слабые стороны. Результат публикую комментарием в Potok "
