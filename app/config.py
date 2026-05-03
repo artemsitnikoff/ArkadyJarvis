@@ -68,6 +68,11 @@ class Settings(BaseSettings):
     # Monday motivational Soviet-style poster — sent every Monday 09:00 local time. 0 = disabled.
     monday_poster_chat_id: int = 0
 
+    # Zabbix monitoring channel — bot listens for Zabbix alerts here
+    zabbix_channel_id: int = 0  # e.g. -1001423899560
+    zabbix_jira_project: str = "DA"
+    zabbix_threshold_hours: int = 24
+
     # Telethon userbot (for sending messages from recruiter's personal account)
     telethon_api_id: int = 0
     telethon_api_hash: str = ""

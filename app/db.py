@@ -61,6 +61,21 @@ CREATE TABLE IF NOT EXISTS recruiter_contacts (
     applicant_name   TEXT,
     created_at       TEXT DEFAULT (datetime('now'))
 );
+
+CREATE TABLE IF NOT EXISTS zabbix_problems (
+    problem_id    INTEGER PRIMARY KEY,
+    host          TEXT,
+    name          TEXT,
+    severity      TEXT,
+    opened_at     TEXT,
+    resolved_at   TEXT,
+    jira_task_key TEXT,
+    raw_text      TEXT,
+    last_seen     TEXT DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_zabbix_unresolved
+    ON zabbix_problems(resolved_at, jira_task_key, opened_at);
 """
 
 
@@ -295,3 +310,68 @@ async def get_recruiter_contact(telegram_user_id: int) -> dict | None:
     ) as cur:
         row = await cur.fetchone()
         return dict(row) if row else None
+
+
+# ── Zabbix problems ──────────────────────────────────────────
+
+async def upsert_zabbix_problem(
+    problem_id: int,
+    host: str | None,
+    name: str | None,
+    severity: str | None,
+    opened_at: str,
+    raw_text: str,
+) -> None:
+    """Insert a new Zabbix problem; on conflict keep the earliest opened_at."""
+    db = get_db()
+    await db.execute(
+        """INSERT INTO zabbix_problems
+               (problem_id, host, name, severity, opened_at, raw_text, last_seen)
+           VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+           ON CONFLICT(problem_id) DO UPDATE SET
+               host = COALESCE(excluded.host, host),
+               name = COALESCE(excluded.name, name),
+               severity = COALESCE(excluded.severity, severity),
+               raw_text = COALESCE(excluded.raw_text, raw_text),
+               last_seen = datetime('now')""",
+        (problem_id, host, name, severity, opened_at, raw_text),
+    )
+    await db.commit()
+
+
+async def mark_zabbix_resolved(problem_id: int, resolved_at: str) -> None:
+    """Idempotent: sets resolved_at if not already set. Inserts stub if no row exists."""
+    db = get_db()
+    await db.execute(
+        """INSERT INTO zabbix_problems (problem_id, resolved_at, last_seen)
+           VALUES (?, ?, datetime('now'))
+           ON CONFLICT(problem_id) DO UPDATE SET
+               resolved_at = COALESCE(zabbix_problems.resolved_at, excluded.resolved_at),
+               last_seen = datetime('now')""",
+        (problem_id, resolved_at),
+    )
+    await db.commit()
+
+
+async def set_zabbix_jira_key(problem_id: int, jira_task_key: str) -> None:
+    db = get_db()
+    await db.execute(
+        "UPDATE zabbix_problems SET jira_task_key = ? WHERE problem_id = ?",
+        (jira_task_key, problem_id),
+    )
+    await db.commit()
+
+
+async def get_unresolved_zabbix_problems(opened_before: str) -> list[dict]:
+    """Problems still open (no resolved_at) without a Jira task, opened earlier than cutoff."""
+    db = get_db()
+    async with db.execute(
+        """SELECT * FROM zabbix_problems
+           WHERE resolved_at IS NULL
+             AND jira_task_key IS NULL
+             AND opened_at IS NOT NULL
+             AND opened_at <= ?
+           ORDER BY opened_at""",
+        (opened_before,),
+    ) as cur:
+        return [dict(r) for r in await cur.fetchall()]

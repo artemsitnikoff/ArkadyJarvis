@@ -11,7 +11,12 @@ from app.bot.create import create_bot, create_dispatcher
 from app.bot.middlewares import AuthMiddleware, ErrorMiddleware
 from app.config import settings
 from app.db import close_db, get_recruiter_contact, init_db
-from app.scheduler.jobs import daily_summary_job, monday_poster_job, wednesday_frog_job
+from app.scheduler.jobs import (
+    daily_summary_job,
+    monday_poster_job,
+    wednesday_frog_job,
+    zabbix_check_unresolved_job,
+)
 from app.services.ai_client import AIClient
 from app.services.bitrix_client import BitrixClient
 from app.services.openclaw_client import OpenClawClient
@@ -139,6 +144,17 @@ async def lifespan(app: FastAPI):
         logger.info(
             "Scheduler: monday_poster at Mon 09:00 [%s] -> chat %s",
             settings.timezone, settings.monday_poster_chat_id,
+        )
+
+    if settings.zabbix_channel_id:
+        scheduler.add_job(
+            zabbix_check_unresolved_job,
+            CronTrigger(hour=10, minute=0, timezone=settings.timezone),
+            id="zabbix_check",
+        )
+        logger.info(
+            "Scheduler: zabbix_check at 10:00 [%s] -> Jira project %s",
+            settings.timezone, settings.zabbix_jira_project,
         )
 
     scheduler.start()

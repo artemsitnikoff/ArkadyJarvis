@@ -207,3 +207,20 @@ async def monday_poster_job(bot: Bot, ai_client: AIClient, openrouter: OpenRoute
         await send_monday_poster(bot, ai_client, openrouter, chat_id)
     except Exception as e:
         logger.error("=== monday_poster_job failed: %s", e, exc_info=True)
+
+
+async def zabbix_check_unresolved_job():
+    """Daily 10:00: scan Zabbix problems open >24h, escalate to Jira (DA project)."""
+    from app.services.jira_client import JiraClient
+    from app.services.zabbix_monitor import check_unresolved_and_create_jira
+
+    if not settings.zabbix_channel_id:
+        logger.info("=== zabbix_check_unresolved_job skipped: ZABBIX_CHANNEL_ID not set")
+        return
+    try:
+        async with JiraClient() as jira:
+            count = await check_unresolved_and_create_jira(jira)
+        logger.info("=== zabbix_check_unresolved_job: %d Jira tasks created", count)
+    except Exception as e:
+        logger.error("=== zabbix_check_unresolved_job failed: %s", e, exc_info=True)
+
