@@ -63,9 +63,29 @@ async def main() -> None:
     print(f"Cutoff:  {cutoff.isoformat()} (last 30 days)")
     print(f"{'='*60}\n")
 
+    # Prime the entity cache: without this Telethon can't resolve channels
+    # the userbot hasn't seen recently (PeerChannel without access_hash).
+    print("Loading dialogs to cache channel entity…")
+    try:
+        async for _ in client.iter_dialogs(limit=200):
+            pass
+    except Exception as e:
+        print(f"  warning: iter_dialogs failed: {e}")
+
+    try:
+        entity = await client.get_entity(settings.zabbix_channel_id)
+        print(f"  → channel resolved: {getattr(entity, 'title', '?')}\n")
+    except Exception as e:
+        sys.exit(
+            f"\n❌ Не могу прочитать канал {settings.zabbix_channel_id}.\n"
+            f"   Userbot @{me.username} НЕ состоит в этом канале — "
+            f"добавь его как подписчика и запусти скрипт ещё раз.\n\n"
+            f"   Telethon error: {e}"
+        )
+
     print("Fetching channel history…")
     messages = []
-    async for msg in client.iter_messages(settings.zabbix_channel_id):
+    async for msg in client.iter_messages(entity):
         if msg.date < cutoff:
             break
         if msg.text:
