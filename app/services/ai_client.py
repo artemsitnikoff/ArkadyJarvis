@@ -15,6 +15,18 @@ class AIClient:
     async def complete(self, prompt: str, timeout: int = 120) -> str:
         return await self._call_cli(prompt, timeout=timeout)
 
+    # CRITICAL: disable all tools. Otherwise the CLI executes shell commands,
+    # reads/writes files, fetches URLs etc. when the user prompt looks like
+    # an instruction ("сделай cd ..., ls ..."). For our use case the CLI is
+    # a stateless prompt→answer model, no agentic behaviour is wanted.
+    DISALLOWED_TOOLS = (
+        "Bash,BashOutput,KillShell,"
+        "Read,Write,Edit,MultiEdit,NotebookEdit,"
+        "Glob,Grep,"
+        "WebFetch,WebSearch,"
+        "Task,Agent,SlashCommand,TodoWrite,ExitPlanMode"
+    )
+
     async def _call_cli(self, prompt: str, timeout: int = 120) -> str:
         from app.services.claude_token import ensure_fresh_token
         await ensure_fresh_token()
@@ -22,7 +34,12 @@ class AIClient:
         env = os.environ.copy()
         env.pop("CLAUDECODE", None)
 
-        args = [settings.claude_cli_path, "--print", "--output-format", "text"]
+        args = [
+            settings.claude_cli_path,
+            "--print",
+            "--output-format", "text",
+            "--disallowed-tools", self.DISALLOWED_TOOLS,
+        ]
         if settings.claude_model:
             args.extend(["--model", settings.claude_model])
 
