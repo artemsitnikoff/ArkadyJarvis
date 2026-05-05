@@ -45,12 +45,16 @@ class AIClient:
 
         logger.info("claude CLI argv: %s", args)
 
+        # Run from /tmp so Claude CLI doesn't pick up the project's CLAUDE.md
+        # as system context — otherwise the CLI prefixes every answer with
+        # "this is off-topic for the project ArkadyJarvis…".
         proc = await asyncio.create_subprocess_exec(
             *args,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             env=env,
+            cwd="/tmp",
         )
         try:
             stdout, stderr = await asyncio.wait_for(
