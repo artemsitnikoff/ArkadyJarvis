@@ -6,10 +6,13 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import Message
 
 from app.bot.routers.start import MENU_KB
+from app.services.prompts import load_prompt
 from app.utils import md_to_telegram_html
 
 logger = logging.getLogger("arkadyjarvis")
 router = Router()
+
+ASK_AI_SYSTEM_PROMPT = load_prompt("ask_ai_system")
 
 
 class AskAI(StatesGroup):
@@ -30,7 +33,7 @@ async def _ask_and_reply(message: Message, question: str, *, ai_client):
     logger.info("*** ASK_AI: question=%r from user=%s", question, message.from_user.id)
     wait_msg = await message.reply("🧠 Думаю...")
     try:
-        answer = await ai_client.complete(question)
+        answer = await ai_client.complete(question, system_prompt=ASK_AI_SYSTEM_PROMPT)
         html_answer = md_to_telegram_html(answer)
         await wait_msg.edit_text(html_answer, reply_markup=MENU_KB)
     except Exception:

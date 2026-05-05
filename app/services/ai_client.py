@@ -12,8 +12,10 @@ logger = logging.getLogger("arkadyjarvis")
 class AIClient:
     """Claude CLI wrapper. Uses subscription via CLAUDE_CODE_OAUTH_TOKEN."""
 
-    async def complete(self, prompt: str, timeout: int = 120) -> str:
-        return await self._call_cli(prompt, timeout=timeout)
+    async def complete(
+        self, prompt: str, timeout: int = 120, system_prompt: str | None = None,
+    ) -> str:
+        return await self._call_cli(prompt, timeout=timeout, system_prompt=system_prompt)
 
     # CRITICAL: disable all tools. Otherwise the CLI executes shell commands,
     # reads/writes files, fetches URLs etc. when the user prompt looks like
@@ -27,7 +29,9 @@ class AIClient:
         "Task,Agent,SlashCommand,TodoWrite,ExitPlanMode"
     )
 
-    async def _call_cli(self, prompt: str, timeout: int = 120) -> str:
+    async def _call_cli(
+        self, prompt: str, timeout: int = 120, system_prompt: str | None = None,
+    ) -> str:
         from app.services.claude_token import ensure_fresh_token
         await ensure_fresh_token()
 
@@ -42,8 +46,15 @@ class AIClient:
         ]
         if settings.claude_model:
             args.extend(["--model", settings.claude_model])
+        if system_prompt:
+            args.extend(["--append-system-prompt", system_prompt])
 
-        logger.info("claude CLI argv: %s", args)
+        # Don't log full args if system_prompt is huge — keep diagnostic short.
+        logger.info(
+            "claude CLI argv (model=%s, tools_disabled=yes, system_prompt=%s)",
+            settings.claude_model or "default",
+            f"{len(system_prompt)} chars" if system_prompt else "no",
+        )
 
         # Run from /tmp so Claude CLI doesn't pick up the project's CLAUDE.md
         # as system context — otherwise the CLI prefixes every answer with
