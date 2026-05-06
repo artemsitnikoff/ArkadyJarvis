@@ -334,7 +334,12 @@ class PotokClient:
         target_stage_name: str,
     ) -> bool:
         """Move an applicant to a different stage (by NAME) within their job.
-        Returns True on success, False otherwise (logs the reason)."""
+
+        Working endpoint (confirmed by brute-force testing 2026-05):
+            PATCH /api/v3/ajs_joins/{ajs_join_id}.json
+            body: {"stage_id": X}     <- flat, NO 'ajs_join' wrapper!
+        With the wrapper Potok returns 200 OK but silently ignores the change.
+        """
         # 1. Find the applicant's ajs_join for this specific job
         try:
             resp = await self._client.get(f"/api/v3/applicants/{applicant_id}.json")
@@ -356,12 +361,11 @@ class PotokClient:
             )
             return False
         ajs_join_id = target_join.get("id")
+        current_stage_id = (target_join.get("stage") or {}).get("id")
 
-        # 2. Fetch job stages, find the target stage_id by name
+        # 2. Fetch job stages, find target stage_id by name
         try:
             resp = await self._client.get(f"/api/v3/jobs/{job_id}.json")
-            if resp.status_code == 404:
-                resp = await self._client.get(f"/api/v2/jobs/{job_id}.json")
             resp.raise_for_status()
             job_data = resp.json()
         except Exception as e:
@@ -383,56 +387,34 @@ class PotokClient:
             )
             return False
 
-        # 3. Try several endpoint shapes — Potok docs aren't public
-        payload = {"ajs_join": {"stage_id": target_stage_id}}
-        candidates = [
-            ("PATCH", f"/api/v3/ajs_joins/{ajs_join_id}.json", payload),
-            ("PATCH", f"/api/v3/applicants/{applicant_id}/ajs_joins/{ajs_join_id}.json", payload),
-            ("PATCH", f"/api/v2/ajs_joins/{ajs_join_id}.json", payload),
-        ]
-        for method, url, body in candidates:
-            try:
-                resp = await self._client.request(method, url, json=body)
-                if resp.status_code < 400:
-                    logger.info(
-                        "Potok: moved applicant %s to stage %r (stage_id=%s) via %s %s",
-                        applicant_id, target_stage_name, target_stage_id, method, url,
-                    )
-                    return True
-                logger.info(
-                    "Potok %s %s -> %s: %s",
-                    method, url, resp.status_code, resp.text[:200],
-                )
-            except Exception as e:
-                logger.info("Potok %s %s failed: %s", method, url, e)
-
-        # 4. Last resort: POST Event::Stage
-        try:
-            event = {
-                "applicant_id": applicant_id,
-                "type": "Event::Stage",
-                "job_id": job_id,
-                "stage_id": target_stage_id,
-            }
-            resp = await self._client.post("/api/v3/events.json", json={"event": event})
-            if resp.status_code < 400:
-                logger.info(
-                    "Potok: posted Event::Stage for applicant %s -> %r (fallback)",
-                    applicant_id, target_stage_name,
-                )
-                return True
-            logger.warning(
-                "Potok Event::Stage fallback -> %s: %s",
-                resp.status_code, resp.text[:200],
+        if current_stage_id == target_stage_id:
+            logger.info(
+                "Potok: applicant %s already in stage %r — no-op",
+                applicant_id, target_stage_name,
             )
-        except Exception as e:
-            logger.warning("Potok Event::Stage fallback failed: %s", e)
+            return True
 
-        logger.error(
-            "Potok move_to_stage: ALL endpoints failed for applicant %s job %s -> %r",
-            applicant_id, job_id, target_stage_name,
+        # 3. Patch ajs_join with FLAT payload (no wrapper — see docstring)
+        try:
+            resp = await self._client.patch(
+                f"/api/v3/ajs_joins/{ajs_join_id}.json",
+                json={"stage_id": target_stage_id},
+            )
+            if resp.status_code >= 400:
+                logger.error(
+                    "Potok stage move PATCH -> %s: %s",
+                    resp.status_code, resp.text[:200],
+                )
+                return False
+        except Exception as e:
+            logger.error("Potok stage move PATCH failed: %s", e)
+            return False
+
+        logger.info(
+            "Potok: moved applicant %s to stage %r (stage_id=%s)",
+            applicant_id, target_stage_name, target_stage_id,
         )
-        return False
+        return True
 
     async def get_applicant_questions(self, applicant_id: int) -> list[str]:
         """Return AI-generated interview questions for an applicant.
