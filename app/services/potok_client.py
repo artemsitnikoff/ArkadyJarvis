@@ -327,6 +327,113 @@ class PotokClient:
         resp.raise_for_status()
         logger.info("Potok: saved reply from applicant %s", applicant_id)
 
+    async def move_applicant_to_stage(
+        self,
+        applicant_id: int,
+        job_id: int,
+        target_stage_name: str,
+    ) -> bool:
+        """Move an applicant to a different stage (by NAME) within their job.
+        Returns True on success, False otherwise (logs the reason)."""
+        # 1. Find the applicant's ajs_join for this specific job
+        try:
+            resp = await self._client.get(f"/api/v3/applicants/{applicant_id}.json")
+            resp.raise_for_status()
+            data = resp.json()
+        except Exception as e:
+            logger.warning("Potok move_to_stage: fetch applicant %s failed: %s", applicant_id, e)
+            return False
+
+        ajs_joins = data.get("ajs_joins") or []
+        target_join = next(
+            (j for j in ajs_joins if (j.get("job") or {}).get("id") == job_id),
+            None,
+        )
+        if not target_join:
+            logger.warning(
+                "Potok move_to_stage: applicant %s has no ajs_join for job %s",
+                applicant_id, job_id,
+            )
+            return False
+        ajs_join_id = target_join.get("id")
+
+        # 2. Fetch job stages, find the target stage_id by name
+        try:
+            resp = await self._client.get(f"/api/v3/jobs/{job_id}.json")
+            if resp.status_code == 404:
+                resp = await self._client.get(f"/api/v2/jobs/{job_id}.json")
+            resp.raise_for_status()
+            job_data = resp.json()
+        except Exception as e:
+            logger.warning("Potok move_to_stage: fetch job %s failed: %s", job_id, e)
+            return False
+
+        stages = job_data.get("stages") or []
+        wanted = target_stage_name.strip().lower()
+        target_stage_id = next(
+            (s.get("id") for s in stages
+             if (s.get("name") or "").strip().lower() == wanted),
+            None,
+        )
+        if not target_stage_id:
+            logger.warning(
+                "Potok move_to_stage: stage %r not found in job %s. Available: %s",
+                target_stage_name, job_id,
+                [s.get("name") for s in stages],
+            )
+            return False
+
+        # 3. Try several endpoint shapes — Potok docs aren't public
+        payload = {"ajs_join": {"stage_id": target_stage_id}}
+        candidates = [
+            ("PATCH", f"/api/v3/ajs_joins/{ajs_join_id}.json", payload),
+            ("PATCH", f"/api/v3/applicants/{applicant_id}/ajs_joins/{ajs_join_id}.json", payload),
+            ("PATCH", f"/api/v2/ajs_joins/{ajs_join_id}.json", payload),
+        ]
+        for method, url, body in candidates:
+            try:
+                resp = await self._client.request(method, url, json=body)
+                if resp.status_code < 400:
+                    logger.info(
+                        "Potok: moved applicant %s to stage %r (stage_id=%s) via %s %s",
+                        applicant_id, target_stage_name, target_stage_id, method, url,
+                    )
+                    return True
+                logger.info(
+                    "Potok %s %s -> %s: %s",
+                    method, url, resp.status_code, resp.text[:200],
+                )
+            except Exception as e:
+                logger.info("Potok %s %s failed: %s", method, url, e)
+
+        # 4. Last resort: POST Event::Stage
+        try:
+            event = {
+                "applicant_id": applicant_id,
+                "type": "Event::Stage",
+                "job_id": job_id,
+                "stage_id": target_stage_id,
+            }
+            resp = await self._client.post("/api/v3/events.json", json={"event": event})
+            if resp.status_code < 400:
+                logger.info(
+                    "Potok: posted Event::Stage for applicant %s -> %r (fallback)",
+                    applicant_id, target_stage_name,
+                )
+                return True
+            logger.warning(
+                "Potok Event::Stage fallback -> %s: %s",
+                resp.status_code, resp.text[:200],
+            )
+        except Exception as e:
+            logger.warning("Potok Event::Stage fallback failed: %s", e)
+
+        logger.error(
+            "Potok move_to_stage: ALL endpoints failed for applicant %s job %s -> %r",
+            applicant_id, job_id, target_stage_name,
+        )
+        return False
+
     async def get_applicant_questions(self, applicant_id: int) -> list[str]:
         """Return AI-generated interview questions for an applicant.
 

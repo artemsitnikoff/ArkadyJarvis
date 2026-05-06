@@ -341,6 +341,18 @@ async def _send_questions_flow(
         job_name=job.name,
         applicant_name=applicant.display_name,
     )
+
+    # Move to next funnel stage (best-effort — don't fail the send if Potok rejects)
+    next_stage = settings.potok_after_contact_stage
+    if next_stage:
+        try:
+            await potok.move_applicant_to_stage(applicant.id, job.id, next_stage)
+        except Exception as e:
+            logger.warning(
+                "Potok stage move failed for applicant %s: %s",
+                applicant.id, e,
+            )
+
     return "sent", user_id, len(questions)
 
 
