@@ -37,7 +37,8 @@ class Settings(BaseSettings):
     # Potok.io (Recruiter Anatoly)
     potok_api_token: SecretStr = SecretStr("")
     potok_base_url: str = "https://app.potok.io"
-    potok_after_contact_stage: str = "Скрининг резюме"  # stage to move candidate after successful contact
+    # Potok stage name has a typo «Скриннинг» (double Н) — keep matching their casing
+    potok_after_contact_stage: str = "Скриннинг резюме"
 
     # Claude CLI
     claude_cli_path: str = "claude"
