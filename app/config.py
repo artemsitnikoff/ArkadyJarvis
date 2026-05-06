@@ -39,6 +39,9 @@ class Settings(BaseSettings):
     potok_base_url: str = "https://app.potok.io"
     # Potok stage name has a typo «Скриннинг» (double Н) — keep matching their casing
     potok_after_contact_stage: str = "Скриннинг резюме"
+    # Auto-promote: score > threshold → move to this stage right after scoring
+    potok_high_score_threshold: int = 80
+    potok_high_score_stage: str = "Добавлен"
 
     # Claude CLI
     claude_cli_path: str = "claude"

@@ -291,6 +291,21 @@ class PotokClient:
                     result.applicant_id, result.score, e,
                 )
 
+        # Auto-promote high scorers to a configured stage
+        if (
+            settings.potok_high_score_stage
+            and result.score > settings.potok_high_score_threshold
+        ):
+            try:
+                await self.move_applicant_to_stage(
+                    result.applicant_id, job_id, settings.potok_high_score_stage,
+                )
+            except Exception as e:
+                logger.warning(
+                    "Potok: auto-promote failed for applicant %s (score %d): %s",
+                    result.applicant_id, result.score, e,
+                )
+
     async def post_candidate_reply(
         self, applicant_id: int, job_id: int, applicant_name: str, text: str
     ) -> None:
