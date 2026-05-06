@@ -422,6 +422,11 @@ async def handle_send_to_all(callback: CallbackQuery, state: FSMContext, userbot
 
     counters = {"sent": 0, "no_phone": 0, "no_questions": 0,
                 "no_telegram": 0, "send_failed": 0, "errors": 0}
+    # Names of candidates per non-success status for the final summary
+    names_by_status: dict[str, list[str]] = {
+        "no_phone": [], "no_questions": [],
+        "no_telegram": [], "send_failed": [], "errors": [],
+    }
 
     flood_stopped = False
 
@@ -429,12 +434,13 @@ async def handle_send_to_all(callback: CallbackQuery, state: FSMContext, userbot
         try:
             status, _, _ = await _send_questions_flow(applicant, job, userbot, potok)
             counters[status] = counters.get(status, 0) + 1
+            if status != "sent":
+                names_by_status.setdefault(status, []).append(applicant.display_name)
             logger.info(
                 "Bulk send %d/%d: %s → %s",
                 i, len(contact_applicants), applicant.display_name, status,
             )
         except Exception as e:
-            # FloodWaitError / PeerFloodError → stop early, Telegram throttling
             err_name = type(e).__name__
             if err_name in {"FloodWaitError", "PeerFloodError"}:
                 logger.error("Bulk send: %s — stopping", err_name)
@@ -442,6 +448,7 @@ async def handle_send_to_all(callback: CallbackQuery, state: FSMContext, userbot
                 break
             logger.error("Bulk send: error on %s: %s", applicant.display_name, e)
             counters["errors"] += 1
+            names_by_status["errors"].append(applicant.display_name)
 
         # Update progress every 5 candidates
         if i % 5 == 0:
@@ -463,16 +470,19 @@ async def handle_send_to_all(callback: CallbackQuery, state: FSMContext, userbot
         f"Всего кандидатов: {len(contact_applicants)}",
         f"📤 Отправлено: <b>{counters['sent']}</b>",
     ]
-    if counters["no_phone"]:
-        summary_lines.append(f"📵 Без телефона: {counters['no_phone']}")
-    if counters["no_questions"]:
-        summary_lines.append(f"❓ Без вопросов (нужен скоринг): {counters['no_questions']}")
-    if counters["no_telegram"]:
-        summary_lines.append(f"🚫 Не найдены в Telegram: {counters['no_telegram']}")
-    if counters["send_failed"]:
-        summary_lines.append(f"🔒 Приватность закрыта: {counters['send_failed']}")
-    if counters["errors"]:
-        summary_lines.append(f"⚠️ Ошибки: {counters['errors']}")
+
+    def _block(emoji: str, label: str, key: str) -> None:
+        if counters[key]:
+            summary_lines.append("")
+            summary_lines.append(f"{emoji} <b>{label}: {counters[key]}</b>")
+            for nm in names_by_status[key]:
+                summary_lines.append(f"  • {html_mod.escape(nm)}")
+
+    _block("📵", "Без телефона", "no_phone")
+    _block("❓", "Без вопросов (нужен скоринг)", "no_questions")
+    _block("🚫", "Не найдены в Telegram", "no_telegram")
+    _block("🔒", "Приватность закрыта", "send_failed")
+    _block("⚠️", "Ошибки", "errors")
 
     try:
         await progress_msg.edit_text("\n".join(summary_lines), reply_markup=MENU_KB)
