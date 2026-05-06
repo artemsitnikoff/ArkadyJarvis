@@ -20,7 +20,7 @@ from app.services.potok_client import PotokClient  # noqa: E402
 
 # ── EDIT THESE ──
 APPLICANT_ID = 57921516
-JOB_ID = 19382504
+JOB_ID = 1589325
 TARGET_STAGE_NAME = settings.potok_after_contact_stage  # "Скрининг резюме" by default
 
 
