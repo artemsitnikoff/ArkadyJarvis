@@ -1,3 +1,4 @@
+import asyncio
 import html as html_mod
 import logging
 import re
@@ -291,6 +292,58 @@ async def handle_job_selected(callback: CallbackQuery, state: FSMContext, potok)
     )
 
 
+def _build_intro(job_name: str) -> str:
+    """Intro message — company + vacancy context."""
+    company = settings.recruiter_company
+    name_part = f"Меня зовут {settings.recruiter_name}, я" if settings.recruiter_name else "Я"
+    return (
+        f"{name_part} представляю компанию {company}. "
+        f"Рассматриваю вас на вакансию «{job_name}». "
+        f"Ваше резюме очень заинтересовало нас, но перед собеседованием "
+        f"у нас есть небольшие вопросы."
+    )
+
+
+async def _send_questions_flow(
+    applicant: Applicant, job, userbot, potok,
+) -> tuple[str, int | None, int]:
+    """Resolve phone, send intro + questions to one candidate.
+
+    Returns (status, user_id_or_None, questions_count).
+    Statuses: no_phone | no_questions | no_telegram | send_failed | sent
+    """
+    phones = applicant.phones or []
+    if not phones:
+        return "no_phone", None, 0
+
+    questions = await potok.get_applicant_questions(applicant.id)
+    if not questions:
+        return "no_questions", None, 0
+
+    phone = phones[0]
+    user_id = await userbot.resolve_phone(phone)
+    if not user_id:
+        return "no_telegram", None, len(questions)
+
+    intro = _build_intro(job.name)
+    await userbot.send_to_user(user_id, intro)
+
+    combined = "\n\n".join(f"{i}. {q}" for i, q in enumerate(questions, 1))
+    success = await userbot.send_to_user(user_id, combined)
+    if not success:
+        return "send_failed", user_id, len(questions)
+
+    await save_recruiter_contact(
+        telegram_user_id=user_id,
+        phone=phone,
+        applicant_id=applicant.id,
+        job_id=job.id,
+        job_name=job.name,
+        applicant_name=applicant.display_name,
+    )
+    return "sent", user_id, len(questions)
+
+
 @router.callback_query(F.data.startswith("recruit:contact:"), Recruiter.confirming)
 async def handle_contact_candidates(callback: CallbackQuery, state: FSMContext, userbot):
     await callback.answer()
@@ -330,13 +383,102 @@ async def handle_contact_candidates(callback: CallbackQuery, state: FSMContext, 
             kb = None
         await callback.message.answer(text, reply_markup=kb)
 
-    exit_kb = InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text="◀️ Меню", callback_data="recruit:exit")
-    ]])
+    controls_rows = []
+    if userbot_ok:
+        with_phone = sum(1 for a in contact_applicants if a.phones)
+        if with_phone > 0:
+            controls_rows.append([InlineKeyboardButton(
+                text=f"✉️ Написать всем ({with_phone})",
+                callback_data="recruit:message_all",
+            )])
+    controls_rows.append([InlineKeyboardButton(text="◀️ Меню", callback_data="recruit:exit")])
+
     await callback.message.answer(
-        "Нажми «✉️ Написать» чтобы отправить сообщение кандидату со своего Telegram.",
-        reply_markup=exit_kb,
+        "Нажми «✉️ Написать» под кандидатом для индивидуальной отправки, "
+        "или «✉️ Написать всем» для массовой рассылки.",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=controls_rows),
     )
+
+
+@router.callback_query(F.data == "recruit:message_all", Recruiter.contacting)
+async def handle_send_to_all(callback: CallbackQuery, state: FSMContext, userbot, potok):
+    """Bulk-send intro + questions to every candidate in the contact list."""
+    await callback.answer("Запускаю рассылку…")
+
+    data = await state.get_data()
+    contact_applicants = data.get("contact_applicants", [])
+    job = data["job"]
+
+    if not userbot:
+        await callback.message.answer("❌ Userbot не настроен", reply_markup=MENU_KB)
+        return
+    if not contact_applicants:
+        await callback.message.answer("Нет кандидатов.", reply_markup=MENU_KB)
+        return
+
+    progress_msg = await callback.message.answer(
+        f"📤 Рассылка по {len(contact_applicants)} кандидатам…"
+    )
+
+    counters = {"sent": 0, "no_phone": 0, "no_questions": 0,
+                "no_telegram": 0, "send_failed": 0, "errors": 0}
+
+    flood_stopped = False
+
+    for i, applicant in enumerate(contact_applicants, 1):
+        try:
+            status, _, _ = await _send_questions_flow(applicant, job, userbot, potok)
+            counters[status] = counters.get(status, 0) + 1
+            logger.info(
+                "Bulk send %d/%d: %s → %s",
+                i, len(contact_applicants), applicant.display_name, status,
+            )
+        except Exception as e:
+            # FloodWaitError / PeerFloodError → stop early, Telegram throttling
+            err_name = type(e).__name__
+            if err_name in {"FloodWaitError", "PeerFloodError"}:
+                logger.error("Bulk send: %s — stopping", err_name)
+                flood_stopped = True
+                break
+            logger.error("Bulk send: error on %s: %s", applicant.display_name, e)
+            counters["errors"] += 1
+
+        # Update progress every 5 candidates
+        if i % 5 == 0:
+            try:
+                await progress_msg.edit_text(
+                    f"📤 Рассылка: {i}/{len(contact_applicants)} "
+                    f"(✅ {counters['sent']}, ⚠️ {counters['errors'] + counters['send_failed']})"
+                )
+            except Exception:
+                pass
+
+        # Throttle to avoid FloodWait — Telegram tolerates ~1 msg/sec to strangers
+        await asyncio.sleep(1.5)
+
+    # Final summary
+    summary_lines = [
+        "✅ <b>Рассылка завершена</b>" if not flood_stopped else "⚠️ <b>Рассылка остановлена (FloodWait)</b>",
+        "",
+        f"Всего кандидатов: {len(contact_applicants)}",
+        f"📤 Отправлено: <b>{counters['sent']}</b>",
+    ]
+    if counters["no_phone"]:
+        summary_lines.append(f"📵 Без телефона: {counters['no_phone']}")
+    if counters["no_questions"]:
+        summary_lines.append(f"❓ Без вопросов (нужен скоринг): {counters['no_questions']}")
+    if counters["no_telegram"]:
+        summary_lines.append(f"🚫 Не найдены в Telegram: {counters['no_telegram']}")
+    if counters["send_failed"]:
+        summary_lines.append(f"🔒 Приватность закрыта: {counters['send_failed']}")
+    if counters["errors"]:
+        summary_lines.append(f"⚠️ Ошибки: {counters['errors']}")
+
+    try:
+        await progress_msg.edit_text("\n".join(summary_lines), reply_markup=MENU_KB)
+    except Exception:
+        await callback.message.answer("\n".join(summary_lines), reply_markup=MENU_KB)
+    await state.clear()
 
 
 @router.callback_query(F.data.startswith("recruit:message:"), Recruiter.contacting)
@@ -350,56 +492,19 @@ async def handle_send_message(callback: CallbackQuery, state: FSMContext, userbo
     if not applicant:
         await callback.answer("Кандидат не найден", show_alert=True)
         return
-
-    phones = applicant.phones or []
-    if not phones:
+    if not applicant.phones:
         await callback.answer("У кандидата нет телефона в Potok", show_alert=True)
         return
-
     if not userbot:
         await callback.answer("Userbot не настроен", show_alert=True)
         return
 
     await callback.answer("Отправляю...")
 
-    phone = phones[0]
+    status, _, q_count = await _send_questions_flow(applicant, job, userbot, potok)
+    name = html_mod.escape(applicant.display_name)
 
-    # Resolve phone → telegram_user_id (needed for reply tracking)
-    user_id = await userbot.resolve_phone(phone)
-    if not user_id:
-        await callback.message.answer(
-            f"❌ <b>{html_mod.escape(applicant.display_name)}</b> — номер не найден в Telegram"
-        )
-        return
-
-    questions = await potok.get_applicant_questions(applicant_id)
-    if not questions:
-        await callback.answer("Нет вопросов — сначала оцените кандидата", show_alert=True)
-        return
-
-    # Intro: company + vacancy context
-    company = settings.recruiter_company
-    name_part = f"Меня зовут {settings.recruiter_name}, я" if settings.recruiter_name else "Я"
-    intro = (
-        f"{name_part} представляю компанию {company}. "
-        f"Рассматриваю вас на вакансию «{job.name}». "
-        f"Ваше резюме очень заинтересовало нас, но перед собеседованием у нас есть небольшие вопросы."
-    )
-    await userbot.send_to_user(user_id, intro)
-
-    combined = "\n\n".join(f"{i}. {q}" for i, q in enumerate(questions, 1))
-    success = await userbot.send_to_user(user_id, combined)
-
-    if success:
-        await save_recruiter_contact(
-            telegram_user_id=user_id,
-            phone=phone,
-            applicant_id=applicant_id,
-            job_id=job.id,
-            job_name=job.name,
-            applicant_name=applicant.display_name,
-        )
-
+    if status == "sent":
         try:
             await callback.message.edit_reply_markup(
                 reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
@@ -408,16 +513,20 @@ async def handle_send_message(callback: CallbackQuery, state: FSMContext, userbo
             )
         except Exception:
             pass
-
         await callback.message.answer(
-            f"✅ Отправлено <b>{html_mod.escape(applicant.display_name)}</b>: "
-            f"вводное + {len(questions)} вопросов. Ответы будут сохраняться в Potok."
+            f"✅ Отправлено <b>{name}</b>: вводное + {q_count} вопросов. "
+            f"Ответы будут сохраняться в Potok."
+        )
+    elif status == "no_questions":
+        await callback.answer("Нет вопросов — сначала оцените кандидата", show_alert=True)
+    elif status == "no_telegram":
+        await callback.message.answer(f"❌ <b>{name}</b> — номер не найден в Telegram")
+    elif status == "send_failed":
+        await callback.message.answer(
+            f"❌ Не удалось отправить <b>{name}</b> — приватность закрыта"
         )
     else:
-        await callback.message.answer(
-            f"❌ Не удалось отправить <b>{html_mod.escape(applicant.display_name)}</b> "
-            f"— приватность закрыта"
-        )
+        await callback.message.answer(f"❌ <b>{name}</b> — {status}")
 
 
 @router.callback_query(F.data == "recruit:noop")
