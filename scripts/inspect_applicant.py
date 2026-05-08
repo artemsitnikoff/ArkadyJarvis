@@ -64,17 +64,57 @@ async def _search_job(potok: PotokClient, job: dict, needle: str) -> list[tuple]
             ])).lower()
             if needle in full:
                 matches.append((applicant_id, ad, obj, job))
+                _print_match(applicant_id, ad, obj, job)
         if not d.get("has_next_page"):
             break
         cursor = d.get("page_next_cursor")
     return matches
 
 
-async def main(name_fragment: str) -> None:
+def _print_match(applicant_id, ad, ajs_join_summary, job) -> None:
+    print(f"\n\n{'='*70}")
+    print(f"[ Job: {job.get('name')!r}  (id={job['id']}) ]")
+    print(f"applicant_id = {applicant_id}")
+    print(f"name         = {ad.get('name')}")
+    print(f"last_name    = {ad.get('last_name')}")
+    print(f"first_name   = {ad.get('first_name')}")
+    print(f"middle_name  = {ad.get('middle_name')}")
+    print(f"phones       = {ad.get('phones')}")
+    print(f"created_at   = {ad.get('created_at')}")
+    print(f"updated_at   = {ad.get('updated_at')}")
+    print(f"source_type  = {ad.get('source_type')}")
+    print(f"source_url   = {ad.get('source_url')}")
+
+    print("\najs_join (summary from /jobs/{job}/ajs_joins.json):")
+    print(f"  {json.dumps(ajs_join_summary, ensure_ascii=False, indent=2)[:600]}")
+
+    print("\najs_join on applicant detail (matching this job):")
+    for j in ad.get("ajs_joins") or []:
+        if (j.get("job") or {}).get("id") == job["id"]:
+            print(f"  {json.dumps(j, ensure_ascii=False, indent=2)[:1000]}")
+
+    extras = {
+        k: ad.get(k) for k in (
+            "archived", "deleted", "deleted_at", "merged", "merged_into_id",
+            "is_archived", "is_deleted", "state_id", "state",
+        )
+        if k in ad
+    }
+    if extras:
+        print(f"\nflag-like fields on applicant: {extras}")
+    print("=" * 70)
+
+
+async def main(name_fragment: str, only_job_id: int | None = None) -> None:
     potok = PotokClient()
     try:
-        jobs = await _list_all_jobs(potok)
-        print(f"Scanning {len(jobs)} jobs for name fragment {name_fragment!r}…\n")
+        if only_job_id:
+            r = await potok._client.get(f"/api/v3/jobs/{only_job_id}.json")
+            r.raise_for_status()
+            jobs = [r.json()]
+        else:
+            jobs = await _list_all_jobs(potok)
+        print(f"Scanning {len(jobs)} job(s) for name fragment {name_fragment!r}…\n")
 
         needle = name_fragment.strip().lower()
         all_matches: list[tuple] = []
@@ -88,43 +128,12 @@ async def main(name_fragment: str) -> None:
                 print()
 
         print(f"\n{'='*70}\nTotal matches: {len(all_matches)}\n{'='*70}")
-        for applicant_id, ad, ajs_join_summary, job in all_matches:
-            print(f"\n[ Job: {job.get('name')!r}  (id={job['id']}) ]")
-            print("\n" + "=" * 70)
-            print(f"applicant_id = {applicant_id}")
-            print(f"name         = {ad.get('name')}")
-            print(f"last_name    = {ad.get('last_name')}")
-            print(f"first_name   = {ad.get('first_name')}")
-            print(f"middle_name  = {ad.get('middle_name')}")
-            print(f"phones       = {ad.get('phones')}")
-            print(f"created_at   = {ad.get('created_at')}")
-            print(f"updated_at   = {ad.get('updated_at')}")
-            print(f"source_type  = {ad.get('source_type')}")
-            print(f"source_url   = {ad.get('source_url')}")
-
-            print("\najs_join (summary from /jobs/{job}/ajs_joins.json):")
-            print(f"  {json.dumps(ajs_join_summary, ensure_ascii=False, indent=2)[:600]}")
-
-            print("\najs_joins on applicant detail:")
-            for j in ad.get("ajs_joins") or []:
-                if (j.get("job") or {}).get("id") == JOB_ID:
-                    print(f"  {json.dumps(j, ensure_ascii=False, indent=2)[:600]}")
-
-            # Show top-level keys that might indicate archived/merged status
-            extras = {
-                k: ad.get(k) for k in (
-                    "archived", "deleted", "deleted_at", "merged", "merged_into_id",
-                    "is_archived", "is_deleted", "state_id", "state",
-                )
-                if k in ad
-            }
-            if extras:
-                print(f"\nflag-like fields: {extras}")
     finally:
         await potok.close()
 
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        sys.exit("Usage: python scripts/inspect_applicant.py <name_fragment>")
-    asyncio.run(main(sys.argv[1]))
+        sys.exit("Usage: python scripts/inspect_applicant.py <name_fragment> [job_id]")
+    job_id_arg = int(sys.argv[2]) if len(sys.argv) > 2 else None
+    asyncio.run(main(sys.argv[1], only_job_id=job_id_arg))
