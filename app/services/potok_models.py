@@ -37,6 +37,9 @@ class AjsJoin(BaseModel):
     id: int
     job: AjsJoinJob | None = None
     stage: Stage | None = None
+    state_id: int | None = None  # non-null = rejected / hired / archived
+
+    model_config = {"extra": "allow"}
 
 
 class Job(BaseModel):

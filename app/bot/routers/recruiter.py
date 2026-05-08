@@ -65,12 +65,19 @@ def _extract_meeting_link(description: str) -> str | None:
 
 
 def _filter_by_stage(applicants: list[Applicant], job_id: int, stage_name: str) -> list[Applicant]:
+    """Filter applicants currently in `stage_name` for this job.
+
+    Excludes those with state_id != None on the ajs_join — that flag covers
+    rejected / hired / archived candidates whose stage stays the same but
+    they shouldn't be contacted any more.
+    """
     result = []
     for a in applicants:
         for join in (a.ajs_joins or []):
             if (
                 join.job and join.job.id == job_id
                 and join.stage and join.stage.name.lower() == stage_name.lower()
+                and join.state_id is None  # skip rejected / hired / archived
             ):
                 result.append(a)
                 break

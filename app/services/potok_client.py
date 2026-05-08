@@ -291,14 +291,21 @@ class PotokClient:
                     result.applicant_id, result.score, e,
                 )
 
-        # Auto-promote high scorers to a configured stage
+        # Auto-promote high scorers to a configured stage — only from initial
+        # source stages (Добавлен/Откликнулся by default), never from later
+        # stages or from rejected candidates.
         if (
             settings.potok_high_score_stage
             and result.score > settings.potok_high_score_threshold
         ):
+            source_stages = {
+                s.strip() for s in settings.potok_high_score_source_stages.split(",")
+                if s.strip()
+            } or None
             try:
                 await self.move_applicant_to_stage(
                     result.applicant_id, job_id, settings.potok_high_score_stage,
+                    allowed_source_stages=source_stages,
                 )
             except Exception as e:
                 logger.warning(
@@ -347,6 +354,7 @@ class PotokClient:
         applicant_id: int,
         job_id: int,
         target_stage_name: str,
+        allowed_source_stages: set[str] | None = None,
     ) -> bool:
         """Move an applicant to a different stage (by NAME) within their job.
 
@@ -354,6 +362,10 @@ class PotokClient:
             PATCH /api/v3/ajs_joins/{ajs_join_id}.json
             body: {"stage_id": X}     <- flat, NO 'ajs_join' wrapper!
         With the wrapper Potok returns 200 OK but silently ignores the change.
+
+        Skips the move if:
+        - the applicant has state_id != null on the ajs_join (rejected/hired)
+        - allowed_source_stages is set and current stage is not in it
         """
         # 1. Find the applicant's ajs_join for this specific job
         try:
@@ -377,6 +389,26 @@ class PotokClient:
             return False
         ajs_join_id = target_join.get("id")
         current_stage_id = (target_join.get("stage") or {}).get("id")
+        current_stage_name = (target_join.get("stage") or {}).get("name") or ""
+        current_state_id = target_join.get("state_id")
+
+        # Skip rejected/hired candidates (state_id != null = some terminal state)
+        if current_state_id is not None:
+            logger.info(
+                "Potok: skip move applicant %s — has state_id=%s (rejected/hired/closed)",
+                applicant_id, current_state_id,
+            )
+            return False
+
+        # Skip if current stage isn't in the allowed source set
+        if allowed_source_stages is not None:
+            normalized_allowed = {s.strip().lower() for s in allowed_source_stages}
+            if current_stage_name.strip().lower() not in normalized_allowed:
+                logger.info(
+                    "Potok: skip move applicant %s — current stage %r not in allowed %s",
+                    applicant_id, current_stage_name, allowed_source_stages,
+                )
+                return False
 
         # 2. Fetch job stages, find target stage_id by name
         try:

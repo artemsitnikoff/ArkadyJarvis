@@ -39,9 +39,12 @@ class Settings(BaseSettings):
     potok_base_url: str = "https://app.potok.io"
     # Potok stage name has a typo «Скриннинг» (double Н) — keep matching their casing
     potok_after_contact_stage: str = "Скриннинг резюме"
-    # Auto-promote: score > threshold → move to this stage right after scoring
+    # Auto-promote: score > threshold → move to this stage right after scoring.
+    # Only triggers when the candidate is currently in one of the source stages
+    # (otherwise we'd promote already-rejected or already-progressed candidates).
     potok_high_score_threshold: int = 80
-    potok_high_score_stage: str = "Добавлен"
+    potok_high_score_stage: str = "Контакт с рекрутером"
+    potok_high_score_source_stages: str = "Добавлен,Откликнулся"  # comma-separated
 
     # Claude CLI
     claude_cli_path: str = "claude"
