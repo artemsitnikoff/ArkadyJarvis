@@ -60,15 +60,16 @@ async def lifespan(app: FastAPI):
             await userbot.start()
 
             async def _on_candidate_reply(sender_id: int, text: str) -> None:
-                from app.services.potok_client import detect_rejection
+                import html as html_mod
+                from app.services.rejection_classifier import classify_rejection_intent
 
                 contact = await get_recruiter_contact(sender_id)
                 if not contact:
                     return
 
                 logger.info(
-                    "Userbot: reply from applicant %s (tg_id=%s)",
-                    contact["applicant_name"], sender_id,
+                    "Userbot: reply from applicant %s (tg_id=%s): %r",
+                    contact["applicant_name"], sender_id, text[:200],
                 )
                 await potok.post_candidate_reply(
                     contact["applicant_id"],
@@ -77,15 +78,34 @@ async def lifespan(app: FastAPI):
                     text,
                 )
 
-                # Auto-reject if reply expresses rejection intent
-                if detect_rejection(text):
-                    logger.info(
-                        "Userbot: reply from %s detected as rejection — marking inactive",
-                        contact["applicant_name"],
-                    )
+                # LLM-based rejection classification — log every result, act on score > threshold
+                cls = await classify_rejection_intent(text, ai_client)
+                score = cls["score"]
+                reasoning = cls["reasoning"]
+                threshold = settings.rejection_classifier_threshold
+                logger.info(
+                    "Rejection classifier %s: score=%d/%d — %s",
+                    contact["applicant_name"], score, threshold, reasoning,
+                )
+
+                if score > threshold:
                     try:
                         await potok.set_applicant_active(
                             contact["applicant_id"], contact["job_id"], active=False,
+                        )
+                        # Audit trail in Potok timeline
+                        await potok.post_comment(
+                            contact["applicant_id"],
+                            contact["job_id"],
+                            (
+                                f"<p><b>🤖 Авто-отказ</b> (порог {threshold}/100)</p>"
+                                f"<p>Балл отказа: <b>{score}/100</b></p>"
+                                f"<p>Причина: {html_mod.escape(reasoning)}</p>"
+                            ),
+                        )
+                        logger.info(
+                            "Auto-rejected %s (score=%d): %s",
+                            contact["applicant_name"], score, reasoning,
                         )
                     except Exception as e:
                         logger.error(

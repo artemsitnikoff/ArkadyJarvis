@@ -46,6 +46,10 @@ class Settings(BaseSettings):
     potok_high_score_stage: str = "Контакт с рекрутером"
     potok_high_score_source_stages: str = "Добавлен,Откликнулся"  # comma-separated
 
+    # Auto-reject: when candidate's reply scores > threshold (LLM classifier),
+    # PATCH ajs_join active=false and post an audit comment in Potok.
+    rejection_classifier_threshold: int = 70
+
     # Claude CLI
     claude_cli_path: str = "claude"
     claude_model: str = ""  # e.g. "claude-opus-4-6", empty = CLI default
