@@ -170,8 +170,14 @@ class PotokClient:
         return Job.model_validate(data)
 
     async def _get_job_applicant_ids(self, job_id: int) -> list[int]:
-        """Get ALL applicant IDs for a job via /jobs/{id}/ajs_joins.json (cursor pagination)."""
+        """Get applicant IDs for a job via /jobs/{id}/ajs_joins.json (cursor pagination).
+
+        Skips ajs_joins with `active: False` — Potok marks rejected/hired/archived
+        candidates this way. The flag exists ONLY on this summary response, not on
+        the applicant-detail's `ajs_joins[]`, so this is the right place to filter.
+        """
         ids: list[int] = []
+        skipped_inactive = 0
         cursor = None
         while True:
             params: dict = {"per_page": 100}
@@ -183,11 +189,17 @@ class PotokClient:
             resp.raise_for_status()
             data = resp.json()
             for obj in data.get("objects", []):
+                if obj.get("active") is False:
+                    skipped_inactive += 1
+                    continue
                 ids.append(obj["applicant_id"])
             if not data.get("has_next_page"):
                 break
             cursor = data.get("page_next_cursor")
-        logger.info("Potok: job %s has %d applicant IDs via ajs_joins", job_id, len(ids))
+        logger.info(
+            "Potok: job %s has %d active applicant IDs (skipped %d inactive)",
+            job_id, len(ids), skipped_inactive,
+        )
         return ids
 
     async def _fetch_applicant(self, applicant_id: int, retries: int = 3) -> dict:
