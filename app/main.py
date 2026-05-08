@@ -60,18 +60,38 @@ async def lifespan(app: FastAPI):
             await userbot.start()
 
             async def _on_candidate_reply(sender_id: int, text: str) -> None:
+                from app.services.potok_client import detect_rejection
+
                 contact = await get_recruiter_contact(sender_id)
-                if contact:
+                if not contact:
+                    return
+
+                logger.info(
+                    "Userbot: reply from applicant %s (tg_id=%s)",
+                    contact["applicant_name"], sender_id,
+                )
+                await potok.post_candidate_reply(
+                    contact["applicant_id"],
+                    contact["job_id"],
+                    contact["applicant_name"],
+                    text,
+                )
+
+                # Auto-reject if reply expresses rejection intent
+                if detect_rejection(text):
                     logger.info(
-                        "Userbot: reply from applicant %s (tg_id=%s)",
-                        contact["applicant_name"], sender_id,
-                    )
-                    await potok.post_candidate_reply(
-                        contact["applicant_id"],
-                        contact["job_id"],
+                        "Userbot: reply from %s detected as rejection — marking inactive",
                         contact["applicant_name"],
-                        text,
                     )
+                    try:
+                        await potok.set_applicant_active(
+                            contact["applicant_id"], contact["job_id"], active=False,
+                        )
+                    except Exception as e:
+                        logger.error(
+                            "Auto-reject failed for applicant %s: %s",
+                            contact["applicant_id"], e,
+                        )
 
             userbot.set_reply_handler(_on_candidate_reply)
         except Exception as e:

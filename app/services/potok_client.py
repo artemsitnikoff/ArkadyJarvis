@@ -12,6 +12,32 @@ from app.services.potok_models import Applicant, Job, ScoringResult
 logger = logging.getLogger("arkadyjarvis")
 
 
+REJECTION_PATTERNS = [
+    re.compile(p, re.IGNORECASE) for p in [
+        r"\bне\s+актуал",                # не актуально / неактуально
+        r"\bне\s+интересн",              # не интересно
+        r"\bне\s+рассматрива",           # не рассматриваю
+        r"\bне\s+ищ[уе]\b",              # не ищу / не ищем
+        r"\bне\s+нужн",                  # не нужно
+        r"\bне\s+подход",                # не подходит
+        r"\bнашл?\w*\s+работ",           # нашёл/нашла работу
+        r"\bуже\s+работа",               # уже работаю
+        r"\bуже\s+трудоустро",           # уже трудоустроен
+        r"\bпринял\w*\s+предложен",      # принял предложение
+        r"\bотказыва",                   # отказываюсь
+        r"\bоффер\b",                    # уже есть оффер
+    ]
+]
+
+
+def detect_rejection(text: str) -> bool:
+    """Pattern-match candidate reply for rejection intent. Conservative —
+    we'd rather miss a few than false-positive on neutral replies."""
+    if not text:
+        return False
+    return any(p.search(text) for p in REJECTION_PATTERNS)
+
+
 def score_label(score: int) -> str:
     if score >= 81:
         return "Отлично"
@@ -360,6 +386,56 @@ class PotokClient:
         resp = await self._client.post("/api/v3/events.json", json={"event": event})
         resp.raise_for_status()
         logger.info("Potok: saved reply from applicant %s", applicant_id)
+
+    async def set_applicant_active(
+        self, applicant_id: int, job_id: int, active: bool,
+    ) -> bool:
+        """Set the `active` flag on the applicant's ajs_join.
+
+        active=False marks the candidate as rejected/withdrawn — same flag
+        we observed on Падалка В.В. (see inspect_applicant.py output).
+        """
+        try:
+            resp = await self._client.get(f"/api/v3/applicants/{applicant_id}.json")
+            resp.raise_for_status()
+            data = resp.json()
+        except Exception as e:
+            logger.warning("Potok set_active: fetch applicant %s failed: %s", applicant_id, e)
+            return False
+
+        target_join = next(
+            (j for j in (data.get("ajs_joins") or [])
+             if (j.get("job") or {}).get("id") == job_id),
+            None,
+        )
+        if not target_join:
+            logger.warning(
+                "Potok set_active: applicant %s has no ajs_join for job %s",
+                applicant_id, job_id,
+            )
+            return False
+
+        ajs_join_id = target_join.get("id")
+        try:
+            resp = await self._client.patch(
+                f"/api/v3/ajs_joins/{ajs_join_id}.json",
+                json={"active": active},
+            )
+            if resp.status_code >= 400:
+                logger.error(
+                    "Potok set_active PATCH -> %s: %s",
+                    resp.status_code, resp.text[:200],
+                )
+                return False
+        except Exception as e:
+            logger.error("Potok set_active PATCH failed: %s", e)
+            return False
+
+        logger.info(
+            "Potok: set ajs_join %s active=%s (applicant %s, job %s)",
+            ajs_join_id, active, applicant_id, job_id,
+        )
+        return True
 
     async def move_applicant_to_stage(
         self,
