@@ -17,13 +17,22 @@ import sys
 
 import httpx
 
-# ── Test payload — edit to match what DevTools shows ──
-TEST_PAYLOAD = {
-    "text": "Тест отправки через API — пожалуйста, проигнорируйте",
-}
+# Test payload — captured from DevTools 2026-05-12.
+# `channels` is the HH negotiation/dialog ID — varies per candidate.
+# Pass it as the 3rd CLI arg.
+def build_payload(channel_id: str, body: str) -> dict:
+    return {
+        "communication_envelopes": [
+            {
+                "provider": "headhunter",
+                "channels": [channel_id],
+                "message": {"body": body},
+            }
+        ]
+    }
 
 
-async def main(job_id: int, applicant_id: int) -> None:
+async def main(job_id: int, applicant_id: int, channel_id: str) -> None:
     access_token = os.environ.get("POTOK_FRONTEND_ACCESS_TOKEN", "").strip()
     client = os.environ.get("POTOK_FRONTEND_CLIENT", "").strip()
     uid = os.environ.get("POTOK_FRONTEND_UID", "").strip()
@@ -48,10 +57,12 @@ async def main(job_id: int, applicant_id: int) -> None:
 
     url = f"https://app.potok.io/client_api/jobs/{job_id}/{applicant_id}/communication/communicate.json"
 
+    payload = build_payload(channel_id, "Тест отправки через API — пожалуйста, проигнорируйте")
+
     async with httpx.AsyncClient(timeout=30) as http:
         print(f"\n→ POST {url}")
-        print(f"  payload: {json.dumps(TEST_PAYLOAD, ensure_ascii=False)}")
-        r = await http.post(url, headers=headers, json=TEST_PAYLOAD)
+        print(f"  payload: {json.dumps(payload, ensure_ascii=False)}")
+        r = await http.post(url, headers=headers, json=payload)
         print(f"\nstatus={r.status_code}  bytes={len(r.content)}")
         if r.status_code < 400:
             try:
@@ -70,6 +81,9 @@ async def main(job_id: int, applicant_id: int) -> None:
 
 
 if __name__ == "__main__":
-    if len(sys.argv) < 3:
-        sys.exit("Usage: python scripts/test_potok_communicate_frontend.py <job_id> <applicant_id>")
-    asyncio.run(main(int(sys.argv[1]), int(sys.argv[2])))
+    if len(sys.argv) < 4:
+        sys.exit(
+            "Usage: python scripts/test_potok_communicate_frontend.py "
+            "<job_id> <applicant_id> <channel_id>"
+        )
+    asyncio.run(main(int(sys.argv[1]), int(sys.argv[2]), sys.argv[3]))
