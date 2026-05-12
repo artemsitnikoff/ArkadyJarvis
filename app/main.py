@@ -23,6 +23,7 @@ from app.services.openclaw_client import OpenClawClient
 from app.services.openrouter_client import OpenRouterClient
 from app.services.claude_token import init_token_file
 from app.services.potok_client import PotokClient
+from app.services.potok_frontend import PotokFrontendClient
 from app.services.userbot import UserbotClient
 from app.version import __version__
 
@@ -52,6 +53,7 @@ async def lifespan(app: FastAPI):
     openrouter = OpenRouterClient()
     openclaw = OpenClawClient()
     potok = PotokClient()
+    potok_frontend = PotokFrontendClient()
 
     userbot: UserbotClient | None = None
     if settings.telethon_session:
@@ -125,6 +127,7 @@ async def lifespan(app: FastAPI):
     dp["openrouter"] = openrouter
     dp["openclaw"] = openclaw
     dp["potok"] = potok
+    dp["potok_frontend"] = potok_frontend
     dp["userbot"] = userbot
 
     # Register middlewares on the dispatcher (order: error wraps auth wraps handler)
@@ -220,6 +223,7 @@ async def lifespan(app: FastAPI):
     await openrouter.close()
     await openclaw.close()
     await potok.close()
+    await potok_frontend.close()
     if userbot:
         await userbot.stop()
     await close_db()

@@ -312,13 +312,22 @@ def _build_intro(job_name: str) -> str:
 
 
 async def _send_questions_flow(
-    applicant: Applicant, job, userbot, potok,
+    applicant: Applicant, job, userbot, potok, potok_frontend=None,
 ) -> tuple[str, int | None, int]:
     """Resolve phone, send intro + questions to one candidate.
 
     Returns (status, user_id_or_None, questions_count).
-    Statuses: no_phone | no_questions | no_telegram | send_failed | sent
+    Statuses:
+        sent          — Telegram delivered
+        sent_hh       — HH-fallback delivered (Telegram unavailable)
+        no_phone      — no phone in Potok
+        no_questions  — no questions found (candidate not scored)
+        no_channel    — no Telegram + no HH negotiation
+        send_failed   — Telegram privacy / blocked
+        hh_failed     — HH channel exists but send failed
     """
+    from app.services.potok_frontend import extract_hh_channels
+
     phones = applicant.phones or []
     if not phones:
         return "no_phone", None, 0
@@ -327,15 +336,29 @@ async def _send_questions_flow(
     if not questions:
         return "no_questions", None, 0
 
+    intro = _build_intro(job.name)
+    combined = "\n\n".join(f"{i}. {q}" for i, q in enumerate(questions, 1))
+
     phone = phones[0]
     user_id = await userbot.resolve_phone(phone)
+
     if not user_id:
-        return "no_telegram", None, len(questions)
+        # Telegram not found — try HH fallback if configured + candidate has channels
+        if potok_frontend and potok_frontend.is_configured:
+            channels = extract_hh_channels(applicant.accounts)
+            if channels:
+                ok_intro = await potok_frontend.send_hh_message(
+                    job.id, applicant.id, channels, intro,
+                )
+                ok_q = await potok_frontend.send_hh_message(
+                    job.id, applicant.id, channels, combined,
+                )
+                if ok_intro and ok_q:
+                    return "sent_hh", None, len(questions)
+                return "hh_failed", None, len(questions)
+        return "no_channel", None, len(questions)
 
-    intro = _build_intro(job.name)
     await userbot.send_to_user(user_id, intro)
-
-    combined = "\n\n".join(f"{i}. {q}" for i, q in enumerate(questions, 1))
     success = await userbot.send_to_user(user_id, combined)
     if not success:
         return "send_failed", user_id, len(questions)
@@ -420,7 +443,9 @@ async def handle_contact_candidates(callback: CallbackQuery, state: FSMContext, 
 
 
 @router.callback_query(F.data == "recruit:message_all", Recruiter.contacting)
-async def handle_send_to_all(callback: CallbackQuery, state: FSMContext, userbot, potok):
+async def handle_send_to_all(
+    callback: CallbackQuery, state: FSMContext, userbot, potok, potok_frontend=None,
+):
     """Bulk-send intro + questions to every candidate in the contact list."""
     await callback.answer("Запускаю рассылку…")
 
@@ -439,21 +464,26 @@ async def handle_send_to_all(callback: CallbackQuery, state: FSMContext, userbot
         f"📤 Рассылка по {len(contact_applicants)} кандидатам…"
     )
 
-    counters = {"sent": 0, "no_phone": 0, "no_questions": 0,
-                "no_telegram": 0, "send_failed": 0, "errors": 0}
+    counters = {
+        "sent": 0, "sent_hh": 0,
+        "no_phone": 0, "no_questions": 0,
+        "no_channel": 0, "send_failed": 0, "hh_failed": 0, "errors": 0,
+    }
     # Names of candidates per non-success status for the final summary
     names_by_status: dict[str, list[str]] = {
         "no_phone": [], "no_questions": [],
-        "no_telegram": [], "send_failed": [], "errors": [],
+        "no_channel": [], "send_failed": [], "hh_failed": [], "errors": [],
     }
 
     flood_stopped = False
 
     for i, applicant in enumerate(contact_applicants, 1):
         try:
-            status, _, _ = await _send_questions_flow(applicant, job, userbot, potok)
+            status, _, _ = await _send_questions_flow(
+                applicant, job, userbot, potok, potok_frontend=potok_frontend,
+            )
             counters[status] = counters.get(status, 0) + 1
-            if status != "sent":
+            if status not in ("sent", "sent_hh"):
                 names_by_status.setdefault(status, []).append(applicant.display_name)
             logger.info(
                 "Bulk send %d/%d: %s → %s",
@@ -487,8 +517,10 @@ async def handle_send_to_all(callback: CallbackQuery, state: FSMContext, userbot
         "✅ <b>Рассылка завершена</b>" if not flood_stopped else "⚠️ <b>Рассылка остановлена (FloodWait)</b>",
         "",
         f"Всего кандидатов: {len(contact_applicants)}",
-        f"📤 Отправлено: <b>{counters['sent']}</b>",
+        f"📤 Telegram: <b>{counters['sent']}</b>",
     ]
+    if counters["sent_hh"]:
+        summary_lines.append(f"📧 HH (Potok): <b>{counters['sent_hh']}</b>")
 
     def _block(emoji: str, label: str, key: str) -> None:
         if counters[key]:
@@ -499,8 +531,9 @@ async def handle_send_to_all(callback: CallbackQuery, state: FSMContext, userbot
 
     _block("📵", "Без телефона", "no_phone")
     _block("❓", "Без вопросов (нужен скоринг)", "no_questions")
-    _block("🚫", "Не найдены в Telegram", "no_telegram")
-    _block("🔒", "Приватность закрыта", "send_failed")
+    _block("🚫", "Нет ни Telegram, ни HH-чата", "no_channel")
+    _block("🔒", "Telegram: приватность закрыта", "send_failed")
+    _block("📵", "HH: отправка не прошла", "hh_failed")
     _block("⚠️", "Ошибки", "errors")
 
     try:
@@ -511,7 +544,9 @@ async def handle_send_to_all(callback: CallbackQuery, state: FSMContext, userbot
 
 
 @router.callback_query(F.data.startswith("recruit:message:"), Recruiter.contacting)
-async def handle_send_message(callback: CallbackQuery, state: FSMContext, userbot, potok):
+async def handle_send_message(
+    callback: CallbackQuery, state: FSMContext, userbot, potok, potok_frontend=None,
+):
     applicant_id = int(callback.data.split(":")[-1])
     data = await state.get_data()
     contact_applicants = data.get("contact_applicants", [])
@@ -530,30 +565,34 @@ async def handle_send_message(callback: CallbackQuery, state: FSMContext, userbo
 
     await callback.answer("Отправляю...")
 
-    status, _, q_count = await _send_questions_flow(applicant, job, userbot, potok)
+    status, _, q_count = await _send_questions_flow(
+        applicant, job, userbot, potok, potok_frontend=potok_frontend,
+    )
     name = html_mod.escape(applicant.display_name)
 
-    if status == "sent":
+    if status in ("sent", "sent_hh"):
+        channel = "Telegram" if status == "sent" else "HH (Potok)"
         try:
             await callback.message.edit_reply_markup(
                 reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-                    InlineKeyboardButton(text="✅ Отправлено", callback_data="recruit:noop")
+                    InlineKeyboardButton(text=f"✅ Отправлено ({channel})", callback_data="recruit:noop")
                 ]])
             )
         except Exception:
             pass
         await callback.message.answer(
-            f"✅ Отправлено <b>{name}</b>: вводное + {q_count} вопросов. "
-            f"Ответы будут сохраняться в Potok."
+            f"✅ <b>{name}</b> ({channel}): вводное + {q_count} вопросов."
         )
     elif status == "no_questions":
         await callback.answer("Нет вопросов — сначала оцените кандидата", show_alert=True)
-    elif status == "no_telegram":
-        await callback.message.answer(f"❌ <b>{name}</b> — номер не найден в Telegram")
+    elif status == "no_channel":
+        await callback.message.answer(f"❌ <b>{name}</b> — нет ни Telegram, ни HH-чата")
     elif status == "send_failed":
         await callback.message.answer(
-            f"❌ Не удалось отправить <b>{name}</b> — приватность закрыта"
+            f"❌ Telegram <b>{name}</b> — приватность закрыта"
         )
+    elif status == "hh_failed":
+        await callback.message.answer(f"❌ HH <b>{name}</b> — не удалось отправить")
     else:
         await callback.message.answer(f"❌ <b>{name}</b> — {status}")
 

@@ -50,6 +50,14 @@ class Settings(BaseSettings):
     # PATCH ajs_join active=false and post an audit comment in Potok.
     rejection_classifier_threshold: int = 70
 
+    # Potok frontend session (for /client_api/* endpoints — HH messaging).
+    # Extract from browser DevTools (Network → request headers).
+    # Tokens are stable (no rotation observed), but a cookie tied to
+    # the access-token does expire — re-extract on 401s.
+    potok_frontend_access_token: SecretStr = SecretStr("")
+    potok_frontend_client: str = ""
+    potok_frontend_uid: str = ""
+
     # Claude CLI
     claude_cli_path: str = "claude"
     claude_model: str = ""  # e.g. "claude-opus-4-6", empty = CLI default

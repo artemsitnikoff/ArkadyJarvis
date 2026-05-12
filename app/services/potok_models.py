@@ -150,6 +150,7 @@ class Applicant(BaseModel):
     ajs_joins: list[AjsJoin] | None = None
     source_type: str | None = None
     created_at: str | None = None
+    accounts: list[dict] | None = None  # external account refs (HH urls with ?t=channel_id, etc.)
 
     model_config = {"extra": "allow"}
 
