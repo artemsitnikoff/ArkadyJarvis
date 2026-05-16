@@ -1,6 +1,7 @@
-"""Штирлиц — оркестратор разведки по контрагенту.
+"""Штирлиц — оркестратор разведки по контрагенту или человеку.
 
-Принимает ИНН или название → DaData + ГИР БО → JSON → Claude → карточка.
+- Компания (ИНН/название) → DaData + ГИР БО + WebSearch (новости/тендеры)
+- Человек (ФИО + контекст)  → WebSearch (LinkedIn, Habr, VK, новости)
 """
 import json
 import logging
@@ -13,14 +14,55 @@ from app.services.prompts import load_prompt
 
 logger = logging.getLogger("arkadyjarvis")
 
-PROMPT_TEMPLATE = load_prompt("stirlitz")
-INN_PATTERN = re.compile(r"^\d{10}(\d{2})?$")  # ЮЛ=10, ИП=12
+COMPANY_PROMPT = load_prompt("stirlitz")
+PERSON_PROMPT = load_prompt("stirlitz_person")
+
+INN_PATTERN = re.compile(r"^\d{10}(\d{2})?$")
+ORG_FORM_PATTERN = re.compile(
+    r"\b(ООО|ПАО|АО|ОАО|ЗАО|ИП|НКО|АНО|ФОНД|МУП|ГУП|БАНК|ФГУП|ФГУ|УЧРЕЖДЕНИЕ)\b",
+    re.IGNORECASE,
+)
+
+
+def _classify(query: str) -> str:
+    """Returns 'company' | 'person' | 'unknown' via simple heuristics."""
+    q = query.strip()
+    if INN_PATTERN.match(q):
+        return "company"
+    if ORG_FORM_PATTERN.search(q):
+        return "company"
+    # Множественное упоминание заглавных слов — человек или компания. Если 2-4 слова,
+    # все начинаются с большой и заканчиваются строчными → ФИО.
+    parts = [p for p in q.split() if p]
+    if 2 <= len(parts) <= 4 and all(
+        p[0].isupper() and (len(p) == 1 or p[1:].islower()) for p in parts if p[0].isalpha()
+    ):
+        return "person"
+    return "unknown"
+
+
+async def _classify_with_ai(query: str, ai_client: AIClient) -> str:
+    """Fallback classifier — small Claude call."""
+    prompt = (
+        f"Запрос: «{query}»\n\n"
+        "Что это: организация (юр.лицо, ИП, бренд) или физическое лицо (человек)?\n"
+        "Ответь ОДНИМ словом без пояснений: «company» или «person» или «unknown»."
+    )
+    try:
+        answer = await ai_client.complete(prompt, timeout=30)
+        word = answer.strip().lower().split()[0] if answer.strip() else "unknown"
+        word = word.strip(".,!?\"'«»()[]")
+        if "company" in word or "org" in word or "юр" in word:
+            return "company"
+        if "person" in word or "human" in word or "челов" in word:
+            return "person"
+        return "unknown"
+    except Exception as e:
+        logger.warning("Stirlitz classify AI fallback failed: %s", e)
+        return "unknown"
 
 
 async def resolve_inn(query: str, dadata: DaDataClient) -> tuple[str | None, list[dict]]:
-    """Возвращает (inn, suggestions).
-    Если query — ИНН, suggestions содержит 1 элемент.
-    Если query — название, suggestions — список вариантов."""
     q = query.strip()
     if INN_PATTERN.match(q):
         item = await dadata.find_by_id(q)
@@ -32,13 +74,11 @@ async def resolve_inn(query: str, dadata: DaDataClient) -> tuple[str | None, lis
     return first_inn, sug
 
 
-async def gather_intelligence(
+async def gather_company_intel(
     inn: str, dadata: DaDataClient, giro: GiroClient,
 ) -> dict:
-    """Собирает сырые данные обо всех источниках."""
     dadata_item = await dadata.find_by_id(inn)
     giro_summary = await giro.get_summary(inn)
-
     dd = (dadata_item or {}).get("data") or {}
     return {
         "name": (dadata_item or {}).get("value"),
@@ -59,9 +99,49 @@ async def gather_intelligence(
         "branch_type": dd.get("branch_type"),
         "branch_count": dd.get("branch_count"),
         "type": dd.get("type"),
-        # ГИР БО — финансы по годам
         "giro": giro_summary,
     }
+
+
+async def _build_company_card(
+    query: str,
+    ai_client: AIClient,
+    dadata: DaDataClient,
+    giro: GiroClient,
+) -> tuple[str | None, list[dict], str | None]:
+    if not dadata.is_configured:
+        return None, [], "DaData не настроена в конфиге"
+    inn, suggestions = await resolve_inn(query, dadata)
+    if not inn:
+        return None, [], f"Не нашёл компанию по запросу «{query}»"
+    if not suggestions:
+        return None, [], f"Не нашёл компанию по ИНН {inn}"
+
+    data = await gather_company_intel(inn, dadata, giro)
+    data_json = json.dumps(data, ensure_ascii=False, indent=2, default=str)
+    prompt = COMPANY_PROMPT.replace("{data_json}", data_json)
+    try:
+        card = await ai_client.complete(
+            prompt, timeout=180, allowed_tools="WebSearch,WebFetch",
+        )
+    except Exception as e:
+        logger.error("Stirlitz company card failed: %s", e, exc_info=True)
+        return None, suggestions, f"AI-анализ упал: {e}"
+    return card, suggestions, None
+
+
+async def _build_person_card(
+    query: str, ai_client: AIClient,
+) -> tuple[str | None, list[dict], str | None]:
+    prompt = PERSON_PROMPT.replace("{query}", query)
+    try:
+        card = await ai_client.complete(
+            prompt, timeout=180, allowed_tools="WebSearch,WebFetch",
+        )
+    except Exception as e:
+        logger.error("Stirlitz person card failed: %s", e, exc_info=True)
+        return None, [], f"AI-анализ упал: {e}"
+    return card, [], None
 
 
 async def build_intel_card(
@@ -69,23 +149,18 @@ async def build_intel_card(
     ai_client: AIClient,
     dadata: DaDataClient,
     giro: GiroClient,
-) -> tuple[str | None, list[dict], str | None]:
-    """Главная точка входа. Возвращает (card_html, suggestions, error_text)."""
-    if not dadata.is_configured:
-        return None, [], "DaData не настроена в конфиге"
+) -> tuple[str | None, list[dict], str | None, str]:
+    """Главная точка входа. Возвращает (card_html, suggestions, error_text, kind).
+    kind ∈ {'company', 'person'} — что в итоге решили обследовать."""
+    kind = _classify(query)
+    if kind == "unknown":
+        kind = await _classify_with_ai(query, ai_client)
+    if kind == "unknown":
+        # По-умолчанию пробуем компанию (DaData умеет искать по любой строке)
+        kind = "company"
 
-    inn, suggestions = await resolve_inn(query, dadata)
-    if not inn:
-        return None, [], f"Не нашёл компанию по запросу {query!r}"
-    if not suggestions:
-        return None, [], f"Не нашёл компанию по ИНН {inn}"
-
-    data = await gather_intelligence(inn, dadata, giro)
-    data_json = json.dumps(data, ensure_ascii=False, indent=2, default=str)
-    prompt = PROMPT_TEMPLATE.replace("{data_json}", data_json)
-    try:
-        card = await ai_client.complete(prompt, timeout=120)
-    except Exception as e:
-        logger.error("Stirlitz Claude call failed: %s", e, exc_info=True)
-        return None, suggestions, f"AI-анализ упал: {e}"
-    return card, suggestions, None
+    if kind == "person":
+        card, sug, err = await _build_person_card(query, ai_client)
+    else:
+        card, sug, err = await _build_company_card(query, ai_client, dadata, giro)
+    return card, sug, err, kind

@@ -28,10 +28,14 @@ class Stirlitz(StatesGroup):
 async def handle_open(callback: CallbackQuery, state: FSMContext):
     await state.set_state(Stirlitz.waiting_for_query)
     await callback.message.answer(
-        "🕵️ <b>Штирлиц</b> — разведка по контрагенту\n\n"
-        "Введи <b>ИНН</b> (10 или 12 цифр) или <b>название компании</b>. "
-        "Соберу профиль из открытых источников (ЕГРЮЛ + бухотчётность ФНС) "
-        "и подготовлю карточку для продажника.",
+        "🕵️ <b>Штирлиц</b> — разведка из открытых источников\n\n"
+        "Введи один из вариантов:\n"
+        "• <b>ИНН</b> (10 или 12 цифр) — точная карточка компании\n"
+        "• <b>Название компании</b> — найду по ЕГРЮЛ\n"
+        "• <b>ФИО человека</b> (можно с компанией/городом для точности) — '\n"
+        "соберу публичный портрет\n\n"
+        "Источники: DaData (ЕГРЮЛ), ГИР БО ФНС (отчётность), WebSearch "
+        "(новости, LinkedIn, Habr, ВК, конференции).",
         reply_markup=BACK_MENU_KB,
     )
     await callback.answer()
@@ -54,7 +58,7 @@ async def handle_query(
     wait = await message.reply(f"🕵️ Веду разведку: <b>{html_mod.escape(query)}</b>…")
 
     try:
-        card, suggestions, err = await build_intel_card(query, ai_client, dadata, giro)
+        card, suggestions, err, kind = await build_intel_card(query, ai_client, dadata, giro)
     except Exception as e:
         logger.error("Stirlitz error: %s", e, exc_info=True)
         await wait.edit_text(
@@ -62,6 +66,8 @@ async def handle_query(
             reply_markup=MENU_KB,
         )
         return
+
+    logger.info("Stirlitz: query=%r kind=%s err=%s", query, kind, err)
 
     if err and not card:
         await wait.edit_text(f"❌ {html_mod.escape(err)}", reply_markup=MENU_KB)

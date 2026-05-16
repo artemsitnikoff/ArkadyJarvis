@@ -13,9 +13,24 @@ class AIClient:
     """Claude CLI wrapper. Uses subscription via CLAUDE_CODE_OAUTH_TOKEN."""
 
     async def complete(
-        self, prompt: str, timeout: int = 120, system_prompt: str | None = None,
+        self,
+        prompt: str,
+        timeout: int = 120,
+        system_prompt: str | None = None,
+        allowed_tools: str | None = None,
     ) -> str:
-        return await self._call_cli(prompt, timeout=timeout, system_prompt=system_prompt)
+        """Run Claude CLI with prompt.
+
+        `allowed_tools`: comma-separated whitelist (e.g. "WebSearch,WebFetch").
+        When provided, those tools are added back on top of the disabled set.
+        Use ONLY for read-only tools — never for Bash/Write/Edit.
+        """
+        return await self._call_cli(
+            prompt,
+            timeout=timeout,
+            system_prompt=system_prompt,
+            allowed_tools=allowed_tools,
+        )
 
     # CRITICAL: disable all tools. Otherwise the CLI executes shell commands,
     # reads/writes files, fetches URLs etc. when the user prompt looks like
@@ -30,7 +45,11 @@ class AIClient:
     )
 
     async def _call_cli(
-        self, prompt: str, timeout: int = 120, system_prompt: str | None = None,
+        self,
+        prompt: str,
+        timeout: int = 120,
+        system_prompt: str | None = None,
+        allowed_tools: str | None = None,
     ) -> str:
         from app.services.claude_token import ensure_fresh_token
         await ensure_fresh_token()
@@ -38,12 +57,22 @@ class AIClient:
         env = os.environ.copy()
         env.pop("CLAUDECODE", None)
 
+        # If allowed_tools given — remove them from the DISALLOWED list, keep rest banned
+        disallowed = self.DISALLOWED_TOOLS
+        if allowed_tools:
+            allowed_set = {t.strip() for t in allowed_tools.split(",") if t.strip()}
+            disallowed = ",".join(
+                t for t in self.DISALLOWED_TOOLS.split(",") if t not in allowed_set
+            )
+
         args = [
             settings.claude_cli_path,
             "--print",
             "--output-format", "text",
-            "--disallowed-tools", self.DISALLOWED_TOOLS,
+            "--disallowed-tools", disallowed,
         ]
+        if allowed_tools:
+            args.extend(["--allowed-tools", allowed_tools])
         if settings.claude_model:
             args.extend(["--model", settings.claude_model])
         if system_prompt:
