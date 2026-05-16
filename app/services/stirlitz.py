@@ -18,8 +18,9 @@ COMPANY_PROMPT = load_prompt("stirlitz")
 PERSON_PROMPT = load_prompt("stirlitz_person")
 INTENT_PROMPT = load_prompt("stirlitz_intent")
 
-# Дешёвая быстрая модель для классификации намерения
-CLASSIFIER_MODEL = "haiku"
+# Дешёвая быстрая модель для классификации. Полный ID — на случай если
+# alias "haiku" не разрешается в текущей версии CLI.
+CLASSIFIER_MODEL = "claude-haiku-4-5-20251001"
 
 
 async def classify_intent(history: list[str], ai_client: AIClient) -> dict:
@@ -27,16 +28,31 @@ async def classify_intent(history: list[str], ai_client: AIClient) -> dict:
     company_inn / company_name / person / clarify (+ конкретные поля)."""
     history_text = "\n".join(f"- {h}" for h in history if h.strip())
     prompt = INTENT_PROMPT.replace("{history}", history_text or "(пусто)")
-    try:
-        raw = await ai_client.complete(prompt, timeout=30, model=CLASSIFIER_MODEL)
-    except Exception as e:
-        logger.warning("Stirlitz classifier failed: %s", e)
-        return {"kind": "clarify", "question": "Не удалось понять запрос — повтори формулировку."}
-    try:
-        return parse_json_response(raw)
-    except Exception as e:
-        logger.warning("Stirlitz classifier JSON parse failed: %s | raw=%r", e, raw[:200])
-        return {"kind": "clarify", "question": "Не понял запрос — введи ИНН компании или ФИО человека."}
+
+    raw = ""
+    # Сначала Haiku, на сбое — дефолтная модель (Sonnet)
+    for model_attempt in (CLASSIFIER_MODEL, None):
+        try:
+            raw = await ai_client.complete(prompt, timeout=30, model=model_attempt)
+            logger.info(
+                "Stirlitz classifier raw response (model=%s, len=%d): %r",
+                model_attempt or "default", len(raw), raw[:400],
+            )
+        except Exception as e:
+            logger.warning("Stirlitz classifier (model=%s) call failed: %s", model_attempt, e)
+            continue
+        try:
+            result = parse_json_response(raw)
+            if isinstance(result, dict) and result.get("kind"):
+                return result
+            logger.warning("Stirlitz classifier: parsed but no 'kind' field: %r", result)
+        except Exception as e:
+            logger.warning("Stirlitz classifier JSON parse failed (model=%s): %s", model_attempt, e)
+    # Все попытки провалились
+    return {
+        "kind": "clarify",
+        "question": "Не разобрал запрос. Введи ИНН компании (10 или 12 цифр), название компании или ФИО человека.",
+    }
 
 
 # ── COMPANY FLOW ──────────────────────────────────────────────────────
