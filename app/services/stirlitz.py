@@ -18,16 +18,25 @@ COMPANY_PROMPT = load_prompt("stirlitz")
 PERSON_PROMPT = load_prompt("stirlitz_person")
 
 INN_PATTERN = re.compile(r"^\d{10}(\d{2})?$")
+INN_INSIDE_PATTERN = re.compile(r"(?<!\d)(\d{12}|\d{10})(?!\d)")
 ORG_FORM_PATTERN = re.compile(
     r"\b(ООО|ПАО|АО|ОАО|ЗАО|ИП|НКО|АНО|ФОНД|МУП|ГУП|БАНК|ФГУП|ФГУ|УЧРЕЖДЕНИЕ)\b",
     re.IGNORECASE,
 )
 
 
+def _extract_inn(query: str) -> str | None:
+    """Find an isolated 10 or 12 digit sequence anywhere in the query."""
+    m = INN_INSIDE_PATTERN.search(query)
+    return m.group(1) if m else None
+
+
 def _classify(query: str) -> str:
     """Returns 'company' | 'person' | 'unknown' via simple heuristics."""
     q = query.strip()
     if INN_PATTERN.match(q):
+        return "company"
+    if _extract_inn(q):
         return "company"
     if ORG_FORM_PATTERN.search(q):
         return "company"
@@ -64,13 +73,18 @@ async def _classify_with_ai(query: str, ai_client: AIClient) -> str:
 
 async def resolve_inn(query: str, dadata: DaDataClient) -> tuple[str | None, list[dict]]:
     q = query.strip()
-    if INN_PATTERN.match(q):
-        item = await dadata.find_by_id(q)
-        return q, ([item] if item else [])
+    # 1. ИНН в любом месте строки → точный поиск
+    embedded_inn = _extract_inn(q)
+    if embedded_inn:
+        item = await dadata.find_by_id(embedded_inn)
+        if item:
+            return embedded_inn, [item]
+        # ИНН вытащили, но DaData не нашла → возможно битый ИНН, попробуем suggest
+    # 2. Свободный поиск по строке (имя/название)
     sug = await dadata.suggest(q, count=5)
     if not sug:
-        return None, []
-    first_inn = (sug[0].get("data") or {}).get("inn")
+        return embedded_inn, []  # пусть и без подсказок отдадим извлечённый ИНН
+    first_inn = (sug[0].get("data") or {}).get("inn") or embedded_inn
     return first_inn, sug
 
 
