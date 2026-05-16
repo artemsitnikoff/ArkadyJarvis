@@ -1,96 +1,64 @@
-"""Штирлиц — оркестратор разведки по контрагенту или человеку.
+"""Штирлиц — оркестратор разведки.
 
-- Компания (ИНН/название) → DaData + ГИР БО + WebSearch (новости/тендеры)
-- Человек (ФИО + контекст)  → WebSearch (LinkedIn, Habr, VK, новости)
+Не использует регулярки для классификации — Claude (Haiku) сам понимает
+из истории сообщений что искать (ИНН / название / ФИО) и при недостатке
+данных задаёт уточняющий вопрос.
 """
-import json
 import logging
-import re
 
 from app.services.ai_client import AIClient
 from app.services.dadata_client import DaDataClient
 from app.services.giro_client import GiroClient
 from app.services.prompts import load_prompt
+from app.utils import parse_json_response
 
 logger = logging.getLogger("arkadyjarvis")
 
 COMPANY_PROMPT = load_prompt("stirlitz")
 PERSON_PROMPT = load_prompt("stirlitz_person")
+INTENT_PROMPT = load_prompt("stirlitz_intent")
 
-INN_PATTERN = re.compile(r"^\d{10}(\d{2})?$")
-INN_INSIDE_PATTERN = re.compile(r"(?<!\d)(\d{12}|\d{10})(?!\d)")
-ORG_FORM_PATTERN = re.compile(
-    r"\b(ООО|ПАО|АО|ОАО|ЗАО|ИП|НКО|АНО|ФОНД|МУП|ГУП|БАНК|ФГУП|ФГУ|УЧРЕЖДЕНИЕ)\b",
-    re.IGNORECASE,
-)
+# Дешёвая быстрая модель для классификации намерения
+CLASSIFIER_MODEL = "haiku"
 
 
-def _extract_inn(query: str) -> str | None:
-    """Find an isolated 10 or 12 digit sequence anywhere in the query."""
-    m = INN_INSIDE_PATTERN.search(query)
-    return m.group(1) if m else None
-
-
-def _classify(query: str) -> str:
-    """Returns 'company' | 'person' | 'unknown' via simple heuristics."""
-    q = query.strip()
-    if INN_PATTERN.match(q):
-        return "company"
-    if _extract_inn(q):
-        return "company"
-    if ORG_FORM_PATTERN.search(q):
-        return "company"
-    # Множественное упоминание заглавных слов — человек или компания. Если 2-4 слова,
-    # все начинаются с большой и заканчиваются строчными → ФИО.
-    parts = [p for p in q.split() if p]
-    if 2 <= len(parts) <= 4 and all(
-        p[0].isupper() and (len(p) == 1 or p[1:].islower()) for p in parts if p[0].isalpha()
-    ):
-        return "person"
-    return "unknown"
-
-
-async def _classify_with_ai(query: str, ai_client: AIClient) -> str:
-    """Fallback classifier — small Claude call."""
-    prompt = (
-        f"Запрос: «{query}»\n\n"
-        "Что это: организация (юр.лицо, ИП, бренд) или физическое лицо (человек)?\n"
-        "Ответь ОДНИМ словом без пояснений: «company» или «person» или «unknown»."
-    )
+async def classify_intent(history: list[str], ai_client: AIClient) -> dict:
+    """Спрашивает Haiku что хочет пользователь. Возвращает dict с полем `kind`:
+    company_inn / company_name / person / clarify (+ конкретные поля)."""
+    history_text = "\n".join(f"- {h}" for h in history if h.strip())
+    prompt = INTENT_PROMPT.replace("{history}", history_text or "(пусто)")
     try:
-        answer = await ai_client.complete(prompt, timeout=30)
-        word = answer.strip().lower().split()[0] if answer.strip() else "unknown"
-        word = word.strip(".,!?\"'«»()[]")
-        if "company" in word or "org" in word or "юр" in word:
-            return "company"
-        if "person" in word or "human" in word or "челов" in word:
-            return "person"
-        return "unknown"
+        raw = await ai_client.complete(prompt, timeout=30, model=CLASSIFIER_MODEL)
     except Exception as e:
-        logger.warning("Stirlitz classify AI fallback failed: %s", e)
-        return "unknown"
+        logger.warning("Stirlitz classifier failed: %s", e)
+        return {"kind": "clarify", "question": "Не удалось понять запрос — повтори формулировку."}
+    try:
+        return parse_json_response(raw)
+    except Exception as e:
+        logger.warning("Stirlitz classifier JSON parse failed: %s | raw=%r", e, raw[:200])
+        return {"kind": "clarify", "question": "Не понял запрос — введи ИНН компании или ФИО человека."}
 
 
-async def resolve_inn(query: str, dadata: DaDataClient) -> tuple[str | None, list[dict]]:
-    q = query.strip()
-    # 1. ИНН в любом месте строки → точный поиск
-    embedded_inn = _extract_inn(q)
-    if embedded_inn:
-        item = await dadata.find_by_id(embedded_inn)
-        if item:
-            return embedded_inn, [item]
-        # ИНН вытащили, но DaData не нашла → возможно битый ИНН, попробуем suggest
-    # 2. Свободный поиск по строке (имя/название)
-    sug = await dadata.suggest(q, count=5)
+# ── COMPANY FLOW ──────────────────────────────────────────────────────
+
+async def _resolve_company(
+    intent: dict, dadata: DaDataClient,
+) -> tuple[str | None, list[dict]]:
+    """По dict-намерению ищет ИНН + suggestions."""
+    if intent.get("kind") == "company_inn":
+        inn = intent.get("inn") or ""
+        item = await dadata.find_by_id(inn)
+        return inn, ([item] if item else [])
+    # company_name
+    name = intent.get("name") or ""
+    sug = await dadata.suggest(name, count=5)
     if not sug:
-        return embedded_inn, []  # пусть и без подсказок отдадим извлечённый ИНН
-    first_inn = (sug[0].get("data") or {}).get("inn") or embedded_inn
+        return None, []
+    first_inn = (sug[0].get("data") or {}).get("inn")
     return first_inn, sug
 
 
-async def gather_company_intel(
-    inn: str, dadata: DaDataClient, giro: GiroClient,
-) -> dict:
+async def gather_company_intel(inn: str, dadata: DaDataClient, giro: GiroClient) -> dict:
     dadata_item = await dadata.find_by_id(inn)
     giro_summary = await giro.get_summary(inn)
     dd = (dadata_item or {}).get("data") or {}
@@ -117,23 +85,22 @@ async def gather_company_intel(
     }
 
 
-async def _build_company_card(
-    query: str,
-    ai_client: AIClient,
-    dadata: DaDataClient,
-    giro: GiroClient,
+async def build_company_card(
+    intent: dict, ai_client: AIClient, dadata: DaDataClient, giro: GiroClient,
 ) -> tuple[str | None, list[dict], str | None]:
     if not dadata.is_configured:
         return None, [], "DaData не настроена в конфиге"
-    inn, suggestions = await resolve_inn(query, dadata)
+    inn, suggestions = await _resolve_company(intent, dadata)
     if not inn:
-        return None, [], f"Не нашёл компанию по запросу «{query}»"
+        return None, [], "Не нашёл такую компанию в ЕГРЮЛ"
     if not suggestions:
-        return None, [], f"Не нашёл компанию по ИНН {inn}"
+        return None, [], f"ИНН {inn} не найден в ЕГРЮЛ"
 
+    import json
     data = await gather_company_intel(inn, dadata, giro)
-    data_json = json.dumps(data, ensure_ascii=False, indent=2, default=str)
-    prompt = COMPANY_PROMPT.replace("{data_json}", data_json)
+    prompt = COMPANY_PROMPT.replace(
+        "{data_json}", json.dumps(data, ensure_ascii=False, indent=2, default=str),
+    )
     try:
         card = await ai_client.complete(
             prompt, timeout=180, allowed_tools="WebSearch,WebFetch",
@@ -144,9 +111,14 @@ async def _build_company_card(
     return card, suggestions, None
 
 
-async def _build_person_card(
-    query: str, ai_client: AIClient,
+# ── PERSON FLOW ───────────────────────────────────────────────────────
+
+async def build_person_card(
+    intent: dict, ai_client: AIClient,
 ) -> tuple[str | None, list[dict], str | None]:
+    full_name = intent.get("full_name") or ""
+    context = intent.get("context") or ""
+    query = f"{full_name} {context}".strip()
     prompt = PERSON_PROMPT.replace("{query}", query)
     try:
         card = await ai_client.complete(
@@ -156,25 +128,3 @@ async def _build_person_card(
         logger.error("Stirlitz person card failed: %s", e, exc_info=True)
         return None, [], f"AI-анализ упал: {e}"
     return card, [], None
-
-
-async def build_intel_card(
-    query: str,
-    ai_client: AIClient,
-    dadata: DaDataClient,
-    giro: GiroClient,
-) -> tuple[str | None, list[dict], str | None, str]:
-    """Главная точка входа. Возвращает (card_html, suggestions, error_text, kind).
-    kind ∈ {'company', 'person'} — что в итоге решили обследовать."""
-    kind = _classify(query)
-    if kind == "unknown":
-        kind = await _classify_with_ai(query, ai_client)
-    if kind == "unknown":
-        # По-умолчанию пробуем компанию (DaData умеет искать по любой строке)
-        kind = "company"
-
-    if kind == "person":
-        card, sug, err = await _build_person_card(query, ai_client)
-    else:
-        card, sug, err = await _build_company_card(query, ai_client, dadata, giro)
-    return card, sug, err, kind

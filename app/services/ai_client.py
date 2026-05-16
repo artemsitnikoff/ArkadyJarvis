@@ -18,18 +18,20 @@ class AIClient:
         timeout: int = 120,
         system_prompt: str | None = None,
         allowed_tools: str | None = None,
+        model: str | None = None,
     ) -> str:
         """Run Claude CLI with prompt.
 
         `allowed_tools`: comma-separated whitelist (e.g. "WebSearch,WebFetch").
-        When provided, those tools are added back on top of the disabled set.
-        Use ONLY for read-only tools — never for Bash/Write/Edit.
+        `model`: override settings.claude_model for this call only (e.g. "haiku"
+        for cheap fast classification tasks).
         """
         return await self._call_cli(
             prompt,
             timeout=timeout,
             system_prompt=system_prompt,
             allowed_tools=allowed_tools,
+            model=model,
         )
 
     # CRITICAL: disable all tools. Otherwise the CLI executes shell commands,
@@ -50,6 +52,7 @@ class AIClient:
         timeout: int = 120,
         system_prompt: str | None = None,
         allowed_tools: str | None = None,
+        model: str | None = None,
     ) -> str:
         from app.services.claude_token import ensure_fresh_token
         await ensure_fresh_token()
@@ -73,8 +76,10 @@ class AIClient:
         ]
         if allowed_tools:
             args.extend(["--allowed-tools", allowed_tools])
-        if settings.claude_model:
-            args.extend(["--model", settings.claude_model])
+
+        chosen_model = model or settings.claude_model
+        if chosen_model:
+            args.extend(["--model", chosen_model])
         if system_prompt:
             args.extend(["--append-system-prompt", system_prompt])
 
