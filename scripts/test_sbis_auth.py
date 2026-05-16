@@ -1,117 +1,91 @@
 #!/usr/bin/env python3
-"""Discovery: try Saby (SBIS) interactive login + company info lookup.
+"""Discovery for Saby/SBIS API via cookie-based session auth.
 
-Pass credentials via env vars:
-    SBIS_LOGIN=...
-    SBIS_PASSWORD=...
-    [SBIS_ACCOUNT=...]   # optional, only if you have multiple accounts
+Paste the ENTIRE Cookie header from browser DevTools as SBIS_COOKIE
+env var. Run with a test INN as argument:
 
-Run:
-    docker compose exec -e SBIS_LOGIN=... -e SBIS_PASSWORD=... bot \
-      python scripts/test_sbis_auth.py 7736050003
+    docker compose exec \
+      -e SBIS_COOKIE="sid=...; s3sid-online-daab=...; ..." \
+      bot python scripts/test_sbis_auth.py 7736050003
 """
 import asyncio
 import json
 import os
 import sys
+from http.cookies import SimpleCookie
 
 import httpx
 
-AUTH_URL = "https://online.sbis.ru/auth/service/"
-RPC_URL = "https://online.sbis.ru/service/"
+
+def parse_cookie_str(cookie_str: str) -> dict[str, str]:
+    """Parse a raw 'Cookie:' header value into a name→value dict."""
+    sc = SimpleCookie()
+    sc.load(cookie_str)
+    return {k: v.value for k, v in sc.items()}
 
 
-async def authenticate(http: httpx.AsyncClient, login: str, password: str, account: str | None) -> str:
-    """Returns sid on success."""
-    params: dict = {"Логин": login, "Пароль": password}
-    if account:
-        params["НомерАккаунта"] = account
-    payload = {
-        "jsonrpc": "2.0",
-        "protocol": 6,
-        "method": "СБИС.Аутентифицировать",
-        "params": params,
-        "id": 0,
+async def call_rpc(
+    http: httpx.AsyncClient,
+    endpoint: str,
+    method: str,
+    params: dict,
+    cookies: dict,
+) -> dict | None:
+    body = {"jsonrpc": "2.0", "protocol": 6, "method": method, "params": params, "id": 0}
+    headers = {
+        "Content-Type": "application/json; charset=utf-8",
+        "Accept": "application/json, text/javascript, */*; q=0.01",
+        "X-Requested-With": "XMLHttpRequest",
+        "X-CalledMethod": method,
     }
-    print(f"\n→ POST {AUTH_URL}")
-    print(f"  method: СБИС.Аутентифицировать")
-    r = await http.post(AUTH_URL, json=payload, headers={"Content-Type": "application/json-rpc; charset=utf-8"})
-    print(f"  status={r.status_code}  bytes={len(r.content)}")
-    print(f"  raw response: {r.text[:500]}")
-    r.raise_for_status()
-    data = r.json()
-    if data.get("error"):
-        sys.exit(f"❌ Auth failed: {json.dumps(data['error'], ensure_ascii=False)}")
-    sid = data.get("result")
-    if not sid:
-        sys.exit(f"❌ No result/sid in response: {data}")
-    print(f"  ✅ sid = {sid[:20]}…")
-    return sid
-
-
-async def call_rpc(http: httpx.AsyncClient, sid: str, method: str, params: dict) -> dict:
-    payload = {
-        "jsonrpc": "2.0",
-        "protocol": 6,
-        "method": method,
-        "params": params,
-        "id": 0,
-    }
-    print(f"\n→ POST {RPC_URL}")
-    print(f"  method: {method}")
+    print(f"\n→ POST {endpoint}  method={method}")
     print(f"  params: {json.dumps(params, ensure_ascii=False)[:200]}")
-    r = await http.post(
-        RPC_URL,
-        json=payload,
-        headers={
-            "Content-Type": "application/json-rpc; charset=utf-8",
-            "X-SBISSessionID": sid,
-        },
-    )
+    try:
+        r = await http.post(endpoint, json=body, headers=headers, cookies=cookies)
+    except Exception as e:
+        print(f"  exception: {e}")
+        return None
     print(f"  status={r.status_code}  bytes={len(r.content)}")
+    if r.status_code >= 400:
+        print(f"  err body: {r.text[:500]!r}")
+        return None
     try:
         data = r.json()
     except Exception:
-        print(f"  raw: {r.text[:500]!r}")
-        return {}
+        print(f"  not json — body: {r.text[:500]!r}")
+        return None
     if data.get("error"):
         print(f"  ❌ error: {json.dumps(data['error'], ensure_ascii=False)[:300]}")
-        return {}
-    return data.get("result") or {}
+        return None
+    return data
 
 
 async def main(inn: str) -> None:
-    login = os.environ.get("SBIS_LOGIN", "").strip()
-    password = os.environ.get("SBIS_PASSWORD", "").strip()
-    account = os.environ.get("SBIS_ACCOUNT", "").strip() or None
-    if not (login and password):
-        sys.exit("Set SBIS_LOGIN and SBIS_PASSWORD env vars")
+    cookie_str = os.environ.get("SBIS_COOKIE", "").strip()
+    if not cookie_str:
+        sys.exit("Set SBIS_COOKIE env var with raw Cookie header from browser")
+    cookies = parse_cookie_str(cookie_str)
+    print(f"Parsed {len(cookies)} cookies. Key ones present:")
+    for k in ("sid", "s3sid-online-daab", "s3tok-daab", "CpsUserId", "cloud_device_id"):
+        v = cookies.get(k)
+        print(f"  {k}: {v[:40] + '…' if v and len(v) > 40 else v!r}")
 
     async with httpx.AsyncClient(timeout=30, follow_redirects=False) as http:
-        sid = await authenticate(http, login, password, account)
-
-        # 1. Basic company info (Электронный документооборот)
-        result = await call_rpc(http, sid, "СБИС.ИнформацияОКонтрагенте", {"ИНН": inn})
-        print("\n=== СБИС.ИнформацияОКонтрагенте ===")
-        print(json.dumps(result, ensure_ascii=False, indent=2)[:2000])
-
-        # 2. Try VOK basic requisites (might fail without license)
-        try:
-            r = await http.get(
-                f"https://api.sbis.ru/vok/req?inn={inn}",
-                headers={"X-SBISSessionID": sid, "X-SBISAccessToken": sid},
-            )
-            print(f"\n=== GET /vok/req?inn={inn} ===")
-            print(f"  status={r.status_code}")
-            print(f"  body: {r.text[:1000]!r}")
-        except Exception as e:
-            print(f"  VOK error: {e}")
-
-        # 3. Demo VOK (works without auth)
-        r = await http.get(f"https://api.sbis.ru/vok-demo/req?inn={inn}")
-        print(f"\n=== GET /vok-demo/req?inn={inn} ===")
-        print(f"  status={r.status_code}")
-        print(f"  body: {r.text[:1000]!r}")
+        # Try several method/endpoint combinations to find what works.
+        # СБИС.ИнформацияОКонтрагенте is the basic EDO method for contractor info.
+        attempts = [
+            ("https://online.sbis.ru/service/", "СБИС.ИнформацияОКонтрагенте", {"ИНН": inn}),
+            ("https://online.sbis.ru/service/", "Контрагент.СводкаПоКонтрагенту", {"ИНН": inn}),
+            ("https://online.sbis.ru/service/", "Контрагент.Найти", {"Запрос": inn, "Страница": 0, "РазмерСтраницы": 10}),
+            ("https://profile.saby.ru/service/", "СБИС.ИнформацияОКонтрагенте", {"ИНН": inn}),
+        ]
+        for url, method, params in attempts:
+            res = await call_rpc(http, url, method, params, cookies)
+            if res:
+                print(f"\n  ✅ result preview:")
+                print(json.dumps(res, ensure_ascii=False, indent=2)[:2500])
+                print(f"\n  (full size: {len(json.dumps(res, ensure_ascii=False))} chars)")
+                break
 
 
 if __name__ == "__main__":
