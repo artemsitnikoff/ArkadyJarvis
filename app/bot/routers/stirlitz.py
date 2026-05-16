@@ -24,21 +24,9 @@ class Stirlitz(StatesGroup):
     waiting_for_query = State()
 
 
-@router.callback_query(F.data == "hint:stirlitz")
-async def handle_open(callback: CallbackQuery, state: FSMContext):
-    await state.set_state(Stirlitz.waiting_for_query)
-    await callback.message.answer(
-        "🕵️ <b>Штирлиц</b> — разведка из открытых источников\n\n"
-        "Введи один из вариантов:\n"
-        "• <b>ИНН</b> (10 или 12 цифр) — точная карточка компании\n"
-        "• <b>Название компании</b> — найду по ЕГРЮЛ\n"
-        "• <b>ФИО человека</b> (можно с компанией/городом для точности) — '\n"
-        "соберу публичный портрет\n\n"
-        "Источники: DaData (ЕГРЮЛ), ГИР БО ФНС (отчётность), WebSearch "
-        "(новости, LinkedIn, Habr, ВК, конференции).",
-        reply_markup=BACK_MENU_KB,
-    )
-    await callback.answer()
+# Note: «hint:stirlitz» button click is handled by the generic hint dispatcher
+# in app/bot/routers/start.py — it picks up the FSM state + prompt from
+# _simple_fsm_hints(). The text input below handles the actual query.
 
 
 @router.message(Stirlitz.waiting_for_query, F.text)

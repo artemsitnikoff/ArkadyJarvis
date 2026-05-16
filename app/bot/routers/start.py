@@ -184,6 +184,7 @@ def _simple_fsm_hints() -> dict[str, tuple]:
     from app.bot.routers.lead import CreateLead
     from app.bot.routers.meeting import MeetingSetup
     from app.bot.routers.socrates import Socrates
+    from app.bot.routers.stirlitz import Stirlitz
 
     return {
         "employee": (
@@ -260,6 +261,18 @@ def _simple_fsm_hints() -> dict[str, tuple]:
             "план погружения в предметную область\n\n"
             "⚠️ Встречи длиннее 90 минут пока не обрабатываю. "
             "Файл-видео напрямую не принимаю (Telegram режет upload на 20 МБ).",
+            None,
+        ),
+        "stirlitz": (
+            Stirlitz.waiting_for_query,
+            "🕵️ <b>Штирлиц</b> — разведка из открытых источников\n\n"
+            "Введи один из вариантов:\n"
+            "• <b>ИНН</b> (10 или 12 цифр) — точная карточка компании\n"
+            "• <b>Название компании</b> — найду по ЕГРЮЛ\n"
+            "• <b>ФИО человека</b> (можно с компанией/городом для точности) — "
+            "соберу публичный портрет\n\n"
+            "Источники: DaData (ЕГРЮЛ), ГИР БО ФНС (отчётность), WebSearch "
+            "(новости, LinkedIn, Habr, ВК, конференции).",
             None,
         ),
     }
