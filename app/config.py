@@ -50,6 +50,10 @@ class Settings(BaseSettings):
     # PATCH ajs_join active=false and post an audit comment in Potok.
     rejection_classifier_threshold: int = 70
 
+    # DaData (контрагенты по ИНН/названию — для Штирлица)
+    dadata_api_key: SecretStr = SecretStr("")
+    dadata_secret_key: SecretStr = SecretStr("")  # для clean/standard API, не обязательно для find
+
     # Potok frontend session (for /client_api/* endpoints — HH messaging).
     # Extract from browser DevTools (Network → request headers).
     # Tokens are stable (no rotation observed), but a cookie tied to

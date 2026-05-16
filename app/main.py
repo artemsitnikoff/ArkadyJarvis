@@ -22,6 +22,8 @@ from app.services.bitrix_client import BitrixClient
 from app.services.openclaw_client import OpenClawClient
 from app.services.openrouter_client import OpenRouterClient
 from app.services.claude_token import init_token_file
+from app.services.dadata_client import DaDataClient
+from app.services.giro_client import GiroClient
 from app.services.potok_client import PotokClient
 from app.services.potok_frontend import PotokFrontendClient
 from app.services.userbot import UserbotClient
@@ -54,6 +56,8 @@ async def lifespan(app: FastAPI):
     openclaw = OpenClawClient()
     potok = PotokClient()
     potok_frontend = PotokFrontendClient()
+    dadata = DaDataClient()
+    giro = GiroClient()
 
     userbot: UserbotClient | None = None
     if settings.telethon_session:
@@ -128,6 +132,8 @@ async def lifespan(app: FastAPI):
     dp["openclaw"] = openclaw
     dp["potok"] = potok
     dp["potok_frontend"] = potok_frontend
+    dp["dadata"] = dadata
+    dp["giro"] = giro
     dp["userbot"] = userbot
 
     # Register middlewares on the dispatcher (order: error wraps auth wraps handler)
@@ -224,6 +230,8 @@ async def lifespan(app: FastAPI):
     await openclaw.close()
     await potok.close()
     await potok_frontend.close()
+    await dadata.close()
+    await giro.close()
     if userbot:
         await userbot.stop()
     await close_db()
