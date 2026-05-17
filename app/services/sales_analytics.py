@@ -303,6 +303,7 @@ async def _enrich_calls(
     bitrix, calls_raw: list[dict],
     openrouter=None, ai_client=None, transcribe: bool = False,
     errors: list[str] | None = None,
+    max_transcripts: int = 25,
 ) -> list[CallInfo]:
     # Сначала формируем базовые CallInfo
     entity_cache: dict[tuple[str, int], str | None] = {}
@@ -342,6 +343,15 @@ async def _enrich_calls(
                   if c.has_record and c.duration_sec >= 15]
     if not candidates:
         return base
+
+    # Если звонков много (>max_transcripts) — берём самые длинные
+    if len(candidates) > max_transcripts:
+        candidates.sort(key=lambda x: x[1].duration_sec, reverse=True)
+        candidates = candidates[:max_transcripts]
+        logger.info(
+            "Sales analytics: transcribing top %d of %d eligible calls (longest first)",
+            max_transcripts, len(base),
+        )
 
     sem = asyncio.Semaphore(3)  # ограничиваем нагрузку на OpenRouter / Bitrix
 

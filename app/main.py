@@ -163,7 +163,7 @@ async def lifespan(app: FastAPI):
         args=[bot, ai_client],
     )
     if settings.sales_report_bitrix_user_ids and settings.sales_report_recipients:
-        # Дневной — каждый день в SUMMARY_HOUR (по-умолчанию 19:00) — с транскрипцией
+        # Дневной — каждый день в SUMMARY_HOUR (по-умолчанию 19:00)
         scheduler.add_job(
             sales_dept_summary_job,
             CronTrigger(
@@ -174,14 +174,14 @@ async def lifespan(app: FastAPI):
             id="sales_dept_summary_daily",
             args=[bot, bitrix, ai_client, openrouter, 1, True],
         )
-        # Недельный — каждую пятницу в 18:00 — БЕЗ транскрипции (звонков много)
+        # Недельный — каждую пятницу в 18:00 (тоже с транскрипцией, есть лимит max=25)
         scheduler.add_job(
             sales_dept_summary_job,
             CronTrigger(
                 day_of_week="fri", hour=18, minute=0, timezone=settings.timezone,
             ),
             id="sales_dept_summary_weekly",
-            args=[bot, bitrix, ai_client, openrouter, 7, False],
+            args=[bot, bitrix, ai_client, openrouter, 7, True],
         )
         logger.info(
             "Scheduler: sales_dept_summary daily at %02d:%02d + weekly Fri 18:00 [%s] for Bitrix IDs [%s]",

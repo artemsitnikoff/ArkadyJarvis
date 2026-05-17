@@ -55,13 +55,12 @@ async def main() -> None:
     openrouter = OpenRouterClient()
     bot = create_bot() if not no_send and recipients else None
     try:
-        # Транскрипция — для дневного отчёта (day=1), для недельного выключаем (звонков много)
-        with_transcripts = (days == 1)
+        # Транскрипция всегда включена — есть лимит max_transcripts=25 в самом сервисе
         activities = await collect_for_user_ids(
             bitrix, bitrix_ids, settings.timezone, period_days=days,
-            openrouter=openrouter, ai_client=ai, with_transcripts=with_transcripts,
+            openrouter=openrouter, ai_client=ai, with_transcripts=True,
         )
-        print(f"=== RAW ACTIVITY JSON (with_transcripts={with_transcripts}) ===")
+        print(f"=== RAW ACTIVITY JSON ===")
         def _to_dict(a):
             d = a.__dict__.copy()
             d["calls"] = [c.__dict__ for c in a.calls]
