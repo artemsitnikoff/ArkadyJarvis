@@ -70,9 +70,10 @@ async def main() -> None:
         print(json.dumps(dumped, ensure_ascii=False, indent=2, default=str)[:5000])
 
         print("\n=== AI SUMMARY ===")
-        prompt = load_prompt("sales_summary").replace(
-            "{data_json}",
-            json.dumps(dumped, ensure_ascii=False, indent=2, default=str),
+        prompt = (
+            load_prompt("sales_summary")
+            .replace("{dc_context}", load_prompt("digital_clouds_context"))
+            .replace("{data_json}", json.dumps(dumped, ensure_ascii=False, indent=2, default=str))
         )
         summary = await ai.complete(prompt, timeout=180)
         print(summary)

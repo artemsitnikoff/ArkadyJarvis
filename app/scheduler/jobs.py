@@ -250,7 +250,11 @@ async def sales_dept_summary_job(
             [_to_dict(a) for a in activities],
             ensure_ascii=False, indent=2, default=str,
         )
-        prompt = load_prompt("sales_summary").replace("{data_json}", data_json)
+        prompt = (
+            load_prompt("sales_summary")
+            .replace("{dc_context}", load_prompt("digital_clouds_context"))
+            .replace("{data_json}", data_json)
+        )
         summary = await ai_client.complete(prompt, timeout=300)
     except Exception as e:
         logger.error("=== sales_dept_summary_job: collect/AI failed: %s", e, exc_info=True)

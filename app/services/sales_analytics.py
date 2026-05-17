@@ -366,11 +366,14 @@ async def _enrich_calls(
 async def _transcribe_and_summarize_call(
     bitrix, openrouter, ai_client, call_raw: dict,
 ) -> str | None:
-    """Скачивает запись звонка, транскрибирует, делает 1-фразную выжимку."""
+    """Скачивает запись, транскрибирует, делает структурный разбор:
+    Суть / Хорошо / Улучшить. Использует Sonnet (по-умолчанию)."""
     import os
     import tempfile
 
     import httpx
+
+    from app.services.prompts import load_prompt
 
     file_id = call_raw.get("RECORD_FILE_ID")
     download_url: str | None = None
@@ -385,7 +388,6 @@ async def _transcribe_and_summarize_call(
     if not download_url:
         return None
 
-    # Скачиваем в /tmp
     fd, tmp_path = tempfile.mkstemp(suffix=".mp3", prefix="call_")
     os.close(fd)
     try:
@@ -395,23 +397,21 @@ async def _transcribe_and_summarize_call(
                 return None
             with open(tmp_path, "wb") as f:
                 f.write(resp.content)
-        # Транскрипция (Bitrix отдаёт обычно mp3)
+
         tr = await openrouter.transcribe_voice(tmp_path, audio_format="mp3")
         if not tr.success or not tr.full_text:
             return None
-        # AI-выжимка одной фразой через haiku — дёшево и быстро
+
+        dc_context = load_prompt("digital_clouds_context")
+        analysis_prompt = load_prompt("sales_call_analysis")
         prompt = (
-            "Ниже расшифровка телефонного звонка менеджера с клиентом. "
-            "Выжми ОДНО предложение — главную суть и итог. Без преамбулы.\n\n"
-            f"{tr.full_text[:4000]}"
+            analysis_prompt
+            .replace("{dc_context}", dc_context)
+            .replace("{transcript}", tr.full_text[:6000])
         )
-        try:
-            summary = await ai_client.complete(
-                prompt, timeout=60, model="claude-haiku-4-5-20251001",
-            )
-        except Exception:
-            summary = await ai_client.complete(prompt, timeout=60)
-        return summary.strip().splitlines()[0] if summary else None
+        # Sonnet (default model) — качество анализа > скорости
+        summary = await ai_client.complete(prompt, timeout=90)
+        return summary.strip() if summary else None
     finally:
         try:
             os.unlink(tmp_path)
