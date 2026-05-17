@@ -163,10 +163,11 @@ async def lifespan(app: FastAPI):
         args=[bot, ai_client],
     )
     if settings.sales_report_bitrix_user_ids and settings.sales_report_recipients:
-        # Дневной — каждый день в SUMMARY_HOUR (по-умолчанию 19:00)
+        # Дневной — только в будни (выходные продажник не работает)
         scheduler.add_job(
             sales_dept_summary_job,
             CronTrigger(
+                day_of_week="mon-fri",
                 hour=settings.summary_hour,
                 minute=settings.summary_minute,
                 timezone=settings.timezone,
