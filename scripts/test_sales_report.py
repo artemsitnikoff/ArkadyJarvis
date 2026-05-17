@@ -97,9 +97,7 @@ async def main() -> None:
                             bundle_bytes,
                             filename=f"calls_transcripts_{days}d.md",
                         )
-                        await bot.send_document(
-                            tg_id, file, caption="📄 Полные расшифровки звонков",
-                        )
+                        await bot.send_document(tg_id, file)
                     print(f"  ✅ sent to {tg_id}")
                 except Exception as e:
                     print(f"  ❌ {tg_id}: {e}")

@@ -278,9 +278,7 @@ async def sales_dept_summary_job(
                     bundle_bytes,
                     filename=f"calls_transcripts_{period_days}d.md",
                 )
-                await bot.send_document(
-                    tg_id, file, caption="📄 Полные расшифровки звонков",
-                )
+                await bot.send_document(tg_id, file)
         except Exception as e:
             logger.error("=== sales_dept_summary_job: send to %s failed: %s", tg_id, e)
     logger.info(
