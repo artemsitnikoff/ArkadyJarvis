@@ -22,6 +22,7 @@ from app.bot.create import create_bot  # noqa: E402
 from app.config import settings  # noqa: E402
 from app.services.ai_client import AIClient  # noqa: E402
 from app.services.bitrix_client import BitrixClient  # noqa: E402
+from app.services.openrouter_client import OpenRouterClient  # noqa: E402
 from app.services.prompts import load_prompt  # noqa: E402
 from app.services.sales_analytics import collect_for_user_ids  # noqa: E402
 
@@ -51,12 +52,22 @@ async def main() -> None:
 
     bitrix = BitrixClient()
     ai = AIClient()
+    openrouter = OpenRouterClient()
     bot = create_bot() if not no_send and recipients else None
     try:
-        activities = await collect_for_user_ids(bitrix, bitrix_ids, settings.timezone, period_days=days)
-        print("=== RAW ACTIVITY JSON ===")
-        dumped = [a.__dict__ for a in activities]
-        print(json.dumps(dumped, ensure_ascii=False, indent=2, default=str)[:3000])
+        # Транскрипция — для дневного отчёта (day=1), для недельного выключаем (звонков много)
+        with_transcripts = (days == 1)
+        activities = await collect_for_user_ids(
+            bitrix, bitrix_ids, settings.timezone, period_days=days,
+            openrouter=openrouter, ai_client=ai, with_transcripts=with_transcripts,
+        )
+        print(f"=== RAW ACTIVITY JSON (with_transcripts={with_transcripts}) ===")
+        def _to_dict(a):
+            d = a.__dict__.copy()
+            d["calls"] = [c.__dict__ for c in a.calls]
+            return d
+        dumped = [_to_dict(a) for a in activities]
+        print(json.dumps(dumped, ensure_ascii=False, indent=2, default=str)[:5000])
 
         print("\n=== AI SUMMARY ===")
         prompt = load_prompt("sales_summary").replace(
@@ -81,6 +92,7 @@ async def main() -> None:
     finally:
         await bitrix.close()
         await ai.close()
+        await openrouter.close()
         if bot:
             await bot.session.close()
 

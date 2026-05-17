@@ -165,13 +165,14 @@ class OpenRouterClient:
 
         raise ValueError("Модель не вернула картинку, попробуй другой промпт")
 
-    async def transcribe_voice(self, ogg_path: str | Path) -> TranscriptionResult:
-        """Transcribe a Telegram voice message (.ogg / OPUS) with speaker diarization.
+    async def transcribe_voice(
+        self, audio_path: str | Path, audio_format: str = "ogg",
+    ) -> TranscriptionResult:
+        """Transcribe an audio file with speaker diarization.
 
-        Retries once on provider-overloaded errors (HTTP 200 with embedded 503
-        in the choice payload — common for Gemini under load).
+        `audio_format` — formats supported by Gemini: ogg, mp3, wav, aac, flac, aiff.
         """
-        path = Path(ogg_path)
+        path = Path(audio_path)
         try:
             audio_b64 = await asyncio.to_thread(
                 lambda: base64.b64encode(path.read_bytes()).decode()
@@ -180,14 +181,14 @@ class OpenRouterClient:
             return TranscriptionResult(success=False, error=f"не смог прочитать файл: {e}")
 
         for attempt in range(2):
-            result = await self._transcribe_once(audio_b64)
+            result = await self._transcribe_once(audio_b64, audio_format)
             if result.success or not result.retryable:
                 return result
             logger.warning("Transcribe retry %d/2 after retryable error: %s", attempt + 1, result.error)
             await asyncio.sleep(5)
         return result
 
-    async def _transcribe_once(self, audio_b64: str) -> TranscriptionResult:
+    async def _transcribe_once(self, audio_b64: str, audio_format: str = "ogg") -> TranscriptionResult:
         prompt = load_prompt("voice_transcribe")
         payload = {
             "model": settings.openrouter_model,
@@ -195,7 +196,7 @@ class OpenRouterClient:
                 "role": "user",
                 "content": [
                     {"type": "text", "text": prompt},
-                    {"type": "input_audio", "input_audio": {"data": audio_b64, "format": "ogg"}},
+                    {"type": "input_audio", "input_audio": {"data": audio_b64, "format": audio_format}},
                 ],
             }],
             "response_format": {"type": "json_object"},

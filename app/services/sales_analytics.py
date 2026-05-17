@@ -19,6 +19,29 @@ logger = logging.getLogger("arkadyjarvis")
 
 
 @dataclass
+class CallInfo:
+    call_id: str
+    direction: str         # "in" / "out" / "missed" / "callback" / "other"
+    direction_label: str   # "Входящий" / "Исходящий" / "Пропущенный" / "Обратный"
+    phone: str
+    duration_sec: int
+    entity_type: str | None = None        # "LEAD" / "CONTACT" / "COMPANY" / "DEAL"
+    entity_id: int | None = None
+    entity_name: str | None = None
+    start_time: str | None = None
+    summary: str | None = None            # AI-выжимка (если транскрибировали)
+    has_record: bool = False              # есть ли запись (URL/file)
+
+
+CALL_DIRECTIONS = {
+    1: ("out", "Исходящий"),
+    2: ("in", "Входящий"),
+    3: ("missed", "Пропущенный"),
+    4: ("callback", "Обратный"),
+}
+
+
+@dataclass
 class DailySalesActivity:
     user_id: int
     user_name: str = ""
@@ -35,6 +58,8 @@ class DailySalesActivity:
     tasks_done: int = 0
     calls_count: int = 0
     calls_total_seconds: int = 0
+    calls_by_direction: dict[str, int] = field(default_factory=dict)
+    calls: list[CallInfo] = field(default_factory=list)  # детальный список
     errors: list[str] = field(default_factory=list)
 
 
@@ -68,9 +93,17 @@ async def _safe_call(bitrix, method: str, params: dict, errors: list[str]):
 
 
 async def collect_user_activity(
-    bitrix, user_id: int, tz_name: str = "Asia/Novosibirsk", period_days: int = 1,
+    bitrix,
+    user_id: int,
+    tz_name: str = "Asia/Novosibirsk",
+    period_days: int = 1,
+    openrouter=None,
+    ai_client=None,
+    with_transcripts: bool = False,
 ) -> DailySalesActivity:
-    """Собрать всю активность одного менеджера за период (по-умолчанию сегодня)."""
+    """Собрать активность менеджера за период. Если `with_transcripts=True` и
+    переданы `openrouter` + `ai_client` — для каждого звонка с записью
+    скачивает MP3, транскрибирует и формирует AI-выжимку."""
     day_start, day_end = _period_bounds(tz_name, period_days)
     activity = DailySalesActivity(
         user_id=user_id,
@@ -201,16 +234,186 @@ async def collect_user_activity(
         activity.errors,
     )
     if calls_resp:
-        calls = calls_resp.get("result") or []
-        activity.calls_count = len(calls)
-        activity.calls_total_seconds = sum(int(c.get("CALL_DURATION") or 0) for c in calls)
+        calls_raw = calls_resp.get("result") or []
+        activity.calls_count = len(calls_raw)
+        activity.calls_total_seconds = sum(int(c.get("CALL_DURATION") or 0) for c in calls_raw)
+        activity.calls = await _enrich_calls(
+            bitrix, calls_raw, openrouter=openrouter, ai_client=ai_client,
+            transcribe=with_transcripts, errors=activity.errors,
+        )
+        for c in activity.calls:
+            activity.calls_by_direction[c.direction_label] = (
+                activity.calls_by_direction.get(c.direction_label, 0) + 1
+            )
 
     return activity
 
 
 async def collect_for_user_ids(
-    bitrix, user_ids: list[int], tz_name: str = "Asia/Novosibirsk", period_days: int = 1,
+    bitrix,
+    user_ids: list[int],
+    tz_name: str = "Asia/Novosibirsk",
+    period_days: int = 1,
+    openrouter=None,
+    ai_client=None,
+    with_transcripts: bool = False,
 ) -> list[DailySalesActivity]:
     return await asyncio.gather(
-        *[collect_user_activity(bitrix, uid, tz_name, period_days) for uid in user_ids]
+        *[
+            collect_user_activity(
+                bitrix, uid, tz_name, period_days,
+                openrouter=openrouter, ai_client=ai_client,
+                with_transcripts=with_transcripts,
+            )
+            for uid in user_ids
+        ]
     )
+
+
+# ── enrichment helpers ─────────────────────────────────────────────────
+
+ENTITY_GETTER = {
+    "LEAD": ("crm.lead.get", "TITLE"),
+    "CONTACT": ("crm.contact.get", None),  # NAME + LAST_NAME
+    "COMPANY": ("crm.company.get", "TITLE"),
+    "DEAL": ("crm.deal.get", "TITLE"),
+}
+
+
+async def _resolve_entity_name(bitrix, entity_type: str, entity_id: int) -> str | None:
+    spec = ENTITY_GETTER.get(entity_type)
+    if not spec:
+        return None
+    method, field_name = spec
+    try:
+        r = await bitrix._request(method, {"id": entity_id})
+        e = r.get("result") or {}
+        if field_name:
+            return e.get(field_name)
+        # CONTACT — собираем имя
+        parts = [e.get("LAST_NAME"), e.get("NAME"), e.get("SECOND_NAME")]
+        name = " ".join(p for p in parts if p).strip()
+        return name or None
+    except Exception as e:
+        logger.debug("Resolve %s/%s failed: %s", entity_type, entity_id, e)
+        return None
+
+
+async def _enrich_calls(
+    bitrix, calls_raw: list[dict],
+    openrouter=None, ai_client=None, transcribe: bool = False,
+    errors: list[str] | None = None,
+) -> list[CallInfo]:
+    # Сначала формируем базовые CallInfo
+    entity_cache: dict[tuple[str, int], str | None] = {}
+    base: list[CallInfo] = []
+    for c in calls_raw:
+        ct = int(c.get("CALL_TYPE") or 0)
+        dir_code, dir_label = CALL_DIRECTIONS.get(ct, ("other", f"type{ct}"))
+        e_type = c.get("CRM_ENTITY_TYPE")
+        e_id = c.get("CRM_ENTITY_ID")
+        ci = CallInfo(
+            call_id=str(c.get("ID") or c.get("CALL_ID") or ""),
+            direction=dir_code,
+            direction_label=dir_label,
+            phone=str(c.get("PHONE_NUMBER") or ""),
+            duration_sec=int(c.get("CALL_DURATION") or 0),
+            entity_type=e_type,
+            entity_id=int(e_id) if e_id else None,
+            start_time=c.get("CALL_START_DATE"),
+            has_record=bool(c.get("RECORD_FILE_ID") or c.get("CALL_RECORD_URL")),
+        )
+        base.append(ci)
+
+    # Резолвим имена связанных сущностей (с кэшем чтобы не дёргать одно и то же)
+    for ci in base:
+        if not (ci.entity_type and ci.entity_id):
+            continue
+        key = (ci.entity_type, ci.entity_id)
+        if key not in entity_cache:
+            entity_cache[key] = await _resolve_entity_name(bitrix, ci.entity_type, ci.entity_id)
+        ci.entity_name = entity_cache[key]
+
+    if not transcribe or not openrouter or not ai_client:
+        return base
+
+    # Параллельная транскрипция: только звонки >=15 секунд и с записью
+    candidates = [(i, c, calls_raw[i]) for i, c in enumerate(base)
+                  if c.has_record and c.duration_sec >= 15]
+    if not candidates:
+        return base
+
+    sem = asyncio.Semaphore(3)  # ограничиваем нагрузку на OpenRouter / Bitrix
+
+    async def _do(idx: int, ci: CallInfo, raw: dict):
+        async with sem:
+            try:
+                summary = await _transcribe_and_summarize_call(
+                    bitrix, openrouter, ai_client, raw,
+                )
+                if summary:
+                    ci.summary = summary
+            except Exception as e:
+                msg = f"transcribe call {ci.call_id}: {e}"
+                logger.warning("Sales analytics %s", msg)
+                if errors is not None:
+                    errors.append(msg)
+
+    await asyncio.gather(*[_do(i, c, r) for i, c, r in candidates])
+    return base
+
+
+async def _transcribe_and_summarize_call(
+    bitrix, openrouter, ai_client, call_raw: dict,
+) -> str | None:
+    """Скачивает запись звонка, транскрибирует, делает 1-фразную выжимку."""
+    import os
+    import tempfile
+
+    import httpx
+
+    file_id = call_raw.get("RECORD_FILE_ID")
+    download_url: str | None = None
+    if file_id:
+        try:
+            r = await bitrix._request("disk.file.get", {"id": file_id})
+            download_url = ((r.get("result") or {}).get("DOWNLOAD_URL"))
+        except Exception as e:
+            logger.debug("disk.file.get for %s failed: %s", file_id, e)
+    if not download_url:
+        download_url = call_raw.get("CALL_RECORD_URL")
+    if not download_url:
+        return None
+
+    # Скачиваем в /tmp
+    fd, tmp_path = tempfile.mkstemp(suffix=".mp3", prefix="call_")
+    os.close(fd)
+    try:
+        async with httpx.AsyncClient(timeout=60, follow_redirects=True) as http:
+            resp = await http.get(download_url)
+            if resp.status_code != 200 or not resp.content:
+                return None
+            with open(tmp_path, "wb") as f:
+                f.write(resp.content)
+        # Транскрипция (Bitrix отдаёт обычно mp3)
+        tr = await openrouter.transcribe_voice(tmp_path, audio_format="mp3")
+        if not tr.success or not tr.full_text:
+            return None
+        # AI-выжимка одной фразой через haiku — дёшево и быстро
+        prompt = (
+            "Ниже расшифровка телефонного звонка менеджера с клиентом. "
+            "Выжми ОДНО предложение — главную суть и итог. Без преамбулы.\n\n"
+            f"{tr.full_text[:4000]}"
+        )
+        try:
+            summary = await ai_client.complete(
+                prompt, timeout=60, model="claude-haiku-4-5-20251001",
+            )
+        except Exception:
+            summary = await ai_client.complete(prompt, timeout=60)
+        return summary.strip().splitlines()[0] if summary else None
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass

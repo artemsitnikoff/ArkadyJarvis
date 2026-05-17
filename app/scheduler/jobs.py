@@ -210,9 +210,12 @@ async def monday_poster_job(bot: Bot, ai_client: AIClient, openrouter: OpenRoute
 
 
 async def sales_dept_summary_job(
-    bot: Bot, bitrix, ai_client: AIClient, period_days: int = 1,
+    bot: Bot, bitrix, ai_client: AIClient, openrouter: OpenRouterClient,
+    period_days: int = 1, with_transcripts: bool = True,
 ):
-    """Отчёт по продажникам за период (по-умолчанию сегодня). Отправляется в DM."""
+    """Отчёт по продажникам за период (по-умолчанию сегодня). Отправляется в DM.
+    Если with_transcripts=True — для каждого записанного звонка делает
+    транскрипцию (Gemini) + 1-фразную выжимку (Claude haiku)."""
     import json as jsonmod
 
     from app.services.prompts import load_prompt
@@ -236,12 +239,19 @@ async def sales_dept_summary_job(
     try:
         activities = await collect_for_user_ids(
             bitrix, bitrix_ids, settings.timezone, period_days=period_days,
+            openrouter=openrouter, ai_client=ai_client, with_transcripts=with_transcripts,
         )
+        # CallInfo нужно сериализовать вручную (dataclass с вложенными dataclass'ами)
+        def _to_dict(a):
+            d = a.__dict__.copy()
+            d["calls"] = [c.__dict__ for c in a.calls]
+            return d
         data_json = jsonmod.dumps(
-            [a.__dict__ for a in activities], ensure_ascii=False, indent=2, default=str,
+            [_to_dict(a) for a in activities],
+            ensure_ascii=False, indent=2, default=str,
         )
         prompt = load_prompt("sales_summary").replace("{data_json}", data_json)
-        summary = await ai_client.complete(prompt, timeout=180)
+        summary = await ai_client.complete(prompt, timeout=300)
     except Exception as e:
         logger.error("=== sales_dept_summary_job: collect/AI failed: %s", e, exc_info=True)
         return
