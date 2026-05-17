@@ -265,14 +265,27 @@ async def sales_dept_summary_job(
         tag = f"#анализ_отдела_продаж_{period_days}д"
     text = f"{tag}\n\n{summary}"
 
+    # .md-файл со всеми расшифровками
+    from app.services.sales_analytics import build_transcripts_bundle
+    bundle = build_transcripts_bundle(activities)
+    bundle_bytes = bundle.encode("utf-8") if bundle.strip() else None
+
     for tg_id in recipients:
         try:
             await bot.send_message(tg_id, text)
+            if bundle_bytes:
+                file = BufferedInputFile(
+                    bundle_bytes,
+                    filename=f"calls_transcripts_{period_days}d.md",
+                )
+                await bot.send_document(
+                    tg_id, file, caption="📄 Полные расшифровки звонков",
+                )
         except Exception as e:
             logger.error("=== sales_dept_summary_job: send to %s failed: %s", tg_id, e)
     logger.info(
-        "=== sales_dept_summary_job(days=%s): sent to %d recipients",
-        period_days, len(recipients),
+        "=== sales_dept_summary_job(days=%s): sent to %d recipients (bundle=%s)",
+        period_days, len(recipients), bool(bundle_bytes),
     )
 
 

@@ -24,7 +24,10 @@ from app.services.ai_client import AIClient  # noqa: E402
 from app.services.bitrix_client import BitrixClient  # noqa: E402
 from app.services.openrouter_client import OpenRouterClient  # noqa: E402
 from app.services.prompts import load_prompt  # noqa: E402
-from app.services.sales_analytics import collect_for_user_ids  # noqa: E402
+from app.services.sales_analytics import (  # noqa: E402
+    build_transcripts_bundle,
+    collect_for_user_ids,
+)
 
 
 async def main() -> None:
@@ -82,10 +85,21 @@ async def main() -> None:
                 "#анализ_отдела_продаж_неделя" if days == 7 else f"#анализ_отдела_продаж_{days}д"
             )
             text = f"{tag} (test)\n\n{summary}"
+            bundle = build_transcripts_bundle(activities)
+            bundle_bytes = bundle.encode("utf-8") if bundle.strip() else None
             print(f"\n=== SENDING to {len(recipients)} recipients ===")
+            from aiogram.types import BufferedInputFile
             for tg_id in recipients:
                 try:
                     await bot.send_message(tg_id, text)
+                    if bundle_bytes:
+                        file = BufferedInputFile(
+                            bundle_bytes,
+                            filename=f"calls_transcripts_{days}d.md",
+                        )
+                        await bot.send_document(
+                            tg_id, file, caption="📄 Полные расшифровки звонков",
+                        )
                     print(f"  ✅ sent to {tg_id}")
                 except Exception as e:
                     print(f"  ❌ {tg_id}: {e}")

@@ -29,7 +29,8 @@ class CallInfo:
     entity_id: int | None = None
     entity_name: str | None = None
     start_time: str | None = None
-    summary: str | None = None            # AI-выжимка (если транскрибировали)
+    summary: str | None = None            # AI-разбор (Суть / Хорошо / Улучшить)
+    transcript: str | None = None         # полный диаризованный текст (S1 [0:00]: ...)
     has_record: bool = False              # есть ли запись (URL/file)
 
 
@@ -358,11 +359,13 @@ async def _enrich_calls(
     async def _do(idx: int, ci: CallInfo, raw: dict):
         async with sem:
             try:
-                summary = await _transcribe_and_summarize_call(
+                summary, transcript = await _transcribe_and_summarize_call(
                     bitrix, openrouter, ai_client, raw,
                 )
                 if summary:
                     ci.summary = summary
+                if transcript:
+                    ci.transcript = transcript
             except Exception as e:
                 msg = f"transcribe call {ci.call_id}: {e}"
                 logger.warning("Sales analytics %s", msg)
@@ -375,9 +378,9 @@ async def _enrich_calls(
 
 async def _transcribe_and_summarize_call(
     bitrix, openrouter, ai_client, call_raw: dict,
-) -> str | None:
-    """Скачивает запись, транскрибирует, делает структурный разбор:
-    Суть / Хорошо / Улучшить. Использует Sonnet (по-умолчанию)."""
+) -> tuple[str | None, str | None]:
+    """Скачивает запись, транскрибирует, делает структурный разбор.
+    Возвращает (summary, transcript) — оба могут быть None."""
     import os
     import tempfile
 
@@ -396,7 +399,7 @@ async def _transcribe_and_summarize_call(
     if not download_url:
         download_url = call_raw.get("CALL_RECORD_URL")
     if not download_url:
-        return None
+        return None, None
 
     fd, tmp_path = tempfile.mkstemp(suffix=".mp3", prefix="call_")
     os.close(fd)
@@ -404,26 +407,67 @@ async def _transcribe_and_summarize_call(
         async with httpx.AsyncClient(timeout=60, follow_redirects=True) as http:
             resp = await http.get(download_url)
             if resp.status_code != 200 or not resp.content:
-                return None
+                return None, None
             with open(tmp_path, "wb") as f:
                 f.write(resp.content)
 
         tr = await openrouter.transcribe_voice(tmp_path, audio_format="mp3")
         if not tr.success or not tr.full_text:
-            return None
+            return None, None
+        transcript = tr.full_text
 
         dc_context = load_prompt("digital_clouds_context")
         analysis_prompt = load_prompt("sales_call_analysis")
         prompt = (
             analysis_prompt
             .replace("{dc_context}", dc_context)
-            .replace("{transcript}", tr.full_text[:6000])
+            .replace("{transcript}", transcript[:6000])
         )
-        # Sonnet (default model) — качество анализа > скорости
-        summary = await ai_client.complete(prompt, timeout=90)
-        return summary.strip() if summary else None
+        summary_raw = await ai_client.complete(prompt, timeout=90)
+        summary = summary_raw.strip() if summary_raw else None
+        return summary, transcript
     finally:
         try:
             os.unlink(tmp_path)
         except OSError:
             pass
+
+
+def _fmt_duration(sec: int) -> str:
+    return f"{sec // 60}:{sec % 60:02d}"
+
+
+def build_transcripts_bundle(activities: list[DailySalesActivity]) -> str:
+    """Собирает все транскрипты звонков из списка активностей в один markdown.
+    Возвращает текст файла (или пустую строку если транскриптов нет)."""
+    has_any = any(c.transcript for a in activities for c in a.calls)
+    if not has_any:
+        return ""
+
+    out: list[str] = ["# Расшифровки звонков", ""]
+    for a in activities:
+        calls_with_text = [c for c in a.calls if c.transcript]
+        if not calls_with_text:
+            continue
+        out.append(f"## {a.user_name or f'User #{a.user_id}'} · {a.period_label}")
+        out.append("")
+        for i, c in enumerate(calls_with_text, 1):
+            entity_part = f"  · {c.entity_type or ''}: «{c.entity_name}»" if c.entity_name else ""
+            out.append(f"### {i}. {c.direction_label} · {c.phone} · {_fmt_duration(c.duration_sec)}{entity_part}")
+            if c.start_time:
+                out.append(f"_{c.start_time}_")
+            out.append("")
+            if c.summary:
+                out.append("**Разбор:**")
+                out.append("")
+                out.append(c.summary)
+                out.append("")
+            out.append("**Расшифровка:**")
+            out.append("")
+            out.append("```")
+            out.append(c.transcript)
+            out.append("```")
+            out.append("")
+            out.append("---")
+            out.append("")
+    return "\n".join(out)
