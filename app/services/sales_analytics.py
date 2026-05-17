@@ -22,6 +22,8 @@ logger = logging.getLogger("arkadyjarvis")
 class DailySalesActivity:
     user_id: int
     user_name: str = ""
+    period_label: str = "сегодня"
+    period_days: int = 1
     last_login: str | None = None
     leads_created: int = 0
     leads_examples: list[dict] = field(default_factory=list)
@@ -36,13 +38,23 @@ class DailySalesActivity:
     errors: list[str] = field(default_factory=list)
 
 
-def _day_bounds(tz_name: str) -> tuple[str, str]:
-    """ISO-строки начала и конца сегодняшних суток в указанной таймзоне."""
+def _period_bounds(tz_name: str, days: int = 1) -> tuple[str, str]:
+    """ISO-строки начала и конца периода (N последних суток, включая сегодня)."""
     tz = ZoneInfo(tz_name)
     now = datetime.now(tz)
-    day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    day_end = day_start + timedelta(days=1) - timedelta(seconds=1)
-    return day_start.isoformat(), day_end.isoformat()
+    end = now.replace(hour=23, minute=59, second=59, microsecond=0)
+    start = (now - timedelta(days=days - 1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    return start.isoformat(), end.isoformat()
+
+
+def _period_label(days: int) -> str:
+    if days == 1:
+        return "сегодня"
+    if days == 7:
+        return "за неделю"
+    if days == 30:
+        return "за месяц"
+    return f"за {days} дн."
 
 
 async def _safe_call(bitrix, method: str, params: dict, errors: list[str]):
@@ -56,11 +68,15 @@ async def _safe_call(bitrix, method: str, params: dict, errors: list[str]):
 
 
 async def collect_user_activity(
-    bitrix, user_id: int, tz_name: str = "Asia/Novosibirsk",
+    bitrix, user_id: int, tz_name: str = "Asia/Novosibirsk", period_days: int = 1,
 ) -> DailySalesActivity:
-    """Собрать всю активность одного менеджера за сегодня."""
-    day_start, day_end = _day_bounds(tz_name)
-    activity = DailySalesActivity(user_id=user_id)
+    """Собрать всю активность одного менеджера за период (по-умолчанию сегодня)."""
+    day_start, day_end = _period_bounds(tz_name, period_days)
+    activity = DailySalesActivity(
+        user_id=user_id,
+        period_days=period_days,
+        period_label=_period_label(period_days),
+    )
 
     # Имя сотрудника + последний вход
     user_resp = await _safe_call(
@@ -193,8 +209,8 @@ async def collect_user_activity(
 
 
 async def collect_for_user_ids(
-    bitrix, user_ids: list[int], tz_name: str = "Asia/Novosibirsk",
+    bitrix, user_ids: list[int], tz_name: str = "Asia/Novosibirsk", period_days: int = 1,
 ) -> list[DailySalesActivity]:
     return await asyncio.gather(
-        *[collect_user_activity(bitrix, uid, tz_name) for uid in user_ids]
+        *[collect_user_activity(bitrix, uid, tz_name, period_days) for uid in user_ids]
     )

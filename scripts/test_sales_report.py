@@ -3,7 +3,9 @@
 
 Использует BitrixClient + AIClient. Печатает JSON активности + готовый отчёт.
 
-    docker compose exec bot python scripts/test_sales_report.py [bitrix_user_id]
+    docker compose exec bot python scripts/test_sales_report.py [bitrix_user_id] [days]
+
+`days` — 1 (по-умолчанию, сегодня), 7 — за неделю, 30 — за месяц.
 """
 import asyncio
 import json
@@ -31,14 +33,16 @@ async def main() -> None:
         if not raw:
             sys.exit("Pass a Bitrix user_id arg, or set SALES_REPORT_BITRIX_USER_IDS in .env")
         bitrix_ids = [int(x) for x in raw.split(",") if x.strip()]
+    days = int(sys.argv[2]) if len(sys.argv) > 2 else 1
 
-    print(f"\nCollecting today's activity for Bitrix user IDs: {bitrix_ids}")
+    print(f"\nCollecting activity for Bitrix user IDs: {bitrix_ids}")
+    print(f"Period: last {days} day(s)")
     print(f"Timezone: {settings.timezone}\n")
 
     bitrix = BitrixClient()
     ai = AIClient()
     try:
-        activities = await collect_for_user_ids(bitrix, bitrix_ids, settings.timezone)
+        activities = await collect_for_user_ids(bitrix, bitrix_ids, settings.timezone, period_days=days)
         print("=== RAW ACTIVITY JSON ===")
         dumped = [a.__dict__ for a in activities]
         print(json.dumps(dumped, ensure_ascii=False, indent=2, default=str)[:3000])
