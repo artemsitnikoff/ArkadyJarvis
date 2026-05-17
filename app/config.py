@@ -92,6 +92,10 @@ class Settings(BaseSettings):
     # Monday motivational Soviet-style poster — sent every Monday 09:00 local time. 0 = disabled.
     monday_poster_chat_id: int = 0
 
+    # Sales department analytics — daily report at 19:00 from Bitrix24
+    sales_report_bitrix_user_ids: str = ""   # comma-separated Bitrix user IDs (продажники)
+    sales_report_recipients: str = ""         # comma-separated Telegram IDs (кому слать)
+
     # Zabbix monitoring channel — bot listens for Zabbix alerts here
     zabbix_channel_id: int = 0  # e.g. -1001423899560
     zabbix_jira_project: str = "DA"

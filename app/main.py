@@ -14,6 +14,7 @@ from app.db import close_db, get_recruiter_contact, init_db
 from app.scheduler.jobs import (
     daily_summary_job,
     monday_poster_job,
+    sales_dept_summary_job,
     wednesday_frog_job,
     zabbix_check_unresolved_job,
 )
@@ -161,6 +162,22 @@ async def lifespan(app: FastAPI):
         id="daily_summary",
         args=[bot, ai_client],
     )
+    if settings.sales_report_bitrix_user_ids and settings.sales_report_recipients:
+        scheduler.add_job(
+            sales_dept_summary_job,
+            CronTrigger(
+                hour=settings.summary_hour,
+                minute=settings.summary_minute,
+                timezone=settings.timezone,
+            ),
+            id="sales_dept_summary",
+            args=[bot, bitrix, ai_client],
+        )
+        logger.info(
+            "Scheduler: sales_dept_summary at %02d:%02d [%s] for Bitrix IDs [%s]",
+            settings.summary_hour, settings.summary_minute, settings.timezone,
+            settings.sales_report_bitrix_user_ids,
+        )
     if settings.wednesday_frog_chat_id:
         scheduler.add_job(
             wednesday_frog_job,

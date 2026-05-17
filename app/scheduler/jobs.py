@@ -209,6 +209,47 @@ async def monday_poster_job(bot: Bot, ai_client: AIClient, openrouter: OpenRoute
         logger.error("=== monday_poster_job failed: %s", e, exc_info=True)
 
 
+async def sales_dept_summary_job(bot: Bot, bitrix, ai_client: AIClient):
+    """19:00: дневной отчёт по продажникам — отправляется в DM получателям."""
+    import json as jsonmod
+
+    from app.services.prompts import load_prompt
+    from app.services.sales_analytics import collect_for_user_ids
+
+    bitrix_ids_raw = settings.sales_report_bitrix_user_ids.strip()
+    recipients_raw = settings.sales_report_recipients.strip()
+    if not bitrix_ids_raw or not recipients_raw:
+        logger.info(
+            "=== sales_dept_summary_job skipped: SALES_REPORT_BITRIX_USER_IDS or _RECIPIENTS not set"
+        )
+        return
+
+    try:
+        bitrix_ids = [int(x.strip()) for x in bitrix_ids_raw.split(",") if x.strip()]
+        recipients = [int(x.strip()) for x in recipients_raw.split(",") if x.strip()]
+    except ValueError as e:
+        logger.error("=== sales_dept_summary_job: bad IDs in config: %s", e)
+        return
+
+    try:
+        activities = await collect_for_user_ids(bitrix, bitrix_ids, settings.timezone)
+        data_json = jsonmod.dumps(
+            [a.__dict__ for a in activities], ensure_ascii=False, indent=2, default=str,
+        )
+        prompt = load_prompt("sales_summary").replace("{data_json}", data_json)
+        summary = await ai_client.complete(prompt, timeout=120)
+    except Exception as e:
+        logger.error("=== sales_dept_summary_job: collect/AI failed: %s", e, exc_info=True)
+        return
+
+    text = f"#анализ_отдела_продаж\n\n{summary}"
+    for tg_id in recipients:
+        try:
+            await bot.send_message(tg_id, text)
+        except Exception as e:
+            logger.error("=== sales_dept_summary_job: send to %s failed: %s", tg_id, e)
+
+
 async def zabbix_check_unresolved_job():
     """Daily 10:00: scan Zabbix problems open >24h, escalate to Jira (DA project)."""
     from app.services.jira_client import JiraClient
