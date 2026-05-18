@@ -246,20 +246,54 @@ async def collect_user_activity(
         bitrix, "crm.deal.list",
         {
             "filter": {"ASSIGNED_BY_ID": user_id, "CLOSED": "N"},
-            "select": ["ID", "TITLE", "STAGE_ID", "OPPORTUNITY", "DATE_CREATE"],
+            "select": ["ID", "TITLE", "STAGE_ID", "CATEGORY_ID", "OPPORTUNITY", "DATE_CREATE"],
         },
         activity.errors,
     )
     active_deals: list[dict] = []
     if active_resp:
-        active_deals = active_resp.get("result") or []
+        all_active = active_resp.get("result") or []
+
+        # 1) Фильтр по разрешённым воронкам (исключаем 1С-фантомы / автопродления)
+        allowed_cats = {
+            int(c.strip()) for c in settings.sales_report_deal_categories.split(",")
+            if c.strip().isdigit()
+        }
+        if allowed_cats:
+            in_cat = [d for d in all_active if int(d.get("CATEGORY_ID") or 0) in allowed_cats]
+        else:
+            in_cat = all_active
+
+        # 2) Фетчим имена стадий для этих воронок (раз в отчёт, кэш per-call)
+        stage_name_by_id: dict[str, str] = {}
+        cats_to_load = {int(d.get("CATEGORY_ID") or 0) for d in in_cat}
+        for cat_id in cats_to_load:
+            if cat_id == 0:
+                continue  # для дефолтной категории отдельный API, не наш кейс
+            sr = await _safe_call(
+                bitrix, "crm.dealcategory.stage.list", {"id": cat_id}, activity.errors,
+            )
+            for s in (sr.get("result") or [] if sr else []):
+                stage_name_by_id[s.get("STATUS_ID")] = (s.get("NAME") or "").lower()
+
+        # 3) «В работе» = стадия по NAME содержит один из паттернов (КП, договор, счёт, ...)
+        active_patterns = [
+            p.strip().lower()
+            for p in settings.sales_report_active_deal_patterns.split(",")
+            if p.strip()
+        ]
+
+        def _is_active_stage(stage_id: str | None) -> bool:
+            name = stage_name_by_id.get(stage_id or "", "")
+            return any(p in name for p in active_patterns)
+
+        active_deals = [d for d in in_cat if _is_active_stage(d.get("STAGE_ID"))]
         activity.deals_active = len(active_deals)
-        # Горячие — по substring match в STAGE_ID
-        hot_patterns = [p.strip().lower() for p in settings.sales_report_hot_stages.split(",") if p.strip()]
-        hot = [d for d in active_deals
-               if any(p in str(d.get("STAGE_ID") or "").lower() for p in hot_patterns)]
-        activity.deals_hot = len(hot)
-        activity.deals_hot_sum = sum(float(d.get("OPPORTUNITY") or 0) for d in hot)
+
+        # «Горячие» (тот же фильтр — alias)
+        activity.deals_hot = len(active_deals)
+        activity.deals_hot_sum = sum(float(d.get("OPPORTUNITY") or 0) for d in active_deals)
+
         # Средний возраст активных сделок (в днях)
         from datetime import datetime as _dt
         ages = []

@@ -96,6 +96,10 @@ class Settings(BaseSettings):
     sales_report_bitrix_user_ids: str = ""   # comma-separated Bitrix user IDs (продажники)
     sales_report_recipients: str = ""         # comma-separated Telegram IDs (кому слать; группы — с минусом)
     sales_report_monthly_plan: int = 220000   # ₽ план на месяц (с НДС)
+    # Воронки сделок которые считаются (остальные = 1С автопродления и т.п.)
+    sales_report_deal_categories: str = "27,31,33"
+    # Паттерны имён стадий «в работе»: substring match, регистронезависимо
+    sales_report_active_deal_patterns: str = "кп,договор,счёт,счет,переговор,согласи,кэв провед,отработк,оплат"
     sales_report_hot_stages: str = "PROPOSAL,PREPARATION,AGREEMENT,INVOICE,NEGOTIATION,UC_TZG8LQ,договор,счёт,КП,коммерч,согласован"
     # ↑ паттерны для «горячих» этапов сделок (substring, регистронезависимо)
 
