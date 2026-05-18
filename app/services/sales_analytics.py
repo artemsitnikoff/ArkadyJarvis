@@ -264,37 +264,39 @@ async def collect_user_activity(
         else:
             in_cat = all_active
 
-        # 2) Фетчим имена стадий для этих воронок (раз в отчёт, кэш per-call)
+        # «В работе» = все сделки в разрешённых воронках (без фильтра стадий)
+        active_deals = in_cat
+        activity.deals_active = len(active_deals)
+
+        # 2) Фетчим имена стадий для этих воронок — нужно для «горячих»
         stage_name_by_id: dict[str, str] = {}
         cats_to_load = {int(d.get("CATEGORY_ID") or 0) for d in in_cat}
         for cat_id in cats_to_load:
             if cat_id == 0:
-                continue  # для дефолтной категории отдельный API, не наш кейс
+                continue
             sr = await _safe_call(
                 bitrix, "crm.dealcategory.stage.list", {"id": cat_id}, activity.errors,
             )
             for s in (sr.get("result") or [] if sr else []):
                 stage_name_by_id[s.get("STATUS_ID")] = (s.get("NAME") or "").lower()
 
-        # 3) «В работе» = стадия по NAME содержит один из паттернов (КП, договор, счёт, ...)
-        active_patterns = [
+        # «Горячие» = подмножество в работе, стадия по NAME подходит под паттерн
+        # (от КП и далее: КП / договор / счёт / переговоры / КЭВ проведён / отработка...)
+        hot_patterns = [
             p.strip().lower()
             for p in settings.sales_report_active_deal_patterns.split(",")
             if p.strip()
         ]
 
-        def _is_active_stage(stage_id: str | None) -> bool:
+        def _is_hot_stage(stage_id: str | None) -> bool:
             name = stage_name_by_id.get(stage_id or "", "")
-            return any(p in name for p in active_patterns)
+            return any(p in name for p in hot_patterns)
 
-        active_deals = [d for d in in_cat if _is_active_stage(d.get("STAGE_ID"))]
-        activity.deals_active = len(active_deals)
+        hot = [d for d in in_cat if _is_hot_stage(d.get("STAGE_ID"))]
+        activity.deals_hot = len(hot)
+        activity.deals_hot_sum = sum(float(d.get("OPPORTUNITY") or 0) for d in hot)
 
-        # «Горячие» (тот же фильтр — alias)
-        activity.deals_hot = len(active_deals)
-        activity.deals_hot_sum = sum(float(d.get("OPPORTUNITY") or 0) for d in active_deals)
-
-        # Средний возраст активных сделок (в днях)
+        # Средний возраст всех активных сделок (в днях)
         from datetime import datetime as _dt
         ages = []
         now_dt = _dt.now(ZoneInfo(tz_name))
