@@ -49,18 +49,40 @@ class DailySalesActivity:
     period_label: str = "сегодня"
     period_days: int = 1
     last_login: str | None = None
+
+    # Лиды
     leads_created: int = 0
+    leads_active: int = 0
     leads_examples: list[dict] = field(default_factory=list)
+
+    # Сделки
+    deals_created: int = 0
+    deals_active: int = 0
+    deals_modified: int = 0
+    deals_won: int = 0
+    deals_won_sum: float = 0.0
+    deals_hot: int = 0
+    deals_hot_sum: float = 0.0
+    avg_deal_age_days: float = 0.0
+    deal_examples: list[dict] = field(default_factory=list)
+
+    # План/факт за календарный месяц
+    month_won_sum: float = 0.0
+    month_won_count: int = 0
+    monthly_plan: float = 0.0
+
+    # Дела/активность
     activities_done: int = 0
     activity_types: dict[str, int] = field(default_factory=dict)
+    stage_changes: int = 0  # переходы сделок по этапам
     comments_count: int = 0
-    deals_modified: int = 0
-    deal_examples: list[dict] = field(default_factory=list)
-    tasks_done: int = 0
+
+    # Звонки
     calls_count: int = 0
     calls_total_seconds: int = 0
     calls_by_direction: dict[str, int] = field(default_factory=dict)
-    calls: list[CallInfo] = field(default_factory=list)  # детальный список
+    calls: list[CallInfo] = field(default_factory=list)
+
     errors: list[str] = field(default_factory=list)
 
 
@@ -180,7 +202,7 @@ async def collect_user_activity(
     if comments_resp:
         activity.comments_count = len(comments_resp.get("result") or [])
 
-    # Сделки в которых что-то менялось
+    # Сделки модифицированы за период
     deals_resp = await _safe_call(
         bitrix, "crm.deal.list",
         {
@@ -189,13 +211,24 @@ async def collect_user_activity(
                 "<=DATE_MODIFY": day_end,
                 "ASSIGNED_BY_ID": user_id,
             },
-            "select": ["ID", "TITLE", "STAGE_ID", "OPPORTUNITY", "CURRENCY_ID"],
+            "select": ["ID", "TITLE", "STAGE_ID", "OPPORTUNITY", "CURRENCY_ID",
+                       "DATE_CREATE", "CLOSED", "CLOSEDATE"],
         },
         activity.errors,
     )
+    modified_deals: list[dict] = []
     if deals_resp:
-        deals = deals_resp.get("result") or []
-        activity.deals_modified = len(deals)
+        modified_deals = deals_resp.get("result") or []
+        activity.deals_modified = len(modified_deals)
+        # Созданные за период
+        activity.deals_created = sum(
+            1 for d in modified_deals if (d.get("DATE_CREATE") or "") >= day_start
+        )
+        # WON за период
+        won = [d for d in modified_deals
+               if str(d.get("STAGE_ID") or "").endswith("WON") and d.get("CLOSED") == "Y"]
+        activity.deals_won = len(won)
+        activity.deals_won_sum = sum(float(d.get("OPPORTUNITY") or 0) for d in won)
         activity.deal_examples = [
             {
                 "id": d.get("ID"),
@@ -203,24 +236,91 @@ async def collect_user_activity(
                 "stage": d.get("STAGE_ID"),
                 "amount": d.get("OPPORTUNITY"),
                 "currency": d.get("CURRENCY_ID"),
-            } for d in deals[:5]
+            } for d in modified_deals[:5]
         ]
 
-    # Задачи (общий модуль, не CRM-активности)
-    tasks_resp = await _safe_call(
-        bitrix, "tasks.task.list",
+    # Все открытые (активные) сделки менеджера — для счёта горячих / среднего возраста
+    active_resp = await _safe_call(
+        bitrix, "crm.deal.list",
         {
-            "filter": {
-                ">=CLOSED_DATE": day_start,
-                "<=CLOSED_DATE": day_end,
-                "RESPONSIBLE_ID": user_id,
-            },
+            "filter": {"ASSIGNED_BY_ID": user_id, "CLOSED": "N"},
+            "select": ["ID", "TITLE", "STAGE_ID", "OPPORTUNITY", "DATE_CREATE"],
+        },
+        activity.errors,
+    )
+    if active_resp:
+        active_deals = active_resp.get("result") or []
+        activity.deals_active = len(active_deals)
+        # Горячие — по substring match в STAGE_ID
+        hot_patterns = [p.strip().lower() for p in settings.sales_report_hot_stages.split(",") if p.strip()]
+        hot = [d for d in active_deals
+               if any(p in str(d.get("STAGE_ID") or "").lower() for p in hot_patterns)]
+        activity.deals_hot = len(hot)
+        activity.deals_hot_sum = sum(float(d.get("OPPORTUNITY") or 0) for d in hot)
+        # Средний возраст активных сделок (в днях)
+        from datetime import datetime as _dt
+        ages = []
+        now_dt = _dt.now(ZoneInfo(tz_name))
+        for d in active_deals:
+            ds = d.get("DATE_CREATE")
+            if not ds:
+                continue
+            try:
+                dt = _dt.fromisoformat(ds.replace("Z", "+00:00"))
+                ages.append((now_dt - dt).days)
+            except Exception:
+                pass
+        activity.avg_deal_age_days = round(sum(ages) / len(ages), 1) if ages else 0.0
+
+    # Активные лиды (не JUNK / не CONVERTED)
+    active_leads_resp = await _safe_call(
+        bitrix, "crm.lead.list",
+        {
+            "filter": {"ASSIGNED_BY_ID": user_id, "!STATUS_ID": ["JUNK", "CONVERTED"]},
             "select": ["ID"],
         },
         activity.errors,
     )
-    if tasks_resp:
-        activity.tasks_done = len((tasks_resp.get("result") or {}).get("tasks") or [])
+    if active_leads_resp:
+        activity.leads_active = len(active_leads_resp.get("result") or [])
+
+    # План/факт — WON за календарный месяц
+    tz = ZoneInfo(tz_name)
+    now = datetime.now(tz)
+    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0).isoformat()
+    month_won_resp = await _safe_call(
+        bitrix, "crm.deal.list",
+        {
+            "filter": {
+                "ASSIGNED_BY_ID": user_id,
+                ">=CLOSEDATE": month_start,
+                "STAGE_SEMANTIC_ID": "S",   # successful (WON)
+            },
+            "select": ["ID", "OPPORTUNITY"],
+        },
+        activity.errors,
+    )
+    if month_won_resp:
+        won_month = month_won_resp.get("result") or []
+        activity.month_won_count = len(won_month)
+        activity.month_won_sum = sum(float(d.get("OPPORTUNITY") or 0) for d in won_month)
+    activity.monthly_plan = float(settings.sales_report_monthly_plan)
+
+    # Переходы сделок по этапам за период — proxy через timeline events
+    stage_events_resp = await _safe_call(
+        bitrix, "crm.timeline.bindings.list",
+        {
+            "filter": {
+                ">=CREATED": day_start,
+                "<=CREATED": day_end,
+                "AUTHOR_ID": user_id,
+                "TYPE_ID": "STAGE_CHANGE",  # may or may not be supported
+            },
+        },
+        activity.errors,
+    )
+    if stage_events_resp:
+        activity.stage_changes = len(stage_events_resp.get("result") or [])
 
     # Звонки voximplant — может не быть включено
     calls_resp = await _safe_call(

@@ -94,7 +94,10 @@ class Settings(BaseSettings):
 
     # Sales department analytics — daily report at 19:00 from Bitrix24
     sales_report_bitrix_user_ids: str = ""   # comma-separated Bitrix user IDs (продажники)
-    sales_report_recipients: str = ""         # comma-separated Telegram IDs (кому слать)
+    sales_report_recipients: str = ""         # comma-separated Telegram IDs (кому слать; группы — с минусом)
+    sales_report_monthly_plan: int = 220000   # ₽ план на месяц (с НДС)
+    sales_report_hot_stages: str = "PROPOSAL,PREPARATION,AGREEMENT,INVOICE,NEGOTIATION,UC_TZG8LQ,договор,счёт,КП,коммерч,согласован"
+    # ↑ паттерны для «горячих» этапов сделок (substring, регистронезависимо)
 
     # Zabbix monitoring channel — bot listens for Zabbix alerts here
     zabbix_channel_id: int = 0  # e.g. -1001423899560
