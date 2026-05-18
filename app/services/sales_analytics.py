@@ -220,7 +220,7 @@ async def collect_user_activity(
     )
     modified_deals: list[dict] = []
     if deals_resp:
-        modified_deals = deals_resp.get("result") or []
+        modified_deals = deals_resp.get("result") or []  # noqa
         activity.deals_modified = len(modified_deals)
         # Созданные за период
         activity.deals_created = sum(
@@ -250,6 +250,7 @@ async def collect_user_activity(
         },
         activity.errors,
     )
+    active_deals: list[dict] = []
     if active_resp:
         active_deals = active_resp.get("result") or []
         activity.deals_active = len(active_deals)
@@ -308,8 +309,18 @@ async def collect_user_activity(
         activity.month_won_sum = sum(float(d.get("OPPORTUNITY") or 0) for d in won_month)
     activity.monthly_plan = float(settings.sales_report_monthly_plan)
 
-    # NB: переходы сделок по этапам — нет надёжного публичного API.
-    # Косвенно: deals_modified отражает движение по воронке.
+    # Переходы сделок по этапам за период — crm.stagehistory.list по каждой сделке менеджера
+    deal_ids = set()
+    for d in modified_deals:
+        if d.get("ID"):
+            deal_ids.add(str(d["ID"]))
+    for d in active_deals:
+        if d.get("ID"):
+            deal_ids.add(str(d["ID"]))
+    if deal_ids:
+        activity.stage_changes = await _count_stage_changes(
+            bitrix, list(deal_ids), day_start, day_end,
+        )
 
     # Звонки voximplant — может не быть включено
     calls_resp = await _safe_call(
@@ -560,3 +571,47 @@ def build_transcripts_bundle(activities: list[DailySalesActivity]) -> str:
             out.append("---")
             out.append("")
     return "\n".join(out)
+
+
+async def _count_stage_changes(
+    bitrix, deal_ids: list[str], day_start: str, day_end: str,
+) -> int:
+    """Считает сколько переходов по этапам сделок было в период.
+
+    `crm.stagehistory.list` у Bitrix не умеет фильтровать по менеджеру —
+    только по OWNER_ID (это ID сделки). Поэтому N+1: для каждой сделки
+    отдельный запрос. Параллелим (5 одновременно), ошибки тихо игнорим.
+    """
+    if not deal_ids:
+        return 0
+    sem = asyncio.Semaphore(5)
+
+    async def _one(deal_id: str) -> int:
+        async with sem:
+            try:
+                r = await bitrix._request(
+                    "crm.stagehistory.list",
+                    {
+                        "entityTypeId": 2,  # DEAL
+                        "filter": {
+                            "OWNER_ID": deal_id,
+                            ">=CREATED_TIME": day_start,
+                            "<=CREATED_TIME": day_end,
+                        },
+                    },
+                )
+                items = r.get("result") or {}
+                if isinstance(items, dict):
+                    items = items.get("items") or []
+                return len(items) if isinstance(items, list) else 0
+            except Exception as e:
+                logger.debug("stagehistory deal=%s: %s", deal_id, e)
+                return 0
+
+    counts = await asyncio.gather(*[_one(d) for d in deal_ids])
+    total = sum(counts)
+    logger.info(
+        "stagehistory: %d transitions across %d deals (%s..%s)",
+        total, len(deal_ids), day_start[:10], day_end[:10],
+    )
+    return total
