@@ -308,21 +308,8 @@ async def collect_user_activity(
         activity.month_won_sum = sum(float(d.get("OPPORTUNITY") or 0) for d in won_month)
     activity.monthly_plan = float(settings.sales_report_monthly_plan)
 
-    # Переходы сделок по этапам за период — proxy через timeline events
-    stage_events_resp = await _safe_call(
-        bitrix, "crm.timeline.bindings.list",
-        {
-            "filter": {
-                ">=CREATED": day_start,
-                "<=CREATED": day_end,
-                "AUTHOR_ID": user_id,
-                "TYPE_ID": "STAGE_CHANGE",  # may or may not be supported
-            },
-        },
-        activity.errors,
-    )
-    if stage_events_resp:
-        activity.stage_changes = len(stage_events_resp.get("result") or [])
+    # NB: переходы сделок по этапам — нет надёжного публичного API.
+    # Косвенно: deals_modified отражает движение по воронке.
 
     # Звонки voximplant — может не быть включено
     calls_resp = await _safe_call(
