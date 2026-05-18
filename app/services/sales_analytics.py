@@ -15,6 +15,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
+from app.config import settings
+
 logger = logging.getLogger("arkadyjarvis")
 
 
