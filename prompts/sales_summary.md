@@ -15,8 +15,8 @@ Telegram-HTML, лимит 2500 символов. По каждому менед�
 📞 Звонков: {calls_count} (общее время: {минуты})
    📥 Входящих: {N}   📞 Исходящих: {N}   ❌ Пропущенных: {N}
 
-🎯 Лиды: создано {leads_created} / в работе {leads_active}
-💼 Сделки: создано {deals_created} / в работе {deals_active} / модифицировано {deals_modified}
+🎯 Лиды: создано {leads_created} / в работе <b>{leads_active}</b>
+💼 Сделки: создано <b>{deals_created}</b> / в работе {deals_active} / модифицировано {deals_modified}
 🔥 Горячие сделки (КП/договор/счёт): {deals_hot} на <b>{deals_hot_sum} ₽</b>
 🏆 Закрыто WON за период: {deals_won} на {deals_won_sum} ₽
 
