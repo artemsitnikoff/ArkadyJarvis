@@ -275,12 +275,16 @@ async def collect_user_activity(
                 pass
         activity.avg_deal_age_days = round(sum(ages) / len(ages), 1) if ages else 0.0
 
-    # Активные лиды (не JUNK / не CONVERTED)
+    # Активные лиды — все где статус НЕ "успех" (S=CONVERTED) и НЕ "отказ" (F=JUNK/Дубль/Дорого/...)
+    # Bitrix хранит семантику статуса в STATUS_SEMANTIC_ID: NULL=в работе, S=success, F=fail.
     active_leads_resp = await _safe_call(
         bitrix, "crm.lead.list",
         {
-            "filter": {"ASSIGNED_BY_ID": user_id, "!STATUS_ID": ["JUNK", "CONVERTED"]},
-            "select": ["ID"],
+            "filter": {
+                "ASSIGNED_BY_ID": user_id,
+                "!STATUS_SEMANTIC_ID": ["S", "F"],
+            },
+            "select": ["ID", "STATUS_ID"],
         },
         activity.errors,
     )
