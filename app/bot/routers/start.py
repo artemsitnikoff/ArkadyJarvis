@@ -55,6 +55,7 @@ MENU_KB = InlineKeyboardMarkup(inline_keyboard=[
         InlineKeyboardButton(text="👔 Глафира", callback_data="hint:recruiter"),
     ],
     [
+        InlineKeyboardButton(text="🏠 Мисис Хадсон", callback_data="hint:hudson"),
         InlineKeyboardButton(text="❓ Все команды", callback_data="hint:all"),
     ],
 ])
@@ -370,6 +371,10 @@ async def handle_hint(
         return
     if key == "recruiter":
         await _enter_recruiter(callback, state, potok)
+        return
+    if key == "hudson":
+        from app.bot.routers.hudson import enter_hudson
+        await enter_hudson(callback, ai_client)
         return
 
     # Data-driven FSM-entry hints (set state + show prompt).

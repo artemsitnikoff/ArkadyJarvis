@@ -111,6 +111,8 @@ class Settings(BaseSettings):
     # Мисис Хадсон — РОП P&Q (Алина Васькова, bitrix_id=37).
     # Получает копию сводки по всем задачам, которые Хадсон ставит менеджерам.
     hudson_dept_head_bitrix_id: int = 37
+    # TG IDs кому доступна кнопка «🏠 Мисис Хадсон» (я + менеджеры P&Q)
+    hudson_allowed: str = ""
 
     # Telethon userbot (for sending messages from recruiter's personal account)
     telethon_api_id: int = 0

@@ -31,6 +31,7 @@ def create_dispatcher() -> Dispatcher:
     from app.bot.routers.glafira import router as glafira_router
     from app.bot.routers.recruiter import router as recruiter_router
     from app.bot.routers.stirlitz import router as stirlitz_router
+    from app.bot.routers.hudson import router as hudson_router
     from app.bot.routers.zabbix import router as zabbix_router
     from app.bot.routers.group import router as group_router
     from app.bot.routers.buffer import router as buffer_router
@@ -51,6 +52,7 @@ def create_dispatcher() -> Dispatcher:
         glafira_router,
         recruiter_router,
         stirlitz_router,
+        hudson_router,
         zabbix_router,
         group_router,
         buffer_router,  # catch-all — must be last
