@@ -1,322 +1,302 @@
 # ArkadyJarvis
 
-Multi-user Telegram bot (BotFather, NOT userbot) for team chat summarization, Bitrix24 calendar/CRM, Jira integration, AI assistants (general, legal, recruiter, office-manager), image generation, recruiter scoring (Potok.io), contract validation, voice-to-lead, and scheduled motivational content.
+Multi-user Telegram bot (BotFather, NOT userbot) для команды Digital Clouds: суммаризация чатов, Bitrix24 calendar/CRM, Jira, AI-ассистенты (общий, юрист, рекрутёр, офис-менеджер, бизнес-разведка), генерация изображений, скоринг резюме (Potok.io), проверка договоров, voice-to-lead, аналитика отдела продаж, мониторинг Zabbix, регулярный мотивационный контент.
 
 ## Tech Stack
 
 - **Python 3.11+**, aiogram v3 (Telegram Bot API), FastAPI + Uvicorn
-- **AI**: Claude CLI (subscription-based, no API tokens) via subprocess; OpenRouter (Gemini 3 Pro Image for image generation, Gemini 2.5 Pro for voice transcription)
-- **Integrations**: Bitrix24 REST API, Jira REST API, Potok.io ATS API, OpenClaw (browser RPA via AI)
-- Uvicorn owns the event loop; aiogram polling runs as `asyncio.create_task()` in FastAPI lifespan
-- APScheduler for cron jobs (daily summary, Wednesday frog, Monday poster)
-- aiosqlite for persistence (users, message buffer, group chats, muted groups)
-- pydantic-settings for config from `.env`
-- pypdf + python-docx for document parsing (contract check, Cicero)
+- **AI**:
+  - Claude CLI (subscription, `--print` subprocess) для всех текстовых задач — Sonnet по-умолчанию, Haiku для дешёвых классификаторов (`model="claude-haiku-4-5-20251001"`)
+  - OpenRouter — **только** аудио/видео: Gemini 3 Pro Image (генерация), Gemini 2.5 Pro (транскрипция voice / mp3 со звонков)
+- **Userbot**: Telethon (StringSession) для чтения истории каналов (Zabbix backfill), отправки сообщений кандидатам с личного аккаунта рекрутёра
+- **Integrations**: Bitrix24 REST + Bitrix calendar-sharing короткие ссылки; Jira REST; Potok.io ATS (REST API + frontend `/client_api/*` через cookies для HH-messaging); OpenClaw (browser RPA); DaData (карточки ЮЛ по ИНН, бесплатный API key); ГИР БО ФНС (`bo.nalog.gov.ru` — бухотчётность, без авторизации); SBIS/Saby — рассматривали для разведки, отказались (нужна платная VOK-лицензия)
+- Uvicorn owns the event loop; aiogram polling запускается как `asyncio.create_task()` в FastAPI lifespan
+- APScheduler — все cron-задачи (daily summary, frog, poster, zabbix check, sales dept summary)
+- aiosqlite — все persistent state
+- pydantic-settings — `.env`
+- pypdf + python-docx — извлечение текста для contract check / Cicero
 
 ## Project Structure
 
 ```
 app/
-  main.py                  # FastAPI app, lifespan, aiogram polling, APScheduler
-  config.py                # pydantic-settings (Settings class, reads .env)
-  db.py                    # aiosqlite: schema, CRUD (users, group_chats, message_buffer, muted_groups)
-  utils.py                 # Parsers (time, attendees, Bitrix datetime), constants, merge_intervals, md_to_telegram_html(), parse_json_response()
-  summarizer.py            # Claude summarization (group chat + daily overview)
+  main.py                  # FastAPI app, lifespan, polling, scheduler, инжекция сервисов
+  config.py                # pydantic-settings Settings — все ENV
+  db.py                    # aiosqlite schema + CRUD (users, group_chats, message_buffer, muted_groups, recruiter_contacts, zabbix_problems)
+  utils.py                 # parse_meeting_time/attendees, md_to_telegram_html, parse_json_response, merge_intervals
+  summarizer.py            # Claude-суммаризация чатов и daily overview
   version.py               # __version__
   bot/
-    create.py              # create_bot() + create_dispatcher() — router registration order matters
-    middlewares.py         # ErrorMiddleware + AuthMiddleware (both handle Message and CallbackQuery)
+    create.py              # create_bot() + create_dispatcher() — порядок роутеров КРИТИЧЕН
+    middlewares.py         # ErrorMiddleware + AuthMiddleware (Message + CallbackQuery)
     routers/
-      start.py             # /start (auto-auth via @username -> Bitrix), /help, MENU_KB, hint callbacks, "Мои встречи", team, work:*
-      summarize.py         # /summary command — on-demand chat summarization
-      meeting.py           # FSM MeetingSetup — time/date/attendee parsing, Bitrix meeting creation
-      free_slots.py        # FSM BookSlot — calendar accessibility + slot booking
-      _attendee_picker.py  # Shared inline-keyboard helpers for meeting + free_slots attendee search
-      jira_task.py         # FSM CreateTask — raw input reformatted via prompts/jira_task_template.md before ticket creation
-      lead.py              # FSM CreateLead — text OR voice; voice transcribed via OpenRouter; AI extracts fields -> Bitrix CRM
-      image.py             # FSM ImageGen — image generation via Gemini 3 Pro Image, supports photo+caption editing
-      ask_ai.py            # FSM AskAI — Claude answers, md_to_telegram_html conversion
-      contract.py          # FSM ContractCheck — parse PDF/DOCX/TXT, check against rules in prompts/contract_check.md
-      employee.py          # FSM FindEmployee + employee card display
-      cicero.py            # FSM Cicero — legal consultant (RU law), persistent chat with optional document attachments
-      socrates.py          # FSM Socrates — meeting analyser (Yandex.Disk/direct URL → ffmpeg → transcript → review → expertise)
-      glafira.py           # Glafira (AI office manager) — FSM chatting mode, OpenClaw streaming
-      recruiter.py         # Глафира (AI recruiter) — Potok.io integration, candidate scoring via injected AIClient
-      work.py              # Work day start logic (start_work_day callback handler with AI greeting)
-      group.py             # on_bot_added / on_bot_removed — tracks group_chats in DB
-      buffer.py            # Catch-all (LAST router): buffers all group messages to SQLite
+      start.py             # /start (Bitrix-auth по @username), /help, MENU_KB, hint:* dispatcher (включая Stirlitz/Recruiter/Glafira), команда, мои встречи
+      summarize.py         # /summary slash-команда
+      meeting.py           # FSM MeetingSetup — встречи в Bitrix
+      free_slots.py        # FSM BookSlot — поиск слотов + бронирование
+      _attendee_picker.py  # Общий attendee-search для meeting/free_slots
+      jira_task.py         # FSM CreateTask — Claude reformat → Jira issue
+      lead.py              # FSM CreateLead (текст/voice через OpenRouter → Bitrix CRM lead)
+      image.py             # FSM ImageGen — Gemini 3 Pro Image (текст или photo+caption)
+      ask_ai.py            # FSM AskAI — Claude с персонажем «Джарвис Аркадия» (prompts/ask_ai_system.md)
+      contract.py          # FSM ContractCheck — PDF/DOCX/TXT → Claude по prompts/contract_check.md
+      employee.py          # FSM FindEmployee + карточка сотрудника
+      cicero.py            # FSM Cicero — юрист по RU праву (persistent chat)
+      socrates.py          # FSM Socrates — анализ записи встречи (URL→ffmpeg→Gemini→Claude×2)
+      stirlitz.py          # FSM Stirlitz — разведка по компании/человеку (DaData + ГИР БО + WebSearch)
+      glafira.py           # «Марфа» (AI офис-менеджер) — OpenClaw streaming. ВНИМАНИЕ: persona в UI = «Марфа», файл/класс остался Glafira
+      recruiter.py         # «Глафира» (AI рекрутёр) — Potok.io скоринг + Telethon-рассылка + HH-fallback. Persona UI = «Глафира», класс = Recruiter
+      zabbix.py            # channel_post handler для Zabbix-канала → SQLite
+      work.py              # work:* callback (dead code — кнопки удалены, файл оставлен)
+      group.py             # on_bot_added/removed — track group_chats
+      buffer.py            # Catch-all (LAST!) — буферизация всех group messages
   services/
-    ai_client.py           # AIClient — Claude CLI wrapper (subprocess `claude --print`), configurable timeout (default 120s, 300s for scorer/contract/cicero)
-    claude_token.py        # Claude OAuth token auto-refresh (file-based data/.claude_token.json), protected by asyncio.Lock
-    bitrix_client/         # BitrixClient — refactored into package with mixins
-      __init__.py           # BitrixClient class (combines all mixins)
-      _base.py              # _BitrixBase — OAuth file-based tokens, HTTP client (timeout=30s), auto-refresh
-      _calendar.py          # _BitrixCalendarMixin — calendar events, free slots, create_meeting, get_user_events (today only, filters declined/cancelled)
-      _crm.py               # _BitrixCRMMixin — leads, CRM operations
-      _timeman.py           # _BitrixTimemanMixin — work day start/status via timeman API
-      _users.py             # _BitrixUsersMixin — user lookup, email guests, find_user_by_nickname, get_my_team
-    jira_client.py         # JiraClient — async context manager (timeout=30s); retries create_issue without assignee on "cannot be assigned"
-    document_parser.py     # Extract text from .pdf/.docx/.txt for contract check and Cicero
-    ffmpeg_tool.py         # ffmpeg/ffprobe wrappers (convert_to_opus, probe_duration) — Socrates stage 0
-    meeting_downloader.py  # Download recording from Yandex.Disk public API or direct URL
-    meeting_pipeline.py    # Socrates orchestration: transcribe → review → expertise
-    openclaw_client.py     # OpenClawClient — HTTP SSE client for OpenClaw gateway (per-user agent isolation via user_id)
-    openrouter_client.py   # OpenRouterClient — image generation (Gemini 3 Pro Image) + voice transcription w/ diarization (Gemini 2.5 Pro)
-    prompts.py             # load_prompt(name) — loads templates from prompts/ directory
-    potok_client.py        # PotokClient — Potok.io ATS API (jobs, applicants via ajs_joins, scoring push)
-    potok_models.py        # Pydantic models: Job, Applicant, Resume, CvParams, ScoringResult, ScoreBreakdown
-    resume_scorer.py       # score_applicant(job, applicant, *, ai_client) — builds prompt, parses JSON, 300s timeout
+    ai_client.py           # AIClient — Claude CLI wrapper (subprocess). Параметры: prompt, timeout, system_prompt, allowed_tools, model
+    claude_token.py        # Auto-refresh CLAUDE_CODE_OAUTH_TOKEN (data/.claude_token.json, asyncio.Lock — single-use refresh)
+    bitrix_client/         # BitrixClient — пакет с миксинами
+      __init__.py           # композиция миксинов
+      _base.py              # _BitrixBase — OAuth file-based, httpx(timeout=30), auto-refresh
+      _calendar.py          # _BitrixCalendarMixin — события, free slots, create_meeting, get_user_events
+      _crm.py               # _BitrixCRMMixin — лиды, операции CRM
+      _timeman.py           # _BitrixTimemanMixin — timeman API (start of work day — кнопки убраны но API живой)
+      _users.py             # _BitrixUsersMixin — user.get, email guests, find_user_by_nickname, get_my_team
+    jira_client.py         # JiraClient — async context manager. Auto-retries без assignee
+    document_parser.py     # Извлечение текста из PDF/DOCX/TXT
+    ffmpeg_tool.py         # convert_to_opus, probe_duration — Socrates stage 0
+    meeting_downloader.py  # Скачивание из Yandex.Disk / Google Drive / прямой URL
+    meeting_pipeline.py    # Socrates orchestration
+    openclaw_client.py     # OpenClawClient — HTTP SSE, per-user agent isolation
+    openrouter_client.py   # OpenRouterClient — generate_image + transcribe_voice(format="ogg"|"mp3"|…)
+    prompts.py             # load_prompt(name) — чтение prompts/<name>.md
+    potok_client.py        # PotokClient — Potok.io REST (Bearer-токен): jobs, applicants, scoring push, stage move, кэш questions, post comments
+    potok_frontend.py      # PotokFrontendClient — frontend /client_api/* через DeviseTokenAuth (3 cookie/header) — отправка HH-сообщений
+    potok_models.py        # Pydantic: Job, Applicant (+ accounts), Resume, CvParams, AjsJoin (+ state_id), ScoringResult, ScoreBreakdown
+    resume_scorer.py       # score_applicant(job, applicant, *, ai_client) — Claude scoring + questions
+    rejection_classifier.py # classify_rejection_intent(text, ai_client) — Haiku scoring (0-100) ответа кандидата на «отказ»
+    userbot.py             # UserbotClient (Telethon) — send_to_user, resolve_phone (ImportContactsRequest), on_incoming hook
+    dadata_client.py       # DaDataClient — find_by_id (по ИНН), suggest (по названию)
+    giro_client.py         # GiroClient — bo.nalog.gov.ru: search org, fetch bfo (выручка/активы по годам)
+    stirlitz.py            # Orchestrator: classify_intent (Haiku) → company_inn|company_name|person|clarify → DaData+GIRO или WebSearch
+    sales_analytics.py     # DailySalesActivity + collect_user_activity (Bitrix metrics + voximplant calls + транскрипция через openrouter+ai_client)
+    zabbix_monitor.py      # parse_zabbix_message (regex по 🔴/🟢), check_unresolved_and_create_jira
   scheduler/
-    jobs.py                # daily_summary_job, wednesday_frog_job, monday_poster_job (+ FROG_STYLES list)
+    jobs.py                # daily_summary_job, wednesday_frog_job, monday_poster_job, sales_dept_summary_job, zabbix_check_unresolved_job
   api/
-    routes.py              # GET /api/health, POST /api/bitrix/notify, POST /api/bitrix/broadcast (webhook endpoints)
+    routes.py              # GET /api/health, POST /api/bitrix/notify, POST /api/bitrix/broadcast
 prompts/
-  contract_check.md        # Contract validation checklist (company requisites, VAT, acceptance terms, etc.)
-  cicero.md                # Legal consultant system prompt (ГК, КоАП, АПК, НК, КонсультантПлюс)
-  jira_task_template.md    # Meta-prompt that reformats raw task description into structured ticket
-  voice_transcribe.md      # Diarization prompt for voice messages
-  wednesday_frog.md        # Meta-prompt for Wed 10:00 cartoon frog meme (with {style} placeholder)
-  monday_poster.md         # Meta-prompt for Mon 09:00 Soviet-30s-style IT motivational poster
+  contract_check.md        # Чек-лист проверки договора
+  cicero.md                # Юрист-консультант (ГК, КоАП, АПК, НК)
+  jira_task_template.md    # Reformat задачи под наш шаблон
+  voice_transcribe.md      # Diarization (Lead voice + Socrates stage 1)
+  wednesday_frog.md        # Мем-лягушка с {style}
+  monday_poster.md         # Constructivist IT-плакат
+  meeting_review.md        # Socrates stage 2
+  meeting_brief.md         # Socrates stage 3
+  ask_ai_system.md         # Персонаж «Джарвис Аркадия» для AskAI
+  digital_clouds_context.md # SHARED — описание DC (4 юнита, цели 2026, проблемы) для всех sales-/recon-промптов
+  stirlitz.md              # Card компании по DaData+ГИР БО (вызывает WebSearch)
+  stirlitz_person.md       # Recon человека через WebSearch (LinkedIn, Habr, VK)
+  stirlitz_intent.md       # Haiku-диспетчер: company_inn|company_name|person|clarify (JSON)
+  rejection_classifier.md  # Haiku-классификатор отказа в ответе кандидата (0-100)
+  sales_summary.md         # Общий отчёт по продажнику (с DC-контекстом, «играющий РОП»-укол)
+  sales_call_analysis.md   # Per-call разбор «📝 Суть / ✅ Хорошо / ⚠️ Улучшить» (с правилами фильтрации спам-входящих и игнорирования ASR-артефактов)
 data/
   arkadyjarvis.db          # SQLite database
-  bitrix_tokens.json       # Bitrix OAuth tokens (auto-refreshed)
-  .claude_token.json       # Claude OAuth tokens (auto-refreshed, single-use refresh tokens)
+  bitrix_tokens.json       # Bitrix OAuth (auto-refreshed)
+  .claude_token.json       # Claude OAuth (auto-refreshed, single-use refresh)
 scripts/
-  show_users.py            # CLI: all users + last activity (from message_buffer, 7-day window)
-  show_groups.py           # CLI: all group chats + 7-day message counts + mute/summary flags
-  test_wednesday_frog.py   # Manually fire Wednesday frog for a given chat_id
-  test_monday_poster.py    # Manually fire Monday poster for a given chat_id
+  show_users.py            # CLI users + activity (7d)
+  show_groups.py           # CLI group_chats counts
+  test_wednesday_frog.py   # Manual Wed frog
+  test_monday_poster.py    # Manual Mon poster
+  create_userbot_session.py # Сгенерировать TELETHON_SESSION (StringSession) — разовый интерактив
+  scan_zabbix_month.py     # Backfill Zabbix history за 30 дней через userbot → создание Jira-задач
+  test_potok_events.py     # Дамп Potok events на applicant (для отладки questions marker)
+  test_potok_move_stage.py # Brute-force подбора endpoint смены стадии в Potok (исторический)
+  test_potok_communicate_frontend.py # Тест отправки HH через /client_api/communicate (с auto-extract channels)
+  test_potok_hh_messaging.py # Discovery — какие endpoints доступны для HH
+  test_potok_communicate.py # Те же endpoints через публичный Bearer (для проверки что не пускают)
+  test_sbis_auth.py        # SBIS/Saby — discovery interactive login (исторический, отказались)
+  test_sbis_partner.py     # SBIS partner spp-rest-api проверка (исторический)
+  test_rejection_classifier.py # Прогон rejection LLM на встроенных кейсах
+  test_sales_report.py     # Полный sales report end-to-end — печать + опц. отправка всем из SALES_REPORT_RECIPIENTS (--no-send для dry-run)
+  list_user_leads.py       # Аудит активных лидов менеджера по статусам
+  inspect_applicant.py     # Поиск кандидата по имени во ВСЕХ вакансиях (для «ghost» candidates)
+  inspect_hh_channels.py   # Расшифровка accounts[].url ?t=<channel> у HH-кандидатов
 ```
 
 ## Key Patterns
 
 ### Architecture
-- **AIClient** wraps Claude CLI (`claude --print --output-format text`) as subprocess. Uses `CLAUDE_CODE_OAUTH_TOKEN` env var. Token auto-refreshed by `claude_token.py` (serialised via `asyncio.Lock` — single-use refresh tokens must not race). Default 120s timeout, configurable per call. On timeout: `proc.kill()` + cleanup.
-- **BitrixClient** is a singleton, refactored into package with mixins (`_base`, `_users`, `_calendar`, `_crm`, `_timeman`). File-based OAuth (`data/bitrix_tokens.json`), auto-refresh on expiry, `httpx.AsyncClient(timeout=30)`.
-- **OpenRouterClient** is a singleton for image generation and voice transcription.
-- **PotokClient** is a singleton for Potok.io ATS API (recruiter functionality).
-- **JiraClient** uses a single integration user from settings: `async with JiraClient() as jira:`. Maps Telegram user to Jira reporter/assignee via Bitrix email lookup. `timeout=30`. Auto-retries `create_issue` without `assignee` if Jira returns 400 "cannot be assigned" — Jira then picks project default (usually project lead).
-- All persistent state in SQLite via `app/db.py` (`buffer_message` commits on every INSERT to avoid data loss on crash).
-- Services injected into dispatcher in `main.py` lifespan: `dp["ai_client"]`, `dp["bitrix"]`, `dp["openrouter"]`, `dp["openclaw"]`, `dp["potok"]`.
-- **ErrorMiddleware** wraps `Message` and `CallbackQuery` handlers — catches unhandled exceptions, logs them, replies with generic error (via `message.reply` or `callback.answer(show_alert=True)`).
-- **AuthMiddleware** injects `db_user: dict` into every handler's kwargs for both messages AND callbacks. For messages: checks muted groups, gates auth-required triggers. For callbacks: only injection, no gating (individual handlers enforce access via `GLAFIRA_ALLOWED`, `RECRUITER_ALLOWED`, etc.).
-- Muted groups: bot collects messages for summarization but blocks responses. Checked in AuthMiddleware. CRUD: `db.is_group_muted()`, `db.add_muted_group()`, `db.remove_muted_group()`.
+
+- **AIClient** (`services/ai_client.py`) — обёртка над `claude --print --output-format text`. Параметры:
+  - `prompt` — текст
+  - `timeout` (default 120)
+  - `system_prompt` — добавляется через `--append-system-prompt` (только AskAI его использует)
+  - `allowed_tools` — comma-separated. Используется выборочно для read-only tools (`WebSearch,WebFetch` в Штирлице). Изменяет `--disallowed-tools` исключая их из ban-list.
+  - `model` — override `settings.claude_model` per-call. Hint классификаторы передают `"claude-haiku-4-5-20251001"`.
+  - **Security**: subprocess запускается с `cwd="/tmp"` — иначе CLI подхватывает project CLAUDE.md как system context и считает все вопросы «вне темы».
+  - **Security**: `--disallowed-tools` блокирует `Bash, BashOutput, KillShell, Read, Write, Edit, MultiEdit, NotebookEdit, Glob, Grep, WebFetch, WebSearch, Task, Agent, SlashCommand, TodoWrite, ExitPlanMode` — был critical RCE bug когда пользователь писал «сделай cd, ls» и CLI реально запускал шелл.
+- **BitrixClient** — singleton, миксины (`_base`, `_users`, `_calendar`, `_crm`, `_timeman`). File-based OAuth (`data/bitrix_tokens.json`), auto-refresh.
+- **OpenRouterClient** — singleton. `generate_image(prompt, image_b64?)`, `transcribe_voice(path, audio_format="ogg")` — формат настраивается (mp3 для записей звонков).
+- **PotokClient** — singleton, Bearer-токен через `POTOK_API_TOKEN`. In-memory cache вопросов (`_questions_cache`) — заполняется при `push_scoring`, читается при отправке вопросов в Telegram.
+- **PotokFrontendClient** — отдельный singleton для `/client_api/*` (HH-messaging). Auth через 3 заголовка DeviseTokenAuth (`access-token`, `client`, `uid`). Токены статичны (не ротируются), TTL ~5 месяцев. Получаются один раз из браузерной сессии (DevTools → Network → любой XHR на online.sbis... извини, на app.potok.io).
+- **UserbotClient** (Telethon) — `send_to_user(user_id, text)`, `resolve_phone(phone)` через `ImportContactsRequest` (+ автоматический cleanup). Слушает `events.NewMessage(incoming=True)`. В `main.py` регистрируется callback `_on_candidate_reply` — при входящем от tg_id из `recruiter_contacts` сообщение сохраняется в Potok + классифицируется на «отказ» через `rejection_classifier`. Если score > порог — `potok.set_applicant_active(active=False)` + audit-комментарий.
+- **JiraClient** — async context manager. Auto-retry без assignee.
+- **DaDataClient** — `find_by_id(inn)` (точный поиск), `suggest(query)` (свободный поиск). 10k запросов/сутки бесплатно.
+- **GiroClient** — публичный API `bo.nalog.gov.ru`, без авторизации. `get_summary(inn)` → выручка/активы по годам.
+- Все сервисы инжектятся в dispatcher в lifespan: `dp["ai_client"]`, `dp["bitrix"]`, `dp["openrouter"]`, `dp["openclaw"]`, `dp["potok"]`, `dp["potok_frontend"]`, `dp["dadata"]`, `dp["giro"]`, `dp["userbot"]`.
+- **ErrorMiddleware** + **AuthMiddleware** на Message и CallbackQuery (порядок: error wraps auth wraps handler).
+- **AuthMiddleware** инжектит `db_user` во ВСЕ хендлеры; gating для protected команд только в message-mode.
 
 ### Router Registration Order (in `create.py`)
-Order matters — `buffer.py` must be last (catch-all):
-1. start → 2. summarize → 3. meeting → 4. free_slots → 5. jira_task → 6. lead → 7. image → 8. ask_ai → 9. contract → 10. employee → 11. cicero → 12. socrates → 13. glafira → 14. recruiter → 15. group → 16. buffer
+
+Order matters — `buffer.py` ВСЕГДА последний (catch-all):
+
+1. start → 2. summarize → 3. meeting → 4. free_slots → 5. jira_task → 6. lead → 7. image → 8. ask_ai → 9. contract → 10. employee → 11. cicero → 12. socrates → 13. glafira → 14. recruiter → 15. stirlitz → 16. zabbix → 17. group → 18. **buffer**
+
+⚠️ ВАЖНО про `hint:*` callbacks: общий обработчик `F.data.startswith("hint:")` в `start.py` ловит ВСЕ hint-клики первым. Узкие хендлеры в роутерах-фичах перебить его НЕ могут. Любая новая кнопка-открыватель FSM должна быть зарегистрирована в `_simple_fsm_hints()` внутри `start.py`.
+
+### Personas naming (исторический своп)
+
+- `recruiter.py` (Potok.io scoring) → отображается как **«Глафира»** в UI (👔)
+- `glafira.py` (OpenClaw office-manager) → отображается как **«Марфа»** в UI (🤖)
+- Файлы/классы/callback-ID **НЕ переименованы** во избежание ломки. Только display strings в `start.py` и сообщениях.
 
 ### Authorization Flow
-1. User sends `/start` → bot looks up `@username` in Bitrix field (configured via `BITRIX_TELEGRAM_FIELD`, default `UF_USR_1678964886664`)
-2. If found → saves `(telegram_id, bitrix_user_id, display_name)` to `users` table
-3. AuthMiddleware blocks protected commands if user not authorized
-4. Public commands: `/start`, `/help` — always allowed without auth
-5. Callback handlers receive `db_user` via middleware; use it for auth-gated flows
+
+1. `/start` → Bitrix lookup `@username` (поле `BITRIX_TELEGRAM_FIELD`, default `UF_USR_1678964886664`)
+2. Найдено → `(telegram_id, bitrix_user_id, display_name)` в `users`
+3. AuthMiddleware блокирует protected для unauth users
+4. Public: `/start`, `/help`
 
 ### MENU_KB (Inline Keyboard)
-Defined in `start.py`. Layout (rows top → bottom):
-- Начать день в офисе
-- Начать день удалённо
-- ── separator ──
+
+Defined в `start.py`. Текущая раскладка:
 - Сотрудник | Моя команда
 - Встреча | Найди время
 - Задача | Лид
 - Мои встречи | Картинка
 - Спроси AI | Суммаризация
 - Проверь договор | Цицерон
-- Марфа | Глафира
+- 🎓 Сократ | 🕵️ Штирлиц
+- 🤖 Марфа | 👔 Глафира
 - Все команды
 
-Re-sent after every successful action. Imported by other routers: `from app.bot.routers.start import MENU_KB`. Every hint response includes `BACK_MENU_KB` ("◀️ Меню") for navigation back; `back:menu` callback calls `state.clear()`.
-
-### Interactive Menu Buttons (FSM)
-All MENU_KB buttons are interactive — clicking opens a working mode via FSM state. Button-only UX: there are no text regex triggers anymore (e.g. "создай встречу" / "нарисуй" / "ситников" — all removed). `/summary` slash command is the one exception, still works in groups.
-
-### Meeting Creation
-- Entry: "Встреча" button → FSM `MeetingSetup.waiting_for_command`
-- `utils.parse_meeting_time()`: supports `HH:MM`, `HHMM`, `DD.MM`, `DD месяц`
-- `utils.parse_attendees()`: emails removed from text BEFORE @nick extraction
-- @nicks → `BitrixClient.find_user_by_nickname()` (Bitrix field `UF_USR_1678964886664`)
-- Emails → `BitrixClient.resolve_email_user()`: user.get → email guest cache → description fallback
-- User-supplied strings HTML-escaped before sending to Telegram
-
-### Free Slots + Booking (FSM)
-- Entry: "Найди время" button → FSM `BookSlot.searching_attendee` → interactive search
-- Computes free slots for 5 business days (9:00-19:00)
-- Splits into hourly chunks, builds inline keyboard with slot buttons
-- FSM states: `searching_attendee` → `waiting_for_title` → `waiting_for_slot` → (`waiting_for_topic`)
-- User picks slot → types meeting title → `BitrixClient.create_meeting()`
-- Stale button handler (without StateFilter) shows alert "Кнопки устарели"
-- Handler registration order critical: `handle_slot_selected` (with StateFilter) BEFORE `handle_stale_slot`
-
-### Bitrix24 Email Guests
-- `user.get` **excludes** email-type guests (documented Bitrix limitation)
-- Email guests found via `im.user.list.get` — cached in `BitrixClient._email_guests_cache`
-- Cannot create email guests via API, only through Bitrix UI
-
-### My Meetings (Мои встречи)
-- Button in MENU_KB → `hint:meetings` callback → `_show_meetings()` in `start.py`
-- Fetches today's events via `bitrix.get_user_events(bitrix_user_id)`
-- Filters: `DELETED != "Y"`, `DATE_FROM` starts with today, `MEETING_STATUS != "N"` (declined), `STATUS != "CANCELLED"`
-- Logs every raw event's `MEETING_STATUS`/`STATUS`/`ACCESSIBILITY` for diagnostics
-- Displays as inline buttons with time + name, linking to Bitrix calendar event URL
-
-### Image Generation
-- Entry: "Картинка" button → FSM `ImageGen.waiting_for_prompt` (text prompt or photo+caption)
-- Uses `OpenRouterClient.generate_image()` via `google/gemini-3-pro-image-preview`
-- Supports photo+caption mode: downloads photo, resizes to max 1024px, sends as base64 alongside prompt
-- Handles multiple response formats from OpenRouter (images array, data URI in string, multimodal content array)
+«Начать день в офисе/удалённо» **удалены** (команда использует Bitrix24 check-in вместо них).
 
 ### Ask AI
-- Entry: "Спроси AI" button → FSM `AskAI.waiting_for_question`
-- Uses `AIClient.complete()` (Claude CLI)
-- Response converted via `md_to_telegram_html()` from `utils.py`
 
-### Contract Check
-- Entry: "Проверь договор" button → FSM `ContractCheck.waiting_for_document`
-- User uploads PDF/DOCX/TXT → `document_parser.extract_text()` extracts plain text
-- Prompt template loaded from `prompts/contract_check.md` via `prompts.load_prompt()`
-- Prompt + text sent to `AIClient.complete(timeout=300)`
-- Document text truncated to 120K chars to fit context
-- Short answers sent as HTML text; long answers sent as `.md` attachment with a short preview caption (avoids breaking HTML entities across chunks)
+- Entry: «Спроси AI» → FSM `AskAI.waiting_for_question`
+- `prompts/ask_ai_system.md` — персонаж «Джарвис Аркадия» (Digital Clouds), универсальный помощник
+- Передаётся через `--append-system-prompt`
+- Без agentic поведения (все tools заблокированы)
+
+### Stirlitz (B2B разведка)
+
+- Entry: 🕵️ Штирлиц → FSM `Stirlitz.waiting_for_query`
+- **Diapatcher** через Haiku (`prompts/stirlitz_intent.md`): пользовательский запрос (история до 6 сообщений) → JSON `{kind: company_inn|company_name|person|clarify, ...}`
+- **`company_*`**: `DaData.find_by_id`/`suggest` + `GiroClient.get_summary` → JSON → Claude (Sonnet) с `prompts/stirlitz.md` + DC-контекстом + **WebSearch** для свежих новостей/тендеров. allowed_tools="WebSearch,WebFetch"
+- **`person`**: Claude (Sonnet) с `prompts/stirlitz_person.md` + WebSearch — ищет LinkedIn, Habr, VK, конференции
+- **`clarify`**: FSM остаётся в waiting_for_query, бот задаёт вопрос → пользователь уточняет → Haiku видит обе реплики
+- Краткие карточки → в чат; длинные (>4000 символов) → .md attachment
+
+### Sales Department Analytics
+
+Полный аудит активности продажника из Bitrix24, на двух cron-расписаниях.
+
+**Cron:**
+- Дневной 19:00 (`SUMMARY_HOUR`), **только пн-пт** (`day_of_week="mon-fri"`)
+- Недельный пятница 18:00
+
+**Адресаты:** `SALES_REPORT_RECIPIENTS` (Telegram IDs через запятую; группы — с минусом, например `-4729014928`). Бот должен быть участником группы.
+
+**Метрики (`sales_analytics.collect_user_activity`):**
+- **Лиды**: `created` (за период), `active` — фильтр `!STATUS_SEMANTIC_ID IN [S, F]` (Bitrix сам определяет «в работе» через семантику статусов)
+- **Сделки**: `created`/`active`/`modified`/`won` (+`won_sum`)/`hot` (+`hot_sum`)/`avg_deal_age_days`
+  - `deals_active` = все open в разрешённых воронках (`SALES_REPORT_DEAL_CATEGORIES`, default `27,31,33` — Услуги Б24, Общая, ПиК; исключает «Счета 1С» cat 0, «Продление Битрикс» cat 29, «Квал» cat 23 — там «фантомные» сделки менеджера)
+  - `deals_hot` = subset где имя стадии совпадает с `SALES_REPORT_ACTIVE_DEAL_PATTERNS` (default `кп,договор,счёт,счет,переговор,согласи,кэв провед,отработк,оплат`). Имена стадий тянутся через `crm.dealcategory.stage.list`
+- **План/факт за календарный месяц**: `month_won_sum` + `monthly_plan` (env `SALES_REPORT_MONTHLY_PLAN`, default 220000₽). WON считается через `STAGE_SEMANTIC_ID=S` + `>=CLOSEDATE start_of_month`
+- **Дела**: `activities_done` (звонки/встречи/задачи через `crm.activity.list`), `stage_changes` через `crm.stagehistory.list` — N+1 fetch по каждой сделке менеджера (фильтра по user в API нет, только OWNER_ID=deal_id), параллелится sem(5)
+- **Комментарии**: `crm.timeline.comment.list` (AUTHOR_ID=user_id)
+- **Звонки** (voximplant.statistic.get):
+  - Раздельно in/out/missed/callback по `CALL_TYPE` (1/2/3/4)
+  - `entity_type`/`entity_name` резолвится через `crm.lead.get|contact.get|company.get|deal.get` (cached в `_enrich_calls`)
+  - **Транскрипция** (если `with_transcripts=True`): скачиваем mp3 с Bitrix Disk через `disk.file.get` → Gemini 2.5 Pro `transcribe_voice(audio_format="mp3")` → Sonnet анализ через `prompts/sales_call_analysis.md` (с DC-контекстом и правилами фильтрации: не считать поставщиков воды нашими лидами, игнорить ASR-артефакты в произношении email и т.п.)
+  - Параллельно sem(3), лимит max_transcripts=25 (топ по длительности)
+  - Звонки <15 сек без транскрипции (короткие гудки)
+
+**AI-отчёт** (`prompts/sales_summary.md`):
+- Подгружает `prompts/digital_clouds_context.md`
+- Формат с `<b>` (Telegram-HTML), жирно выделены ключевые цифры
+- Блок «План/факт» с emoji-индикатором 🔴/🟡/🟢
+- Конверсия WON/лиды
+- В конце — обращение «играющего РОПа» по имени менеджера. Формула 1+1+1+1: оценка → за что похвалить (обязательно) → конкретное действие на завтра → подбадривающая фраза. Жёстко при нулях, без оскорблений. Цель — чтобы менеджер не хандрил.
+
+**.md-attachment**: после основного сообщения шлётся `calls_transcripts_<N>d.md` со всеми разобранными звонками (разделы per-менеджер и per-звонок: метаданные + 3-строчный AI-разбор + полный диаризованный транскрипт).
+
+**Ручной запуск:**
+```bash
+docker compose exec bot python scripts/test_sales_report.py <bitrix_user_id> [days] [--no-send]
+```
+
+### Recruiter «Глафира» (Potok.io)
+
+- Access control: `RECRUITER_ALLOWED` (TG IDs через запятую)
+- FSM: `Recruiter.choosing_job` → `confirming` → `scoring | contacting | inviting`
+- **Загрузка кандидатов**: `/api/v3/jobs/{id}/ajs_joins.json` (cursor pagination). Фильтр `active=False` — пропускаем рефузнутых/нанятых/архивных (они появляются в API но в UI Potok их не видно)
+- **Скоринг** (`resume_scorer.score_applicant`):
+  - Claude Sonnet, prompt с DC-вакансией + опц. секцией `Важно для CLAUDE:` (`extract_recruiter_instructions`)
+  - Из job description вырезаются `Владельцы:` и `Ссылка для встречи:` строки (через `_strip_admin_lines`) — Claude их не видит
+  - Возвращает JSON: score 0-100, breakdown, strengths, weaknesses, **questions** (5 вопросов для первого контакта)
+  - Кэш вопросов в `_questions_cache: dict[applicant_id, list[str]]`
+- **Push в Potok**: HTML-комментарий + префикс `{score:03d}-` к фамилии + JARVIS-маркер `<!-- JARVIS:QUESTIONS:[...] -->` для машинного парсинга позже
+- **Auto-promote** (`push_scoring`): при `score > SALES_REPORT_HIGH_SCORE_THRESHOLD` (default 80) и текущей стадии в `POTOK_HIGH_SCORE_SOURCE_STAGES` (default `Добавлен,Откликнулся`) → `move_applicant_to_stage(target=POTOK_HIGH_SCORE_STAGE)` (default `Контакт с рекрутером`)
+- **Stage filtering**: `_filter_by_stage` (job_id, stage_name) для стадий "Интервью с рекрутером" и "Интервью с менеджером" (`MANAGER_INTERVIEW_STAGE_NAME`). Исключает `state_id != None` и `active == False`
+
+**Кнопка «📞 Связаться с кандидатами» (стадия «Интервью с рекрутером»):**
+- Per-candidate карточка → «✉️ Написать» — отправляет intro («Я представляю компанию `RECRUITER_COMPANY` …») + вопросы (одним сообщением, нумерованные)
+- «✉️ Написать всем» — bulk с throttle 1.5с между сообщениями, обрабатывает `FloodWaitError`/`PeerFloodError`, прогресс каждые 5
+- Канал: Telegram через `userbot.send_to_user` (если есть `resolve_phone`) → fallback **HH через PotokFrontendClient** (`accounts[].url ?t=<channel_id>` → POST `/client_api/jobs/{job}/{applicant}/communication/communicate.json` с payload `{"communication_envelopes": [{"provider":"headhunter","channels":[...],"message":{"body":...}}]}`)
+- HH работает только если у кандидата есть активный negotiation (HH deprecated cold messaging для employer)
+- При успехе сохраняем `recruiter_contacts` (telegram_user_id → applicant_id, job_id) — для отслеживания ответов
+- Финальный отчёт по статусам (sent / sent_hh / no_phone / no_questions / no_channel / send_failed / hh_failed) с поимёнными списками
+
+**Кнопка «📅 Пригласить на собеседование» (стадия «Интервью с менеджером»):**
+- Парсит `Владельцы: @vasya,@petya` и `Ссылка для встречи: https://...` из описания вакансии (`_extract_owners`, `_extract_meeting_link`)
+- Резолвит имена владельцев через `bitrix.find_user_by_nickname`
+- Шлёт через Telegram (userbot) приглашение с ссылкой на Bitrix calendar-sharing
+- Pre-validation: если в описании нет ссылки → ошибка с предложением добавить
+
+**Auto-reject входящих ответов кандидатов:**
+- В `main.py _on_candidate_reply` (зарегистрирован на `userbot.set_reply_handler`) для каждого входящего:
+  1. Lookup `recruiter_contacts` по `sender_id`
+  2. `potok.post_candidate_reply` — сохраняем как комментарий в Potok (формат «❓ Заданные вопросы:» + «💬 Ответ кандидата:»)
+  3. `classify_rejection_intent(text, ai_client)` через Haiku по `prompts/rejection_classifier.md` → {score, reasoning}
+  4. Если `score > REJECTION_CLASSIFIER_THRESHOLD` (default 70) → `potok.set_applicant_active(active=False)` + audit-комментарий
+
+### Zabbix Monitor
+
+- **Real-time** (`bot/routers/zabbix.py`): `@router.channel_post(F.chat.id == settings.zabbix_channel_id, F.text)` парсит сообщения от Zabbix-бота через regex (🔴 = открытие, 🟢 = закрытие; key = `Original problem ID`). UPSERT в `zabbix_problems` таблицу.
+- **Cron 10:00** (`zabbix_check_unresolved_job`): берёт проблемы где `resolved_at IS NULL AND jira_task_key IS NULL AND opened_at <= now-24h`, фильтрует по severity (Warning+ через `ESCALATING_SEVERITIES = {Warning, Average, High, Disaster}`), создаёт Jira-задачу в `ZABBIX_JIRA_PROJECT` (default `DA`), маркирует `jira_task_key` чтобы не задвоить.
+- **Backfill**: `scripts/scan_zabbix_month.py` использует **Telethon-userbot** (обычный бот не умеет читать историю каналов) для 30-дневного скана + создание задач по всему ещё открытому.
+
+### Cicero, Contract, Meeting, Free Slots, Lead, Image, Socrates — без изменений, см. `prompts/` и роутеры.
 
 ### Socrates (Meeting Analyser)
-- Entry: "Сократ" button → FSM `Socrates.waiting_for_url` — user posts a URL to the recording
-- Open to every authorised user. A per-user `asyncio.Lock` prevents one user from stacking parallel pipelines (each run spends Gemini + Claude ×2 + up to 1 GiB download)
-- Every URL (original + Yandex-resolved + each redirect hop) passes an SSRF guard: DNS resolution + private-address blocklist (loopback / RFC1918 / link-local / CGNAT 100.64.0.0/10 / IPv6 ULA / IPv4-mapped IPv6). `follow_redirects=False` with a manual 5-hop loop re-validates every target
-- Telegram bot uploads cap at 20 MB, so **only URLs are accepted**. Auto-resolved sources: Yandex.Disk public links (via `cloud-api.yandex.net`) and Google Drive share links (`/file/d/{ID}/view`, `?id={ID}` → rewritten to `drive.usercontent.google.com/download?...&confirm=t`, which bypasses the virus-scan warning page for public files). Direct HTTPS URLs work too.
-- After redirects resolve, the response `Content-Type` is checked: if it starts with `text/html`, we abort with a readable error instead of letting ffmpeg choke on an HTML page (Drive viewer / "request access" stub / etc.)
-- Stage 0: `meeting_downloader.download_meeting()` streams to a temp dir (ceiling 1 GiB) → `ffmpeg_tool.convert_to_opus()` produces mono 16 kHz opus @ 24 kbps → `probe_duration()` via ffprobe
-- Meetings longer than `MEETING_MAX_MINUTES` (default 90) are rejected with a clear message — long recordings would overflow the OpenRouter base64 payload
-- Stage 1: `OpenRouterClient.transcribe_voice()` → diarized markdown transcript
-- Stage 2: Claude CLI with `prompts/meeting_review.md` → meeting review (protocol: decisions, next steps, open questions)
-- Stage 3: Claude CLI with `prompts/meeting_brief.md` + transcript + review → analyst brief ("zero stage" prep: glossary, facts, vague wordings, strong quotes, 1–2-day domain onboarding plan, draft TOC of the future SOW, starter action list). Intentionally NOT an expert review — the human analyst does the judgement, AI just saves the first 2–4 hours of prep.
-- All three artifacts are delivered as `.md` file attachments (`1_transcript.md`, `2_review.md`, `3_brief.md`)
-- Temp directory (downloaded file + ogg) is wiped in `finally`
-- `ffmpeg` is installed in the Docker image (apt package)
 
-### Prompt files
-- `contract_check.md` — contract validation checklist
-- `cicero.md` — legal consultant system prompt
-- `jira_task_template.md` — raw task description → structured Jira ticket
-- `voice_transcribe.md` — diarization prompt (used by both Lead voice input and Socrates stage 1)
-- `wednesday_frog.md` — Wed 10:00 meme generator
-- `monday_poster.md` — Mon 09:00 constructivist IT poster
-- `meeting_review.md` — Socrates stage 2 (review / protocol)
-- `meeting_brief.md` — Socrates stage 3 (analyst brief: glossary, facts, onboarding plan, draft SOW TOC)
+- Entry: 🎓 Сократ → FSM `Socrates.waiting_for_url`
+- Per-user `asyncio.Lock` против параллельных пайплайнов
+- SSRF guard: DNS resolution + private-address blocklist на каждый redirect hop
+- URL only (Telegram cap 20 MB). Поддерживаются Yandex.Disk, Google Drive (`?id=`/`/file/d/{ID}/view` → rewrite на `drive.usercontent.google.com/download?...&confirm=t`), прямые URL
+- Content-Type check на ответе после редиректов — если text/html, abort
+- ffmpeg → mono 16kHz opus 24kbps; `MEETING_MAX_MINUTES` (default 90)
+- Gemini (диаризация) → Claude×2 (review + brief). 3 артефакта `.md`
+- OpenRouter: **retry один раз** при `provider_overloaded` (HTTP 200 + embedded 503 in choice payload) и любом 5xx через `_transcribe_once` → возвращает `TranscriptionResult(retryable=True)` → wrapper повторяет через 5с
 
-### Cicero (Legal Consultant)
-- Entry: "Цицерон" button → FSM `Cicero.chatting` (persistent — multiple questions in a row)
-- Accepts both plain text questions and documents (PDF/DOCX/TXT) with a caption
-- System prompt from `prompts/cicero.md` (RU law consultant: ГК, КоАП, АПК, НК РФ, КонсультантПлюс)
-- No conversation history — each question is standalone (prompt + question/document)
-- Long answers attached as `.md` files, same as Contract Check
-- Exits via "◀️ Меню" (`back:menu` callback clears FSM)
+### Daily Summary / Wed Frog / Mon Poster
 
-### Jira Task — AI Reformat
-- Entry: "Задача" button → FSM `CreateTask.waiting_for_input`
-- User types `DC <free-form description>` (DC = project key)
-- Raw input reformatted via `prompts/jira_task_template.md` + Claude CLI → structured text (Задача / Приоритет / Контекст / Что сделать / Блокеры / Ожидаемый результат / Ориентир начала работ)
-- Summary extracted from `**Задача:**` headline (line-by-line parse, strips markdown, collapses whitespace, caps 200 chars); falls back to first line of input
-- Structured text becomes Jira `description`
-- `jira_client.create_issue` retries without `assignee` if Jira returns 400 "cannot be assigned" → project lead is used
-
-### Lead — Text or Voice
-- Entry: "Лид" button → FSM `CreateLead.waiting_for_info`
-- **Text**: AI extractor (`prompts/voice_transcribe.md` NOT used here; inline `EXTRACT_PROMPT` in `lead.py`) parses into NAME/LAST_NAME/COMPANY_TITLE/PHONE/EMAIL/COMMENTS
-- **Voice** (Telegram voice, `F.voice`): downloads `.ogg` to temp file → `OpenRouterClient.transcribe_voice()` with diarization (prompts/voice_transcribe.md) → formatted `full_text` ("S1 [0:00]: ...") feeds the same text extractor → Bitrix lead
-- Temp `.ogg` always deleted in `finally`
-- `SOURCE_ID=OTHER`, `SOURCE_DESCRIPTION=Telegram-бот ArkadyJarvis`, creator's Telegram contact appended to `COMMENTS` for traceability
-- Final reply HTML-escaped against `<`/`&`/`>` in names/companies
-
-### Recruiter "Глафира" (Potok.io Integration)
-- **Potok.io** — ATS (Applicant Tracking System) for recruitment
-- Access control: `RECRUITER_ALLOWED` env var (comma-separated Telegram IDs)
-- Flow: "Глафира" button → intro message → load jobs from Potok → user picks job → show description + candidate counts → score new or rescore all
-- FSM states: `Recruiter.choosing_job` → `Recruiter.confirming` → `Recruiter.scoring`
-- **Candidate loading**: uses `/api/v3/jobs/{id}/ajs_joins.json` (cursor pagination) to get all applicant IDs, then fetches details per applicant via `/api/v3/applicants/{id}.json` in parallel batches of 5 with 0.5s delay between batches (rate limit protection). Retry up to 3 times on 429 with `Retry-After`; raises `RuntimeError` if retries exhausted.
-- **Scoring**: `resume_scorer.score_applicant(job, applicant, *, ai_client)` — takes the dispatcher-injected `AIClient`, builds prompt (job desc + applicant resume/experience/skills) → Claude returns JSON with score 0-100, breakdown, strengths, weaknesses. 300s timeout.
-- **Recruiter instructions**: job description can contain `"Важно для CLAUDE:"` section — extracted and injected as special instructions into the scoring prompt
-- **Score push**: result posted as HTML comment to Potok event + applicant last_name prefixed with `{score:03d}-` for sorting (e.g., `085-Иванов`)
-- **Skip scored**: candidates with `^\d{3}-` last_name prefix considered already scored
-- **Telegram message limit**: scoring result text truncated to 4096 chars (Telegram max). Full result still goes to Potok comment.
-- Stop button during scoring loop (`recruit:stop` callback)
-- Job and applicant data cached in FSM after initial load (no duplicate fetches on score/rescore)
-- Score labels: >=81 "Отлично", >=61 "Хорошо", >=41 "Средне", <41 "Слабо"
-
-### Summarization
-- `summarizer.py`: Claude prompt asks for HTML `<b>`, `<i>`, `<code>` tags only (no markdown, no unsupported tags)
-- Input truncated to `MAX_INPUT_CHARS = 100_000` (~25K tokens)
-- Summary button in DM: `_run_summary()` in `start.py` fetches all groups the user belongs to (via `bot.get_chat_member`) and builds `daily_overview`
-- Summary button in group: summarizes the current chat only
-- `/summary` slash command: same as group button — summarizes current chat
-
-### Daily Summary Job (scheduler/jobs.py)
-- Runs at configured time (default 19:00 Novosibirsk)
-- Summarizes each enabled group chat separately (summaries NOT sent to groups)
-- Builds personalized daily overview per user: filters groups by membership via `bot.get_chat_member()`
-- Sends overview **to each active user via DM** (not to group chats)
-- `db.get_active_users()` returns all users with `is_active=1`
-- Cleans up messages older than 7 days
-
-### Wednesday Frog Job (scheduler/jobs.py)
-- Runs every Wednesday at 10:00 local timezone
-- Skipped if `WEDNESDAY_FROG_CHAT_ID` is 0/unset
-- Pipeline:
-  1. Random style picked from `FROG_STYLES` (65 recognizable styles: Picasso, Van Gogh, anime, Ghibli, Pollock, noir, pixel-art, synthwave, Moebius, etc.) and injected into `prompts/wednesday_frog.md` via `{style}` placeholder
-  2. Claude CLI renders a fresh scene around a cartoon frog + caption "Со средой, мои чуваки!"
-  3. `OpenRouterClient.generate_image()` (Gemini 3 Pro Image) renders the picture
-- Sent via `bot.send_photo()`; caption shows which style was used
-- Manual test: `scripts/test_wednesday_frog.py [chat_id]` (default -790607108)
-
-### Monday Poster Job (scheduler/jobs.py)
-- Runs every Monday at 09:00 local timezone
-- Skipped if `MONDAY_POSTER_CHAT_ID` is 0/unset
-- Generates a constructivist 1930s-style motivational poster (Rodchenko/Lissitzky/Klutsis visual language — red/black/white palette, diagonals, photomontage — **without** Soviet iconography) with caption "Наконец-то понедельник — и на любимую работу!"
-- Hero is an IT-specialist each week (developer, DevOps, SRE, QA, PM, analyst, designer, tech lead, data scientist, etc.)
-- Prompt template: `prompts/monday_poster.md`
-- Manual test: `scripts/test_monday_poster.py [chat_id]` (default -790607108)
-
-### Claude CLI (AI Client)
-- `AIClient.complete(prompt, timeout=120)` → calls `claude --print --output-format text` as subprocess
-- argv logged before each call (so `--model claude-opus-4-7` is visible in server.log)
-- Token: `CLAUDE_CODE_OAUTH_TOKEN` env var, auto-refreshed via `claude_token.py`
-- `claude_token.py`: stores tokens in `data/.claude_token.json`, refresh tokens are single-use, refreshes 10 min before expiry
-- `ensure_fresh_token()` is protected by module-level `asyncio.Lock` — parallel callers wait on the lock; second caller re-reads the file and skips refresh if another task already rotated the token
-- `init_token_file()` seeds from `CLAUDE_CODE_OAUTH_TOKEN` + `CLAUDE_REFRESH_TOKEN` env vars on first run
-- Optional model override via `CLAUDE_MODEL` setting (e.g., `claude-opus-4-7`)
-- On timeout: `proc.kill()` + `await proc.wait()` to prevent zombie processes
-
-### OpenRouter
-- Used for image generation (Gemini 3 Pro Image) and voice transcription (Gemini 2.5 Pro)
-- API key: `OPENROUTER_API_KEY`, text/audio model: `OPENROUTER_MODEL` (default `google/gemini-2.5-pro`)
-- `generate_image(prompt, image_b64?)` — returns raw PNG bytes
-- `transcribe_voice(ogg_path)` — returns `TranscriptionResult` (success flag, speakers_count, segments with start/end/speaker/text, formatted `full_text` like `S1 [0:00]: …`). Used in Lead router for voice input.
-
-### Glafira (AI Office Manager via OpenClaw)
-- **OpenClaw** — AI agent that controls browser via prompts (RPA), installed on Mac
-- Mac (OpenClaw gateway): Tailscale IP `100.96.205.95:18789`, bind `lan` (0.0.0.0)
-- Ubuntu server (Jarvis prod): Tailscale IP `100.109.25.60`
-- Gateway auth: token-based (`OPENCLAW_TOKEN`), HTTP endpoint `/v1/chat/completions`
-- **OpenClawClient** (`app/services/openclaw_client.py`): HTTP SSE streaming via httpx, `stream_chat(messages)` yields text chunks
-- **Glafira router**: FSM state `Glafira.chatting`, persistent conversation mode (FSM not cleared after each response)
-- Access control: `GLAFIRA_ALLOWED` env var (comma-separated Telegram IDs)
-- Streaming UX: sends "Думаю...", edits it as chunks arrive (throttled: 0.8s between edits, min 20 new chars), `html.escape()` on content
-- Stream exceptions narrow: `TelegramBadRequest` ("not modified" ignored, others logged), `TelegramRetryAfter` backs off
-- Exit via `glafira:exit` callback to properly clear FSM state
-- Conversation history stored in FSM data, capped at 20 messages
-- OpenClaw model: Claude Sonnet 4.6 via OpenRouter
-- OpenClaw workspace config: `~/.openclaw/workspace/` (SOUL.md, TOOLS.md, MEMORY.md)
-
-### Potok.io API Details
-- **API docs**: https://api-doc.potok.io/ (RapiDoc UI, OpenAPI spec at `potok-api-v3.yml`)
-- **No server-side filtering**: `/api/v3/applicants` ignores all query params except `per_page` and `page`. Hard limit: 99 pages (9900 records). Sorting params ignored too.
-- **Candidate loading by job**: Use `/api/v3/jobs/{job_id}/ajs_joins.json` (cursor-based pagination with `page_cursor` + `per_page`). Returns `objects[]` with `applicant_id`, `job_id`, `stage`, etc. No record limit.
-- **Applicant details**: `/api/v3/applicants/{id}.json` — full profile with `ajs_joins`, `resumes`, `events`
-- **Rate limiting**: 429 Too Many Requests on parallel batch requests. Keep batches ≤5, add 0.5s delay between batches, retry with `Retry-After` header.
-- **Job details**: V2 (`/api/v2/jobs/{id}.json`) returns description in HTML; V3 returns more fields including `stages`, `applicants_count`
-- **Score push**: `POST /api/v3/events.json` (comment) + `PATCH /api/v3/applicants/{id}.json` (last_name with score prefix)
-- **Assessment cards API**: read-only, POST returns 404. Dynamic fields PATCH returns 200 but doesn't save.
+См. соответствующие jobs в `scheduler/jobs.py`. Wed Frog — рандомный стиль из `FROG_STYLES`. Mon Poster — конструктивистский плакат с IT-героем.
 
 ## Database Schema (aiosqlite)
 
@@ -324,49 +304,112 @@ All MENU_KB buttons are interactive — clicking opens a working mode via FSM st
 users (telegram_id PK, bitrix_user_id, bitrix_domain, display_name, is_active, created_at)
 group_chats (chat_id PK, chat_title, added_at, summary_enabled)
 message_buffer (id PK AUTO, chat_id, sender_id, sender_name, text, sent_at) + INDEX(chat_id, sent_at)
-muted_groups (chat_id PK) — groups where bot collects messages but doesn't respond to triggers
+muted_groups (chat_id PK)
+
+-- Recruiter ↔ Telegram бридж: кому из кандидатов писали, чтобы ловить их ответы
+recruiter_contacts (
+    telegram_user_id PK, phone, applicant_id, job_id, job_name, applicant_name, created_at
+)
+
+-- Zabbix problem state (real-time + backfill)
+zabbix_problems (
+    problem_id PK, host, name, severity, opened_at, resolved_at, jira_task_key,
+    raw_text, last_seen
+) + INDEX idx_zabbix_unresolved(resolved_at, jira_task_key, opened_at)
 ```
 
 ## Config (.env)
 
-Required: `BOT_TOKEN`
+### Required
+- `BOT_TOKEN` — Telegram BotFather
 
-AI: `CLAUDE_CODE_OAUTH_TOKEN`, `CLAUDE_REFRESH_TOKEN` (for auto-refresh), `CLAUDE_CLI_PATH` (default `claude`), `CLAUDE_MODEL` (optional override, e.g. `claude-opus-4-7`), `CLAUDE_OAUTH_CLIENT_ID` (default official Claude Code ID)
+### AI
+- `CLAUDE_CODE_OAUTH_TOKEN`, `CLAUDE_REFRESH_TOKEN`
+- `CLAUDE_CLI_PATH` (default `claude`)
+- `CLAUDE_MODEL` — опц. override (например `claude-opus-4-7`)
+- `CLAUDE_OAUTH_CLIENT_ID` — default official Claude Code ID
+- `OPENROUTER_API_KEY`, `OPENROUTER_MODEL` (default `google/gemini-2.5-pro`), `OPENROUTER_TIMEOUT` (default 300s)
 
-OpenRouter: `OPENROUTER_API_KEY`, `OPENROUTER_MODEL` (default `google/gemini-2.5-pro` — used for voice transcription), `OPENROUTER_TIMEOUT` (default 300s, read/write; connect is always 10s)
+### Bitrix24
+- `BITRIX_CLIENT_ID`, `BITRIX_CLIENT_SECRET`, `BITRIX_DOMAIN`, `BITRIX_REFRESH_TOKEN` (first run only)
+- `BITRIX_TELEGRAM_FIELD` (default `UF_USR_1678964886664`)
+- `BITRIX_EMAIL_GUESTS_SCAN_MAX` (2000), `BITRIX_EMAIL_GUESTS_MULTIPLIER` (3)
 
-Bitrix24: `BITRIX_CLIENT_ID`, `BITRIX_CLIENT_SECRET`, `BITRIX_DOMAIN`, `BITRIX_REFRESH_TOKEN` (first run only), `BITRIX_TELEGRAM_FIELD` (default `UF_USR_1678964886664`), `BITRIX_EMAIL_GUESTS_SCAN_MAX` (default 2000), `BITRIX_EMAIL_GUESTS_MULTIPLIER` (default 3)
+### Potok.io
+- `POTOK_API_TOKEN`, `POTOK_BASE_URL` (default `https://app.potok.io`)
+- `POTOK_AFTER_CONTACT_STAGE` (default `Скриннинг резюме` — типо «Скрининг», на стороне Potok с опечаткой)
+- `POTOK_HIGH_SCORE_THRESHOLD` (80), `POTOK_HIGH_SCORE_STAGE` (`Контакт с рекрутером`), `POTOK_HIGH_SCORE_SOURCE_STAGES` (`Добавлен,Откликнулся`)
+- **Frontend session** (для HH-messaging через `/client_api/*`):
+  - `POTOK_FRONTEND_ACCESS_TOKEN`
+  - `POTOK_FRONTEND_CLIENT`
+  - `POTOK_FRONTEND_UID`
+  - Извлекаются из браузерной сессии (DevTools → Network → headers любого запроса на app.potok.io). Токены статичны, TTL ~5 месяцев.
 
-Potok.io: `POTOK_API_TOKEN`, `POTOK_BASE_URL` (default `https://app.potok.io`)
+### Userbot (Telethon — для рекрутёра и Zabbix backfill)
+- `TELETHON_API_ID`, `TELETHON_API_HASH` (one-time с my.telegram.org)
+- `TELETHON_SESSION` — StringSession, сгенерировать через `scripts/create_userbot_session.py`
+- `RECRUITER_COMPANY` (default `Digital Clouds`), `RECRUITER_NAME` — для intro в первом сообщении кандидату
 
-OpenClaw: `OPENCLAW_URL`, `OPENCLAW_TOKEN`, `OPENCLAW_AGENT_ID` (default `main`)
+### Sales analytics
+- `SALES_REPORT_BITRIX_USER_IDS` — Bitrix IDs продажников через запятую
+- `SALES_REPORT_RECIPIENTS` — TG IDs кому слать (можно группы с минусом)
+- `SALES_REPORT_MONTHLY_PLAN` (default `220000` ₽)
+- `SALES_REPORT_DEAL_CATEGORIES` (default `27,31,33`) — какие воронки учитывать
+- `SALES_REPORT_ACTIVE_DEAL_PATTERNS` (default `кп,договор,счёт,счет,переговор,согласи,кэв провед,отработк,оплат`) — паттерны имён стадий для «горящих»
+- `SALES_REPORT_HOT_STAGES` — устаревший, использует substring match по STAGE_ID
 
-Jira (integration user): `JIRA_URL`, `JIRA_USERNAME`, `JIRA_PASSWORD`
+### Zabbix
+- `ZABBIX_CHANNEL_ID` (numeric, начинается с `-100`)
+- `ZABBIX_JIRA_PROJECT` (default `DA`)
+- `ZABBIX_THRESHOLD_HOURS` (default 24)
 
-Webhook: `WEBHOOK_TOKEN` (shared secret for incoming B24 webhooks, header `X-Webhook-Token`)
+### DaData (Штирлиц)
+- `DADATA_API_KEY`, `DADATA_SECRET_KEY` (secret для clean/standard API, не обязателен для find/suggest)
 
-Access control: `GLAFIRA_ALLOWED` (comma-separated Telegram IDs), `RECRUITER_ALLOWED` (comma-separated Telegram IDs)
+### Auto-reject (rejection classifier)
+- `REJECTION_CLASSIFIER_THRESHOLD` (default 70)
 
-Scheduled content: `WEDNESDAY_FROG_CHAT_ID` (default 0 = disabled), `MONDAY_POSTER_CHAT_ID` (default 0 = disabled)
+### OpenClaw (Марфа)
+- `OPENCLAW_URL`, `OPENCLAW_TOKEN`, `OPENCLAW_AGENT_ID` (`main`)
 
-Socrates: `FFMPEG_BIN` (default `ffmpeg`), `MEETING_MAX_MINUTES` (default 90)
+### Jira
+- `JIRA_URL`, `JIRA_USERNAME`, `JIRA_PASSWORD`
 
-Other: `DB_PATH` (default `data/arkadyjarvis.db`), `SUMMARY_HOUR` (default 19), `SUMMARY_MINUTE` (default 0), `TIMEZONE` (default `Asia/Novosibirsk`)
+### Access lists
+- `GLAFIRA_ALLOWED` (Марфа/OpenClaw — TG IDs)
+- `RECRUITER_ALLOWED` (Глафира/Potok — TG IDs)
+
+### Scheduled content
+- `WEDNESDAY_FROG_CHAT_ID` (default 0 = disabled)
+- `MONDAY_POSTER_CHAT_ID` (0)
+
+### Socrates
+- `FFMPEG_BIN` (`ffmpeg`), `MEETING_MAX_MINUTES` (90)
+
+### Webhook
+- `WEBHOOK_TOKEN`
+
+### Other
+- `DB_PATH` (`data/arkadyjarvis.db`), `SUMMARY_HOUR` (19), `SUMMARY_MINUTE` (0), `TIMEZONE` (`Asia/Novosibirsk`)
 
 ## Coding Guidelines
 
-- **No hardcoded field IDs**: Bitrix24 custom fields (UF_*) must be in `config.py`, not in code. Field IDs are dynamic and opaque.
-- **No hardcoded user IDs**: Access control lists (allowed users) must be in `.env`, not in code.
-- **No hardcoded secrets**: All tokens, client IDs, secrets go in `.env` via pydantic-settings.
-- **JSON from AI**: Use `utils.parse_json_response()` for parsing — handles markdown fences, embedded text. Don't duplicate parsing logic.
-- **Timeman API**: `timeman.open` should NOT pre-fill `report` — reports are for `timeman.close` (end of day).
-- **OpenClaw isolation**: Always pass `user_id` to `openclaw.stream_chat()` — each Telegram user gets isolated agent context via `x-openclaw-agent-id` header.
-- **Lead creation**: Always include `SOURCE_ID`/`SOURCE_DESCRIPTION` and creator's Telegram contact in `COMMENTS` for traceability.
-- **HTML-escape user strings**: When building HTML messages (default parse_mode), always `html.escape()` user-controlled strings (names, companies, titles, AI-returned free text). Broken entities → Telegram 400.
-- **Long AI answers** (>4000 chars): attach as `.md` file with a short preview caption instead of trying to chunk HTML.
-- **AIClient injection**: services that need Claude (e.g. `resume_scorer.score_applicant`) must receive `ai_client` as parameter, not instantiate new `AIClient()`.
-- **Db user in callbacks**: `AuthMiddleware` injects `db_user` into callback handlers — use the injected value instead of re-fetching via `db.get_user(...)`. Some older callbacks still re-fetch (meeting.py, free_slots.py) — cleanup pending, not a bug.
-- **Prompts live in `prompts/`**: add new assistants by dropping a `.md` file and loading via `load_prompt(name)`. Template placeholders (`{style}`) are substituted by the caller.
+- **No hardcoded field IDs** — Bitrix UF_* в `config.py`
+- **No hardcoded user IDs** — access lists в `.env`
+- **No hardcoded secrets** — `.env` через pydantic-settings
+- **JSON from AI** — `utils.parse_json_response()`
+- **OpenClaw isolation** — всегда `user_id` в `openclaw.stream_chat()`
+- **Lead creation** — `SOURCE_ID`/`SOURCE_DESCRIPTION` + creator's Telegram contact в COMMENTS
+- **HTML-escape user strings** — всегда `html.escape()` для user-controlled (имена, компании, AI-output). Telegram default parse_mode = HTML.
+- **Long AI answers** (>4000 chars) — отдавать как `.md` attachment, не пытаться чанковать HTML.
+- **AIClient injection** — сервисы получают `ai_client` как параметр, не создают свой
+- **DB user в callbacks** — использовать middleware-инжекцию `db_user`, не fetcher.
+- **Prompts in `prompts/`** — добавил `.md` → `load_prompt(name)`. Placeholders типа `{data_json}` / `{dc_context}` подставляет caller через `.replace()`.
+- **CLI tools security** — `allowed_tools` параметр пробрасывать ТОЛЬКО для read-only (WebSearch/WebFetch). НИКОГДА для Bash/Read/Write/Edit — это RCE.
+- **CLI cwd=/tmp** — иначе Claude CLI подхватит project CLAUDE.md как system context.
+- **Haiku для дешёвых классификаторов** — `model="claude-haiku-4-5-20251001"` (полный ID — alias `haiku` может не разрешиться в старых CLI).
+- **Bitrix stage filtering** — для лидов используй `STATUS_SEMANTIC_ID` (`S`/`F`/null). Для сделок — `CATEGORY_ID` (whitelist воронок) + опц. NAME pattern на стадиях. `CLOSED=N` недостаточно — есть кастомные «парковочные» стадии с семантикой `P` но фактически не активные.
+- **N+1 в API** — для `crm.stagehistory.list` и подобных нет фильтра по user, нужен N+1 fetch по `OWNER_ID=deal_id`. Параллелить через `asyncio.Semaphore(5)`.
 
 ## Running
 
@@ -375,21 +418,26 @@ source .venv/bin/activate
 uvicorn app.main:app --host 0.0.0.0 --port 8001
 ```
 
-Health check: `curl localhost:8001/api/health`
+Health: `curl localhost:8001/api/health`
 
-Docker: `docker compose up --build` (exposes port 8002)
-
-Logs in Docker: `docker compose logs -f`
+Docker: `docker compose up --build` (port 8002), logs: `docker compose logs -f bot`
 
 ## Known Issues
 
-- Claude CLI requires `CLAUDE_CODE_OAUTH_TOKEN` — refresh tokens are single-use, lost token = re-auth needed
-- Email guests cannot be created via Bitrix REST API (only UI)
-- Bitrix OAuth tokens are shared (file-based), not per-user
-- Email guest cache is in-memory (resets on restart); `_load_email_guests` throttles 0.3s between batches and leaves the cache unloaded for retry if every batch fails
-- OpenRouter image generation may silently refuse due to content policy (0 completion tokens = refusal)
-- Potok scored candidates identified by `^\d{3}-` last_name prefix — fragile convention
-- Potok API SSL: uses Russian CA certificates — works from prod (Ubuntu), may fail from Mac without Russian CA bundle
-- Tailscale + OpenVPN conflict: OpenVPN `redirect-gateway` kills Tailscale connectivity. Cannot run both simultaneously without server-side split tunnel config.
-- Some callback handlers (`meeting.py`, `free_slots.py`) still re-fetch `db_user` via `db.get_user()` instead of using the middleware-injected one — not broken, just duplicated DB calls
-- Socrates SSRF guard has a narrow TOCTOU DNS-rebinding window: `_assert_public_url` resolves the host and then httpx resolves it again on connect. Fully closing this needs a pinned-IP transport (custom httpcore pool). Compensating controls: authorised users only (Bitrix-tied `/start` auth) + internal Tailscale-only deployment.
+- Claude CLI: `CLAUDE_CODE_OAUTH_TOKEN` refresh tokens — single-use, потеря = re-auth
+- Email guests cannot be created via Bitrix REST API (UI only)
+- Bitrix OAuth — shared file-based, не per-user
+- Email guest cache — in-memory, throttle 0.3s между батчами, leave-unloaded on full failure
+- OpenRouter image gen — может silently refuse по content policy (0 completion tokens = refusal)
+- Potok scored: convention `^\d{3}-` префикс к фамилии — fragile, при ручном переименовании ломается
+- Potok API SSL: русские CA — работает с Ubuntu, может падать с Mac без российского CA bundle
+- Tailscale + OpenVPN: redirect-gateway конфликт — без server-side split tunnel не запустить вместе
+- Некоторые callback handlers (`meeting.py`, `free_slots.py`) ре-фетчат `db_user` — не баг, но дубликат запроса
+- Socrates SSRF guard — узкое DNS-rebinding окно (TOCTOU). Полностью закрывается pinned-IP transport, не делали. Компенсация: внутренний Tailscale-only deployment + Bitrix-bound `/start` auth.
+- **Potok admin metadata в job description**: правила `Владельцы:` / `Ссылка для встречи:` парсятся регекспами в `recruiter.py`. Меняешь формат — лезь править regex.
+- **Potok `Контакт с рекрутером` название** — в Бытриксе24 у клиента может назваться по-другому. Аналог: `CANNOT_CONTACT` lead status у нас имеет displayed name «В работе» (внутренний код всегда `CANNOT_CONTACT`, переименовать нельзя). Везде где сравниваем по имени — case-insensitive.
+- **Potok `/client_api/*` (HH messaging)** — frontend tokens живут ~5 месяцев и не ротируются. При 401 — переэкстрагировать из браузера. Документации нет, ловили через DevTools.
+- **DaData финансы — NULL** на бесплатном тарифе. Берём финансы из ГИР БО ФНС.
+- **VOK API Saby** — платная подписка. Через интерактивный логин (без app credentials) не работает, нашими cookies спрятанный VOK тоже не пускает. Не интегрируем.
+- **`crm.stagehistory.list` нельзя фильтровать по user** — только по `OWNER_ID=deal_id`. N+1 по сделкам менеджера.
+- **`tasks_done` метрика убрана** — в DC не работают по «задачам», метрика бесполезна.
