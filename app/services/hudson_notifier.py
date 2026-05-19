@@ -77,16 +77,19 @@ async def _generate_motivation(
 
 
 def _dev_status(rep: DevReport) -> tuple[str, str]:
-    """Возвращает (flag, причина-в-скобках). 🏖 если в отпуске (норма не применяется).
-    Red если ниже нормы ИЛИ внутр > 8h."""
+    """Возвращает (flag, причина-в-скобках). 🏖 если ВСЯ неделя в отпуске
+    (норма обнулилась). Иначе обычная логика с поправкой нормы на дни отлучки."""
     if rep.on_leave:
-        return "🏖", f" ({rep.absence}, пропущен)"
+        return "🏖", f" ({rep.absence or 'отлучка'}, пропущен)"
     reasons: list[str] = []
+    if rep.absence:  # частичная отлучка (1-4 раб. дня)
+        reasons.append(rep.absence)
     if rep.is_under_norm:
         reasons.append(f"недобор до {rep.weekly_norm:.0f}h")
     if rep.internal_hours > INTERNAL_HOURS_WARN:
         reasons.append(f"внутр выше {INTERNAL_HOURS_WARN:.0f}h")
-    flag = "🔴" if reasons else "🟢"
+    is_red = rep.is_under_norm or rep.internal_hours > INTERNAL_HOURS_WARN
+    flag = "🔴" if is_red else "🟢"
     tag = f" ({', '.join(reasons)})" if reasons else ""
     return flag, tag
 

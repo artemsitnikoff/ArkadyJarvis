@@ -53,16 +53,17 @@ class DevReport:
     internal_hours: float = 0.0
     external_hours: float = 0.0
     bad_comments: list[tuple[WorklogEntry, str]] = field(default_factory=list)
-    absence: str | None = None  # «🏖 Отпуск 15.05–22.05» / None если нет
-    weekly_norm: float = WEEKLY_HOURS_NORM  # с учётом праздников этой недели
+    absence: str | None = None       # текст «🏖 Отпуск 15.05–15.05» / None
+    absence_workdays: int = 0        # сколько рабочих (Пн-Пт) дней пропустил
+    weekly_norm: float = WEEKLY_HOURS_NORM  # после праздников + минус отлучки разработчика
 
     @property
     def on_leave(self) -> bool:
-        return bool(self.absence)
+        # Полностью пропустил неделю — норма обнулилась
+        return self.weekly_norm <= 0
 
     @property
     def is_under_norm(self) -> bool:
-        # На отпускников не вешаем недоборы — норма часов не действует
         if self.on_leave:
             return False
         return self.total_hours < self.weekly_norm
@@ -161,12 +162,47 @@ def _short_date(s: str) -> str:
     if not s:
         return ""
     if len(s) >= 10 and s[4] == "-":
-        # YYYY-MM-DD…
         return s[8:10] + "." + s[5:7]
     if len(s) >= 10 and s[2] == ".":
-        # DD.MM.YYYY…
         return s[0:5]
     return s[:5]
+
+
+def _parse_bitrix_date(raw: str) -> date | None:
+    """ISO (2026-05-15...) или DMY (15.05.2026...) → date."""
+    if not raw:
+        return None
+    raw = str(raw).strip()
+    try:
+        if len(raw) >= 10 and raw[4] == "-":
+            return date(int(raw[:4]), int(raw[5:7]), int(raw[8:10]))
+        if len(raw) >= 10 and raw[2] == ".":
+            return date(int(raw[6:10]), int(raw[3:5]), int(raw[:2]))
+    except ValueError:
+        pass
+    return None
+
+
+def _count_absence_workdays(items: list[dict], since: date, until: date) -> int:
+    """Сколько рабочих (Пн-Пт) дней в [since, until] перекрываются с отлучками
+    разработчика. Не дублируем дни если несколько absence-записей пересекаются."""
+    if not items:
+        return 0
+    from datetime import timedelta
+    days: set[date] = set()
+    for a in items:
+        df = _parse_bitrix_date(a.get("DATE_ACTIVE_FROM"))
+        dt = _parse_bitrix_date(a.get("DATE_ACTIVE_TO"))
+        if not df or not dt:
+            continue
+        start = max(df, since)
+        end = min(dt, until)
+        d = start
+        while d <= end:
+            if d.weekday() < 5:
+                days.add(d)
+            d += timedelta(days=1)
+    return len(days)
 
 
 async def build_reports(
@@ -225,7 +261,12 @@ async def build_reports(
             weekly_norm=week_norm,
         )
         if d.get("developer_bitrix_id") and absences:
-            rep.absence = _format_absence(absences.get(d["developer_bitrix_id"], []))
+            dev_abs = absences.get(d["developer_bitrix_id"], [])
+            rep.absence = _format_absence(dev_abs)
+            rep.absence_workdays = _count_absence_workdays(dev_abs, since, until)
+            rep.weekly_norm = max(
+                0.0, week_norm - rep.absence_workdays * HOURS_PER_DAY,
+            )
         for e in dev_entries:
             rep.total_hours += e.hours
             if projects.get(e.project_key) == 1:
