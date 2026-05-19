@@ -43,8 +43,15 @@ def _dev_status(rep: DevReport) -> tuple[str, str]:
     return flag, tag
 
 
+def _jira_link(issue_key: str) -> str:
+    """HTML-ссылка на Jira-issue."""
+    base = settings.jira_url.rstrip("/")
+    return f'<a href="{base}/browse/{issue_key}">{issue_key}</a>'
+
+
 def _format_dev_block(rep: DevReport) -> str:
-    """HTML-блок для одного разработчика."""
+    """HTML-блок для одного разработчика. Все плохие комменты до конца,
+    с кликабельными ссылками на Jira."""
     flag, reason_tag = _dev_status(rep)
     name = html.escape(rep.name)
     line1 = (
@@ -57,59 +64,101 @@ def _format_dev_block(rep: DevReport) -> str:
             f"   ⚠️ ниже нормы {WEEKLY_HOURS_NORM:.0f}h — поставим задачу на отгул",
         )
     if rep.bad_comments:
-        bits.append(f"   💬 плохих комментариев: {len(rep.bad_comments)}/{len(rep.entries)}")
-        for entry, reason in rep.bad_comments[:3]:
-            c = html.escape((entry.comment or "(пусто)")[:50])
-            r = html.escape(reason[:80])
-            bits.append(f"     • <code>{entry.issue_key}</code> ({entry.hours:.1f}h): «{c}» — {r}")
-        if len(rep.bad_comments) > 3:
-            bits.append(f"     • … и ещё {len(rep.bad_comments) - 3}")
+        bits.append(
+            f"   💬 плохих комментариев: {len(rep.bad_comments)}/{len(rep.entries)}"
+        )
+        for entry, reason in rep.bad_comments:
+            c = html.escape(entry.comment or "(пусто)")
+            r = html.escape(reason)
+            bits.append(
+                f"     • {_jira_link(entry.issue_key)} "
+                f"({entry.hours:.1f}h): «{c}» — {r}"
+            )
     return "\n".join(bits)
 
 
-def _format_manager_message(
+TG_MAX = 4000  # Telegram cap 4096, оставляем запас на HTML overhead
+
+
+def _format_manager_messages(
     manager: str, reports: list[DevReport], since: date, until: date,
-) -> str:
+) -> list[str]:
+    """Возвращает список сообщений (≤ TG_MAX каждое). Сплит — между разработчиками."""
     period = f"{since.strftime('%d.%m')}–{until.strftime('%d.%m')}"
     header = (
         f"#хадсон_{period.replace('.', '_').replace('–', '_')}\n"
         f"📋 <b>Недельный отчёт {period}</b>\n"
         f"Менеджер: <b>{html.escape(manager)}</b>\n"
-        f"Разработчиков: {len(reports)}\n"
+        f"Разработчиков: {len(reports)}"
     )
     blocks = [_format_dev_block(r) for r in sorted(reports, key=lambda x: x.name)]
-    return header + "\n\n" + "\n\n".join(blocks)
+
+    messages: list[str] = []
+    current = header
+    for blk in blocks:
+        candidate = current + "\n\n" + blk
+        if len(candidate) <= TG_MAX:
+            current = candidate
+        else:
+            messages.append(current)
+            current = blk
+    if current:
+        messages.append(current)
+    return messages
 
 
-def _format_alina_summary(
+def _format_alina_messages(
     by_manager: dict[str, list[DevReport]], since: date, until: date,
-) -> str:
-    """Общая сводка для Алины — компактная таблица."""
+) -> list[str]:
+    """Сводка для Алины: per-manager группировка, под каждым разработчиком —
+    весь его плохой лог (как у менеджера). Возвращает список chunk'ов ≤ TG_MAX."""
     period = f"{since.strftime('%d.%m')}–{until.strftime('%d.%m')}"
-    lines = [
-        f"#хадсон_сводка_{period.replace('.', '_').replace('–', '_')}",
-        f"📊 <b>Хадсон: сводка P&amp;Q за {period}</b>",
-        "",
-    ]
+    header = (
+        f"#хадсон_сводка_{period.replace('.', '_').replace('–', '_')}\n"
+        f"📊 <b>Хадсон: сводка P&amp;Q за {period}</b>"
+    )
+
+    messages: list[str] = []
+    current = header
     for mgr in sorted(by_manager):
         reps = sorted(by_manager[mgr], key=lambda x: x.name)
         total = sum(r.total_hours for r in reps)
         intern = sum(r.internal_hours for r in reps)
         under_norm = [r for r in reps if r.is_under_norm]
         bad = sum(len(r.bad_comments) for r in reps)
-        lines.append(
-            f"<b>{html.escape(mgr)}</b> — {len(reps)} разрабов · "
-            f"{total:.0f}h всего · внутр {intern:.0f}h · "
+        mgr_header = (
+            f"\n— <b>{html.escape(mgr)}</b> — "
+            f"{len(reps)} разрабов · {total:.0f}h всего · внутр {intern:.0f}h · "
             f"под нормой {len(under_norm)} · плохих коммов {bad}"
         )
+        # Сначала пробуем добавить mgr-header целиком
+        candidate = current + "\n" + mgr_header
+        if len(candidate) > TG_MAX:
+            messages.append(current)
+            current = mgr_header
+        else:
+            current = candidate
+
         for r in reps:
-            flag, reason_tag = _dev_status(r)
-            lines.append(
-                f"  {flag} {html.escape(r.name)}: "
-                f"{r.total_hours:.1f}h/<b>{r.internal_hours:.1f}h</b>{reason_tag}"
-            )
-        lines.append("")
-    return "\n".join(lines)
+            blk = _format_dev_block(r)
+            candidate = current + "\n\n" + blk
+            if len(candidate) <= TG_MAX:
+                current = candidate
+            else:
+                messages.append(current)
+                current = blk
+    if current:
+        messages.append(current)
+    return messages
+
+
+# Backward compat alias for bot button (hudson router)
+def _format_alina_summary(
+    by_manager: dict[str, list[DevReport]], since: date, until: date,
+) -> str:
+    """Однострочная склейка для UI (кнопка). Шлёт первый чанк — остальное
+    обрежется на стороне отправителя при > 4000."""
+    return _format_alina_messages(by_manager, since, until)[0]
 
 
 async def _manager_bitrix_id(manager_name: str) -> int | None:
@@ -206,28 +255,38 @@ async def notify(
                 mgr, manager_bitrix_id,
             )
             continue
-        text = _format_manager_message(mgr, reps, since, until)
+        messages = _format_manager_messages(mgr, reps, since, until)
         if dry_run:
-            logger.info("[DRY-RUN] would send to %s (tg=%s)", mgr, user["telegram_id"])
+            logger.info(
+                "[DRY-RUN] would send %d message(s) to %s (tg=%s)",
+                len(messages), mgr, user["telegram_id"],
+            )
             sent_managers += 1
             continue
         try:
-            await bot.send_message(user["telegram_id"], text)
+            for text in messages:
+                await bot.send_message(
+                    user["telegram_id"], text, disable_web_page_preview=True,
+                )
             sent_managers += 1
         except Exception as e:
             logger.error("Hudson notify: send to %s failed: %s", mgr, e)
 
     alina = await get_user_by_bitrix_id(settings.hudson_dept_head_bitrix_id)
     if alina:
+        alina_msgs = _format_alina_messages(by_manager, since, until)
         if dry_run:
-            logger.info("[DRY-RUN] would send Alina summary (tg=%s)", alina["telegram_id"])
+            logger.info(
+                "[DRY-RUN] would send %d message(s) Alina summary (tg=%s)",
+                len(alina_msgs), alina["telegram_id"],
+            )
             sent_alina = True
         else:
             try:
-                await bot.send_message(
-                    alina["telegram_id"],
-                    _format_alina_summary(by_manager, since, until),
-                )
+                for text in alina_msgs:
+                    await bot.send_message(
+                        alina["telegram_id"], text, disable_web_page_preview=True,
+                    )
                 sent_alina = True
             except Exception as e:
                 logger.error("Hudson notify: send to Алина failed: %s", e)

@@ -39,7 +39,7 @@ async def enter_hudson(callback: CallbackQuery, openrouter: OpenRouterClient) ->
     )
 
     from app.services.hudson_analyzer import build_reports
-    from app.services.hudson_notifier import _format_alina_summary
+    from app.services.hudson_notifier import _format_alina_messages
 
     until = date.today() - timedelta(days=1)
     since = until - timedelta(days=6)
@@ -58,26 +58,9 @@ async def enter_hudson(callback: CallbackQuery, openrouter: OpenRouterClient) ->
     by_manager: dict[str, list] = {}
     for r in reports:
         by_manager.setdefault(r.manager_name, []).append(r)
-    text = _format_alina_summary(by_manager, since, until)
+    messages = _format_alina_messages(by_manager, since, until)
 
-    # Дополнительный блок: топ-5 плохих комментариев из всего отчёта
-    all_bad: list[tuple[str, ...]] = []
-    for r in reports:
-        for entry, reason in r.bad_comments:
-            all_bad.append((r.name, entry.issue_key, entry.hours, entry.comment, reason))
-    if all_bad:
-        all_bad.sort(key=lambda x: -x[2])  # по списанным часам
-        bits = ["\n💬 <b>Топ плохих комментариев</b>"]
-        for name, ikey, hours, comment, reason in all_bad[:5]:
-            c = html.escape((comment or "(пусто)")[:50])
-            r_short = html.escape(reason[:80])
-            bits.append(
-                f"• <b>{html.escape(name)}</b> · <code>{ikey}</code> "
-                f"({hours:.1f}h): «{c}» — {r_short}"
-            )
-        text += "\n" + "\n".join(bits)
-
-    if len(text) > 4000:
-        # Telegram limit 4096 — режем
-        text = text[:3900] + "\n\n…(обрезано)"
-    await wait.edit_text(text)
+    # Первый чанк — в место «Хадсон собирает…», остальные отдельными сообщениями
+    await wait.edit_text(messages[0], disable_web_page_preview=True)
+    for extra in messages[1:]:
+        await callback.message.answer(extra, disable_web_page_preview=True)
