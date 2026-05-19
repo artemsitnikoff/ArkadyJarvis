@@ -31,35 +31,13 @@ HOURS_PER_DAY = 8.0
 INTERNAL_HOURS_WARN = 8.0
 
 
-def _parse_holidays_in_week(since: date, until: date) -> int:
-    """Сколько РАБОЧИХ (пн-пт) дней внутри [since, until] помечены праздниками
-    в HUDSON_HOLIDAYS."""
-    from datetime import datetime as _dt
-
-    from app.config import settings
-    raw = (settings.hudson_holidays or "").strip()
-    if not raw:
-        return 0
-    count = 0
-    for piece in raw.split(","):
-        piece = piece.strip()
-        if not piece:
-            continue
-        try:
-            d = _dt.strptime(piece, "%Y-%m-%d").date()
-        except ValueError:
-            logger.warning("HUDSON_HOLIDAYS: bad date %r — skip", piece)
-            continue
-        if since <= d <= until and d.weekday() < 5:
-            count += 1
-    return count
-
-
-def compute_weekly_norm(since: date, until: date) -> float:
-    """Норма часов с учётом ТК РФ — вычитаем 8h за каждый рабочий праздничный
-    день в диапазоне. Не меньше 0."""
-    cut = _parse_holidays_in_week(since, until) * HOURS_PER_DAY
-    return max(0.0, WEEKLY_HOURS_NORM - cut)
+async def compute_weekly_norm(since: date, until: date) -> float:
+    """Норма часов с учётом ТК РФ — берём производственный календарь из
+    isdayoff.ru и вычитаем 8h за каждый праздничный день, попавший на Пн-Пт.
+    Не меньше 0."""
+    from app.services.holidays_api import count_holidays_in_workweek
+    holidays = await count_holidays_in_workweek(since, until)
+    return max(0.0, WEEKLY_HOURS_NORM - holidays * HOURS_PER_DAY)
 
 
 @dataclass
@@ -230,12 +208,9 @@ async def build_reports(
         except Exception as e:
             logger.warning("Hudson: не смог получить absences из Bitrix: %s", e)
 
-    week_norm = compute_weekly_norm(since, until)
+    week_norm = await compute_weekly_norm(since, until)
     if week_norm != WEEKLY_HOURS_NORM:
-        logger.info(
-            "Hudson: норма недели = %.0fh (праздники: %d рабочих дн.)",
-            week_norm, _parse_holidays_in_week(since, until),
-        )
+        logger.info("Hudson: норма недели = %.0fh (учли производственный календарь)", week_norm)
 
     reports: list[DevReport] = []
     for d in devs:

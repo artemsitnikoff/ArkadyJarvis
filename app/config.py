@@ -117,9 +117,6 @@ class Settings(BaseSettings):
     hudson_chat_id: int = 0  # e.g. -1002588304733
     # Отключить ТОЛЬКО создание Jira-задач (Telegram-рассылка работает как обычно)
     hudson_skip_jira: bool = False
-    # Праздничные/нерабочие даты YYYY-MM-DD через запятую (ТК РФ).
-    # За каждый рабочий день (пн-пт) в этом списке норма недели уменьшается на 8h.
-    hudson_holidays: str = ""
 
     # Telethon userbot (for sending messages from recruiter's personal account)
     telethon_api_id: int = 0
