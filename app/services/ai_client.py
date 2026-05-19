@@ -86,7 +86,7 @@ class AIClient:
         # Don't log full args if system_prompt is huge — keep diagnostic short.
         logger.info(
             "claude CLI argv (model=%s, tools_disabled=yes, system_prompt=%s)",
-            settings.claude_model or "default",
+            chosen_model or "default",
             f"{len(system_prompt)} chars" if system_prompt else "no",
         )
 
