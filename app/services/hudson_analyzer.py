@@ -88,20 +88,27 @@ async def _classify_comments(
                 .replace("{hours}", f"{entry.hours:.2f}")
                 .replace("{comment}", entry.comment or "(пусто)")
             )
-            try:
-                resp = await ai_client.complete(
-                    prompt,
-                    timeout=30,
-                    model="claude-haiku-4-5-20251001",
-                )
-                data = parse_json_response(resp) or {}
-                if data.get("is_bad"):
-                    bad.append((entry, str(data.get("reason", "")).strip()))
-            except Exception as e:
-                logger.warning(
-                    "Hudson bad-comment classify failed for %s: %s",
-                    entry.issue_key, e,
-                )
+            # Один повтор при таймауте/ошибке — Haiku изредка тупит >60с
+            last_err: Exception | None = None
+            for attempt in (1, 2):
+                try:
+                    resp = await ai_client.complete(
+                        prompt,
+                        timeout=60,
+                        model="claude-haiku-4-5-20251001",
+                    )
+                    data = parse_json_response(resp) or {}
+                    if data.get("is_bad"):
+                        bad.append((entry, str(data.get("reason", "")).strip()))
+                    return
+                except Exception as e:
+                    last_err = e
+                    if attempt == 1:
+                        await asyncio.sleep(2)
+            logger.warning(
+                "Hudson bad-comment classify failed for %s after 2 attempts: %s",
+                entry.issue_key, last_err,
+            )
 
     await asyncio.gather(*(check(e) for e in entries))
     return bad
