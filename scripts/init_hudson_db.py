@@ -43,8 +43,19 @@ async def main() -> None:
                 print(f"    ⚠️  {w}")
 
         print("\n=== 3. Менеджеры ===")
-        for m in await list_managers():
-            print(f"  {m['manager_name']:<20} bitrix_id={m['manager_bitrix_id']!s:<5} devs={m['dev_count']}")
+        from app.db import get_db
+        db = get_db()
+        async with db.execute(
+            "SELECT manager_name, manager_bitrix_id, manager_jira_username, "
+            "COUNT(*) as dev_count FROM hudson_managers GROUP BY manager_name"
+        ) as cur:
+            for row in await cur.fetchall():
+                row = dict(row)
+                jira = row.get("manager_jira_username") or "❌ —"
+                print(
+                    f"  {row['manager_name']:<20} bx={row['manager_bitrix_id']!s:<5} "
+                    f"jira={jira:<30} devs={row['dev_count']}"
+                )
 
         print("\n=== 4. Разработчики ===")
         for d in await list_developers():

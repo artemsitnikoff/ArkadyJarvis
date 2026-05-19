@@ -285,9 +285,28 @@ async def _create_pq_tasks(
             for mgr, reports in by_manager.items():
                 mgr_assignee = await _manager_jira_username(mgr)
                 if not mgr_assignee:
+                    # Fallback: ищем email менеджера в Bitrix → Jira
+                    bx_id = await _manager_bitrix_id(mgr)
+                    if bx_id:
+                        from app.services.bitrix_client import BitrixClient
+                        bx = BitrixClient()
+                        try:
+                            r = await bx._request("user.get", {"ID": bx_id})
+                            users = r.get("result") or []
+                            email = (users[0].get("EMAIL") if users else "") or ""
+                            if email:
+                                mgr_assignee = await jira.find_user_by_email(email)
+                                logger.info(
+                                    "Hudson: resolved %s assignee at runtime: %s",
+                                    mgr, mgr_assignee,
+                                )
+                        except Exception as e:
+                            logger.warning("Hudson runtime resolve %s failed: %s", mgr, e)
+                        finally:
+                            await bx.close()
+                if not mgr_assignee:
                     logger.warning(
-                        "Hudson Jira: нет manager_jira_username у %s — assignee "
-                        "уйдёт в дефолт проекта PQ", mgr,
+                        "Hudson Jira: нет assignee у %s — уйдёт в дефолт PQ", mgr,
                     )
 
                 devs_with_internal = [r for r in reports if r.internal_hours > 0]
@@ -344,17 +363,20 @@ async def _create_pq_tasks(
     return created
 
 
-async def _format_group_message(
+async def _format_group_messages(
     by_manager: dict[str, list[DevReport]],
     since: date,
     until: date,
     manager_telegrams: dict[str, tuple[int, str]],
     ai_client: AIClient,
-) -> str:
-    """Сообщение в общую группу: per-manager статистика + тэг менеджеров +
-    Sonnet-сгенерированная мотивационная фраза."""
+) -> list[str]:
+    """Полный отчёт в общую группу: краткая сводка с тэгами + мотивашка +
+    per-dev блоки (часы, плохие комменты с Jira-ссылками). Сплит по TG_MAX."""
     period = f"{since.strftime('%d.%m')}–{until.strftime('%d.%m')}"
-    lines = [
+    motivation = await _generate_motivation(ai_client, by_manager)
+
+    # Header: общая сводка с тэгами + мотивация
+    header_lines = [
         f"📊 <b>Мисис Хадсон · недельный отчёт {period}</b>",
         "",
     ]
@@ -363,21 +385,46 @@ async def _format_group_message(
         total = sum(r.total_hours for r in reps)
         intern = sum(r.internal_hours for r in reps)
         under = sum(1 for r in reps if r.is_under_norm)
+        on_leave = sum(1 for r in reps if r.on_leave)
         bad = sum(len(r.bad_comments) for r in reps)
-
         tg = manager_telegrams.get(mgr)
         if tg:
             tg_id, name = tg
             mention = f'<a href="tg://user?id={tg_id}">{html.escape(name or mgr)}</a>'
         else:
             mention = f"<b>{html.escape(mgr)}</b>"
-        lines.append(
+        header_lines.append(
             f"{mention} — {len(reps)} разрабов · {total:.0f}h всего · "
-            f"внутр {intern:.0f}h · отгулов {under} · плохих коммов {bad}"
+            f"внутр {intern:.0f}h · отгулов {under} · в отпуске {on_leave} · "
+            f"плохих коммов {bad}"
         )
-    lines.append("")
-    lines.append(await _generate_motivation(ai_client, by_manager))
-    return "\n".join(lines)
+    header_lines.append("")
+    header_lines.append(motivation)
+    header = "\n".join(header_lines)
+
+    # Далее — per-manager + per-dev блоки (как Алине)
+    messages: list[str] = []
+    current = header
+    for mgr in sorted(by_manager):
+        reps = sorted(by_manager[mgr], key=lambda x: x.name)
+        mgr_header = f"\n— <b>{html.escape(mgr)}</b> —"
+        candidate = current + "\n" + mgr_header
+        if len(candidate) > TG_MAX:
+            messages.append(current)
+            current = mgr_header
+        else:
+            current = candidate
+        for r in reps:
+            blk = _format_dev_block(r)
+            candidate = current + "\n\n" + blk
+            if len(candidate) <= TG_MAX:
+                current = candidate
+            else:
+                messages.append(current)
+                current = blk
+    if current:
+        messages.append(current)
+    return messages
 
 
 async def notify(
@@ -456,23 +503,24 @@ async def notify(
             settings.hudson_dept_head_bitrix_id,
         )
 
-    # Group message — с тэгом менеджеров и AI-мотивацией (Claude CLI subscription)
+    # Group message — полный per-dev отчёт + тэги менеджеров + мотивация
     if settings.hudson_chat_id:
-        group_text = await _format_group_message(
+        group_msgs = await _format_group_messages(
             by_manager, since, until, manager_telegrams, ai_client,
         )
         if dry_run:
             logger.info(
-                "[DRY-RUN] would send group msg to %s (%d managers tagged)",
-                settings.hudson_chat_id, len(manager_telegrams),
+                "[DRY-RUN] would send %d group msg(s) to %s (%d managers tagged)",
+                len(group_msgs), settings.hudson_chat_id, len(manager_telegrams),
             )
             sent_group = True
         else:
             try:
-                await bot.send_message(
-                    settings.hudson_chat_id, group_text,
-                    disable_web_page_preview=True,
-                )
+                for text in group_msgs:
+                    await bot.send_message(
+                        settings.hudson_chat_id, text,
+                        disable_web_page_preview=True,
+                    )
                 sent_group = True
             except Exception as e:
                 logger.error(
