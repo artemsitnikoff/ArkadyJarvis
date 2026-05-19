@@ -171,15 +171,52 @@ async def _manager_bitrix_id(manager_name: str) -> int | None:
         return int(row[0]) if row and row[0] else None
 
 
+async def _manager_jira_username(manager_name: str) -> str | None:
+    db = get_db()
+    async with db.execute(
+        "SELECT manager_jira_username FROM hudson_managers "
+        "WHERE manager_name = ? LIMIT 1",
+        (manager_name,),
+    ) as cur:
+        row = await cur.fetchone()
+        return row[0] if row and row[0] else None
+
+
+def _build_bad_comments_section(reports: list[DevReport]) -> str:
+    """Plain-text блок «Плохие комментарии» по всем разработчикам менеджера.
+    Issue-keys типа PQ-918 Jira автолинкует в описании задачи."""
+    pieces: list[str] = []
+    for r in sorted(reports, key=lambda x: x.name):
+        if not r.bad_comments:
+            continue
+        pieces.append(f"\n== {r.name} ({len(r.bad_comments)}/{len(r.entries)}) ==")
+        for entry, reason in r.bad_comments:
+            c = (entry.comment or "(пусто)").replace("\n", " ")
+            pieces.append(
+                f"* {entry.issue_key} ({entry.hours:.2f}h): «{c}» — {reason}"
+            )
+    if not pieces:
+        return ""
+    return "\n\nПлохие комментарии за неделю:\n" + "\n".join(pieces)
+
+
 async def _create_pq_tasks(
     by_manager: dict[str, list[DevReport]], since: date, until: date,
 ) -> list[str]:
-    """Постановка задач в Jira PQ. Возвращает список созданных ключей."""
+    """Постановка задач в Jira PQ. Возвращает список созданных ключей.
+    Assignee = менеджер из hudson_managers.manager_jira_username."""
     period = f"{since.strftime('%d.%m')}–{until.strftime('%d.%m')}"
     created: list[str] = []
     try:
         async with JiraClient() as jira:
             for mgr, reports in by_manager.items():
+                mgr_assignee = await _manager_jira_username(mgr)
+                if not mgr_assignee:
+                    logger.warning(
+                        "Hudson Jira: нет manager_jira_username у %s — assignee "
+                        "уйдёт в дефолт проекта PQ", mgr,
+                    )
+
                 devs_with_internal = [r for r in reports if r.internal_hours > 0]
                 if devs_with_internal:
                     devs_str = ", ".join(
@@ -188,14 +225,18 @@ async def _create_pq_tasks(
                     )
                     summary = f"[Хадсон {period}] Подтвердить внутренние часы — {mgr}"
                     desc = (
-                        f"Подтвердить, что внутренние часы корректны для:\n\n{devs_str}\n\n"
+                        f"Подтвердить, что внутренние часы корректны для:\n\n"
+                        f"{devs_str}\n\n"
                         f"Период: {since} → {until}.\n"
                         f"Если часы списаны верно — закрыть задачу. "
-                        f"Если ошибочно — попросить разработчика переписать на внешний проект."
+                        f"Если ошибочно — попросить разработчика переписать "
+                        f"на внешний проект."
+                        f"{_build_bad_comments_section(reports)}"
                     )
                     try:
                         issue = await jira.create_issue(
                             PQ_PROJECT_KEY, summary, desc,
+                            assignee_name=mgr_assignee,
                         )
                         created.append(issue["key"])
                     except Exception as e:
@@ -217,6 +258,7 @@ async def _create_pq_tasks(
                         try:
                             issue = await jira.create_issue(
                                 PQ_PROJECT_KEY, summary, desc,
+                                assignee_name=mgr_assignee,
                             )
                             created.append(issue["key"])
                         except Exception as e:

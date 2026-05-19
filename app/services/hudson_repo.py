@@ -104,16 +104,29 @@ async def seed_default_managers(bitrix, jira=None) -> tuple[int, list[str]]:
     inserted = 0
     warnings: list[str] = []
 
-    # Резолвим менеджеров отдельно (раз каждого)
-    manager_lookup: dict[str, tuple[int | None, str | None]] = {}
+    # Резолвим менеджеров отдельно (раз каждого): Bitrix ID + email + Jira-username
+    manager_lookup: dict[str, tuple[int | None, str | None, str | None]] = {}
     for mgr_last in DEFAULT_MANAGER_MAPPING.keys():
         info = await _find_user_by_last_name(bitrix, mgr_last)
         if not info:
             warnings.append(f"Менеджер «{mgr_last}» не найден в Bitrix")
-        manager_lookup[mgr_last] = info or (None, None)
+            manager_lookup[mgr_last] = (None, None, None)
+            continue
+        bx_id, email = info
+        mgr_jira: str | None = None
+        if jira and email:
+            try:
+                mgr_jira = await jira.find_user_by_email(email)
+            except Exception as e:
+                logger.warning("Jira lookup for manager %s failed: %s", mgr_last, e)
+            if not mgr_jira:
+                warnings.append(
+                    f"Jira username менеджера {mgr_last} ({email}) не найден",
+                )
+        manager_lookup[mgr_last] = (bx_id, email, mgr_jira)
 
     for mgr_last, devs in DEFAULT_MANAGER_MAPPING.items():
-        mgr_id, _ = manager_lookup[mgr_last]
+        mgr_id, _mgr_email, mgr_jira = manager_lookup[mgr_last]
         for dev_pattern in devs:
             # Пытаемся каждое слово как LAST_NAME (вдруг в паттерне «Имя Фамилия»)
             dev_info = None
@@ -143,14 +156,19 @@ async def seed_default_managers(bitrix, jira=None) -> tuple[int, list[str]]:
             await db.execute(
                 """INSERT INTO hudson_managers
                        (manager_name, manager_bitrix_id, developer_pattern,
-                        developer_bitrix_id, developer_email, jira_username)
-                   VALUES (?, ?, ?, ?, ?, ?)
+                        developer_bitrix_id, developer_email, jira_username,
+                        manager_jira_username)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)
                    ON CONFLICT(manager_name, developer_pattern) DO UPDATE SET
                        manager_bitrix_id = excluded.manager_bitrix_id,
                        developer_bitrix_id = excluded.developer_bitrix_id,
                        developer_email = excluded.developer_email,
-                       jira_username = excluded.jira_username""",
-                (mgr_last, mgr_id, dev_pattern, dev_id, dev_email, jira_username),
+                       jira_username = excluded.jira_username,
+                       manager_jira_username = excluded.manager_jira_username""",
+                (
+                    mgr_last, mgr_id, dev_pattern, dev_id, dev_email,
+                    jira_username, mgr_jira,
+                ),
             )
             inserted += 1
     await db.commit()
