@@ -5,6 +5,10 @@ from datetime import datetime
 
 from app.config import settings
 
+# Кэшируем «absence.list не работает в этой инсталляции» на уровне процесса —
+# чтобы не дёргать 404 каждый недельный запуск.
+_ABSENCE_LIST_DEAD = False
+
 logger = logging.getLogger("arkadyjarvis")
 
 
@@ -97,41 +101,45 @@ class _BitrixUsersMixin:
         """
         if not user_ids:
             return {}
+        global _ABSENCE_LIST_DEAD
         result: dict[int, list[dict]] = {uid: [] for uid in user_ids}
 
-        # Сначала absence.list (если HR-модуль есть)
-        try:
-            start = 0
-            while True:
-                r = await self._request(
-                    "absence.list",
-                    {
-                        "filter": {
-                            "USER_ID": user_ids,
-                            ">=DATE_ACTIVE_FROM": since,
-                            "<=DATE_ACTIVE_TO": until,
+        # Сначала absence.list (если HR-модуль есть). Если уже знаем что мёртв —
+        # пропускаем без сетевого запроса.
+        if not _ABSENCE_LIST_DEAD:
+            try:
+                start = 0
+                while True:
+                    r = await self._request(
+                        "absence.list",
+                        {
+                            "filter": {
+                                "USER_ID": user_ids,
+                                ">=DATE_ACTIVE_FROM": since,
+                                "<=DATE_ACTIVE_TO": until,
+                            },
+                            "start": start,
                         },
-                        "start": start,
-                    },
+                    )
+                    batch = r.get("result") or []
+                    for row in batch:
+                        uid = int(row.get("USER_ID") or 0)
+                        if uid in result:
+                            result[uid].append(row)
+                    next_ = r.get("next")
+                    if next_ is None or not batch:
+                        break
+                    start = int(next_)
+                if any(result.values()):
+                    return result
+            except Exception as e:
+                if "method not found" not in str(e).lower():
+                    raise
+                _ABSENCE_LIST_DEAD = True
+                logger.info(
+                    "absence.list недоступен в этой инсталляции Bitrix — "
+                    "переключаюсь на calendar.event.get на всё время процесса",
                 )
-                batch = r.get("result") or []
-                for row in batch:
-                    uid = int(row.get("USER_ID") or 0)
-                    if uid in result:
-                        result[uid].append(row)
-                next_ = r.get("next")
-                if next_ is None or not batch:
-                    break
-                start = int(next_)
-            if any(result.values()):
-                return result
-        except Exception as e:
-            if "method not found" not in str(e).lower():
-                raise
-            logger.info(
-                "absence.list недоступен — fallback на calendar.event.get "
-                "(поиск по ключевым словам)",
-            )
 
         # Fallback: ищем события в личном календаре с «отпуск»/«vacation»/«больн» в названии
         # Bitrix calendar.event.get принимает дату в формате DD.MM.YYYY
