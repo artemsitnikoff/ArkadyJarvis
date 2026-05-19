@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import re
+from datetime import datetime
 
 from app.config import settings
 
@@ -84,38 +85,111 @@ class _BitrixUsersMixin:
     async def get_absences(
         self, user_ids: list[int], since: str, until: str,
     ) -> dict[int, list[dict]]:
-        """Тянет absence.list (отпуска/больничные/командировки) для указанных
-        пользователей в диапазоне дат. Возвращает {user_id: [absence_dict, …]}.
+        """Возвращает отлучки (отпуск/больничный/командировка) per-user в диапазоне.
 
-        absence.TYPE: A — больничный/absence, V — отпуск/vacation, B — командировка.
-        Date format: 'YYYY-MM-DD' или ISO.
+        Пробует absence.list (HR-модуль). Если 404 — fallback через
+        calendar.event.get с поиском по ключевым словам в названии.
+
+        Формат: {user_id: [{'TYPE': 'V'|'A'|'B',
+                            'DATE_ACTIVE_FROM': 'YYYY-MM-DD',
+                            'DATE_ACTIVE_TO': 'YYYY-MM-DD',
+                            'NAME': 'Отпуск', …}, …]}.
         """
         if not user_ids:
             return {}
-        # absence.list возвращает максимум 50 записей за раз — пагинируем
         result: dict[int, list[dict]] = {uid: [] for uid in user_ids}
-        start = 0
-        while True:
-            r = await self._request(
-                "absence.list",
-                {
-                    "filter": {
-                        "USER_ID": user_ids,
-                        ">=DATE_ACTIVE_FROM": since,
-                        "<=DATE_ACTIVE_TO": until,
+
+        # Сначала absence.list (если HR-модуль есть)
+        try:
+            start = 0
+            while True:
+                r = await self._request(
+                    "absence.list",
+                    {
+                        "filter": {
+                            "USER_ID": user_ids,
+                            ">=DATE_ACTIVE_FROM": since,
+                            "<=DATE_ACTIVE_TO": until,
+                        },
+                        "start": start,
                     },
-                    "start": start,
-                },
+                )
+                batch = r.get("result") or []
+                for row in batch:
+                    uid = int(row.get("USER_ID") or 0)
+                    if uid in result:
+                        result[uid].append(row)
+                next_ = r.get("next")
+                if next_ is None or not batch:
+                    break
+                start = int(next_)
+            if any(result.values()):
+                return result
+        except Exception as e:
+            if "method not found" not in str(e).lower():
+                raise
+            logger.info(
+                "absence.list недоступен — fallback на calendar.event.get "
+                "(поиск по ключевым словам)",
             )
-            batch = r.get("result") or []
-            for row in batch:
-                uid = int(row.get("USER_ID") or 0)
-                if uid in result:
-                    result[uid].append(row)
-            next_ = r.get("next")
-            if next_ is None or not batch:
-                break
-            start = int(next_)
+
+        # Fallback: ищем события в личном календаре с «отпуск»/«vacation»/«больн» в названии
+        # Bitrix calendar.event.get принимает дату в формате DD.MM.YYYY
+        try:
+            since_dt = datetime.fromisoformat(since)
+            until_dt = datetime.fromisoformat(until)
+        except ValueError:
+            return result
+        date_from = since_dt.strftime("%d.%m.%Y")
+        date_to = until_dt.strftime("%d.%m.%Y")
+
+        keywords_type = [
+            ("отпуск", "V"),
+            ("vacation", "V"),
+            ("болеет", "A"),
+            ("болен", "A"),
+            ("больнич", "A"),
+            ("командиров", "B"),
+        ]
+
+        # Параллелим запросы по 5 одновременно
+        sem = asyncio.Semaphore(5)
+
+        async def fetch_user_calendar(uid: int) -> None:
+            async with sem:
+                try:
+                    r = await self._request(
+                        "calendar.event.get",
+                        {
+                            "type": "user", "ownerId": uid,
+                            "from": date_from, "to": date_to,
+                        },
+                    )
+                except Exception as e:
+                    logger.warning("calendar.event.get user=%s failed: %s", uid, e)
+                    return
+                events = r.get("result") or []
+                for ev in events:
+                    name = (ev.get("NAME") or "").lower()
+                    if (ev.get("DELETED") or "") == "Y":
+                        continue
+                    matched_type = None
+                    for kw, t in keywords_type:
+                        if kw in name:
+                            matched_type = t
+                            break
+                    if not matched_type:
+                        continue
+                    df = (ev.get("DATE_FROM") or "")
+                    dt = (ev.get("DATE_TO") or "")
+                    result[uid].append({
+                        "TYPE": matched_type,
+                        "DATE_ACTIVE_FROM": df,
+                        "DATE_ACTIVE_TO": dt,
+                        "NAME": ev.get("NAME") or "",
+                    })
+
+        await asyncio.gather(*(fetch_user_calendar(uid) for uid in user_ids))
         return result
 
     async def get_employee_card(self, user_id: int) -> dict | None:

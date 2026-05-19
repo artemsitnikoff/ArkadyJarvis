@@ -128,24 +128,34 @@ async def _classify_comments(
 
 def _format_absence(items: list[dict]) -> str | None:
     """Текстовое описание самой релевантной отлучки (отпуск > командировка > болезнь).
-    items — отдача absence.list по одному пользователю."""
+    items — отдача absence.list ИЛИ кальки из calendar.event.get fallback."""
     if not items:
         return None
     type_label = {"V": "🏖 Отпуск", "B": "✈ Командировка", "A": "🤒 Болеет"}
-    # приоритет: V > B > A
     priority = {"V": 0, "B": 1, "A": 2}
     items_sorted = sorted(
         items, key=lambda r: priority.get((r.get("TYPE") or "").upper(), 9),
     )
     a = items_sorted[0]
     label = type_label.get((a.get("TYPE") or "").upper(), "Отсутствует")
-    df = (a.get("DATE_ACTIVE_FROM") or "")[:10]
-    dt = (a.get("DATE_ACTIVE_TO") or "")[:10]
+    df = _short_date(a.get("DATE_ACTIVE_FROM") or "")
+    dt = _short_date(a.get("DATE_ACTIVE_TO") or "")
     if df and dt:
-        df_short = df[8:10] + "." + df[5:7]
-        dt_short = dt[8:10] + "." + dt[5:7]
-        return f"{label} {df_short}–{dt_short}"
+        return f"{label} {df}–{dt}"
     return label
+
+
+def _short_date(s: str) -> str:
+    """Из ISO (`2026-05-15T…`) или DMY (`15.05.2026 00:00:00`) → `15.05`."""
+    if not s:
+        return ""
+    if len(s) >= 10 and s[4] == "-":
+        # YYYY-MM-DD…
+        return s[8:10] + "." + s[5:7]
+    if len(s) >= 10 and s[2] == ".":
+        # DD.MM.YYYY…
+        return s[0:5]
+    return s[:5]
 
 
 async def build_reports(
