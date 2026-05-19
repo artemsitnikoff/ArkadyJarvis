@@ -13,6 +13,7 @@
 """
 import html
 import logging
+import random
 from datetime import date
 
 from aiogram import Bot
@@ -29,6 +30,17 @@ from app.services.jira_client import JiraClient
 logger = logging.getLogger("arkadyjarvis")
 
 PQ_PROJECT_KEY = "PQ"  # «Стратегия и развитие департамента Production&Quality»
+
+MOTIVATIONAL_PHRASES = [
+    "Поехали, ребят, новая неделя — новый шанс показать, кто здесь главный 💪",
+    "За дело, команда! Внутреннее тушим, внешним зажигаем 🔥",
+    "Друзья, прошлая неделя позади — впереди только победы. Погнали 🚀",
+    "Утро понедельника — лучший момент чтобы навести порядок. Вперёд! ⚡",
+    "Команда, спасибо за прошлую неделю — а теперь делаем лучше 🎯",
+    "Ребят, верю в каждого. Эта неделя — наша 💼",
+    "Подтянем хвосты и полетели — клиенты ждут 🏎️",
+    "Старт недели, заряжаемся! Прошлая — урок, эта — рекорд 🏆",
+]
 
 
 def _dev_status(rep: DevReport) -> tuple[str, str]:
@@ -182,6 +194,32 @@ async def _manager_jira_username(manager_name: str) -> str | None:
         return row[0] if row and row[0] else None
 
 
+def _build_internal_breakdown(reports: list[DevReport]) -> str:
+    """Plain-text блок «Внутренние часы по задачам». Группировка per-dev,
+    внутри — суммирование по issue_key. Issue-keys Jira автолинкует."""
+    pieces: list[str] = []
+    for r in sorted(reports, key=lambda x: x.name):
+        if not r.internal_entries:
+            continue
+        # суммируем по issue
+        by_issue: dict[str, tuple[float, list[str]]] = {}
+        for e in r.internal_entries:
+            hours, comments = by_issue.get(e.issue_key, (0.0, []))
+            c = (e.comment or "").strip().replace("\n", " ")
+            if c:
+                comments.append(c)
+            by_issue[e.issue_key] = (hours + e.hours, comments)
+        pieces.append(f"\n== {r.name} ({r.internal_hours:.1f}h всего) ==")
+        for ikey, (h, comments) in sorted(
+            by_issue.items(), key=lambda kv: -kv[1][0],
+        ):
+            joined = "; ".join(comments) if comments else "(без комментариев)"
+            pieces.append(f"* {ikey} — {h:.2f}h — {joined}")
+    if not pieces:
+        return ""
+    return "\n\nВнутренние часы по задачам:\n" + "\n".join(pieces)
+
+
 def _build_bad_comments_section(reports: list[DevReport]) -> str:
     """Plain-text блок «Плохие комментарии» по всем разработчикам менеджера.
     Issue-keys типа PQ-918 Jira автолинкует в описании задачи."""
@@ -231,6 +269,7 @@ async def _create_pq_tasks(
                         f"Если часы списаны верно — закрыть задачу. "
                         f"Если ошибочно — попросить разработчика переписать "
                         f"на внешний проект."
+                        f"{_build_internal_breakdown(devs_with_internal)}"
                         f"{_build_bad_comments_section(reports)}"
                     )
                     try:
@@ -270,6 +309,41 @@ async def _create_pq_tasks(
     return created
 
 
+async def _format_group_message(
+    by_manager: dict[str, list[DevReport]],
+    since: date,
+    until: date,
+    manager_telegrams: dict[str, tuple[int, str]],
+) -> str:
+    """Сообщение в общую группу: per-manager статистика + тэг менеджеров +
+    мотивационная фраза."""
+    period = f"{since.strftime('%d.%m')}–{until.strftime('%d.%m')}"
+    lines = [
+        f"📊 <b>Мисис Хадсон · недельный отчёт {period}</b>",
+        "",
+    ]
+    for mgr in sorted(by_manager):
+        reps = by_manager[mgr]
+        total = sum(r.total_hours for r in reps)
+        intern = sum(r.internal_hours for r in reps)
+        under = sum(1 for r in reps if r.is_under_norm)
+        bad = sum(len(r.bad_comments) for r in reps)
+
+        tg = manager_telegrams.get(mgr)
+        if tg:
+            tg_id, name = tg
+            mention = f'<a href="tg://user?id={tg_id}">{html.escape(name or mgr)}</a>'
+        else:
+            mention = f"<b>{html.escape(mgr)}</b>"
+        lines.append(
+            f"{mention} — {len(reps)} разрабов · {total:.0f}h всего · "
+            f"внутр {intern:.0f}h · отгулов {under} · плохих коммов {bad}"
+        )
+    lines.append("")
+    lines.append(random.choice(MOTIVATIONAL_PHRASES))
+    return "\n".join(lines)
+
+
 async def notify(
     reports: list[DevReport],
     since: date,
@@ -285,6 +359,9 @@ async def notify(
 
     sent_managers = 0
     sent_alina = False
+    sent_group = False
+    # Кешируем (tg_id, display_name) каждого менеджера — пригодится для тэга в группе
+    manager_telegrams: dict[str, tuple[int, str]] = {}
     for mgr, reps in by_manager.items():
         manager_bitrix_id = await _manager_bitrix_id(mgr)
         if not manager_bitrix_id:
@@ -297,6 +374,10 @@ async def notify(
                 mgr, manager_bitrix_id,
             )
             continue
+        manager_telegrams[mgr] = (
+            int(user["telegram_id"]),
+            user.get("display_name") or mgr,
+        )
         messages = _format_manager_messages(mgr, reps, since, until)
         if dry_run:
             logger.info(
@@ -338,6 +419,30 @@ async def notify(
             settings.hudson_dept_head_bitrix_id,
         )
 
+    # Group message — с тэгом менеджеров и мотивацией
+    if settings.hudson_chat_id:
+        group_text = await _format_group_message(
+            by_manager, since, until, manager_telegrams,
+        )
+        if dry_run:
+            logger.info(
+                "[DRY-RUN] would send group msg to %s (%d managers tagged)",
+                settings.hudson_chat_id, len(manager_telegrams),
+            )
+            sent_group = True
+        else:
+            try:
+                await bot.send_message(
+                    settings.hudson_chat_id, group_text,
+                    disable_web_page_preview=True,
+                )
+                sent_group = True
+            except Exception as e:
+                logger.error(
+                    "Hudson notify: send to group %s failed: %s",
+                    settings.hudson_chat_id, e,
+                )
+
     created_keys: list[str] = []
     if dry_run:
         logger.info("[DRY-RUN] skipping Jira PQ task creation")
@@ -345,12 +450,13 @@ async def notify(
         created_keys = await _create_pq_tasks(by_manager, since, until)
 
     logger.info(
-        "Hudson notify done (dry=%s): managers=%d alina=%s jira_keys=%s",
-        dry_run, sent_managers, sent_alina, created_keys,
+        "Hudson notify done (dry=%s): managers=%d alina=%s group=%s jira_keys=%s",
+        dry_run, sent_managers, sent_alina, sent_group, created_keys,
     )
     return {
         "managers_sent": sent_managers,
         "alina_sent": sent_alina,
+        "group_sent": sent_group,
         "jira_keys": created_keys,
         "dry_run": dry_run,
     }

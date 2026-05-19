@@ -113,6 +113,8 @@ class Settings(BaseSettings):
     hudson_dept_head_bitrix_id: int = 37
     # TG IDs кому доступна кнопка «🏠 Мисис Хадсон» (я + менеджеры P&Q)
     hudson_allowed: str = ""
+    # Чат-группа для еженедельного отчёта Хадсона (с тэгом менеджеров)
+    hudson_chat_id: int = 0  # e.g. -1002588304733
 
     # Telethon userbot (for sending messages from recruiter's personal account)
     telethon_api_id: int = 0

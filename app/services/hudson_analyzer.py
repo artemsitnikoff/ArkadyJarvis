@@ -38,6 +38,7 @@ class DevReport:
     bitrix_id: int | None
     email: str | None
     entries: list[WorklogEntry] = field(default_factory=list)
+    internal_entries: list[WorklogEntry] = field(default_factory=list)
     total_hours: float = 0.0
     internal_hours: float = 0.0
     external_hours: float = 0.0
@@ -158,6 +159,7 @@ async def build_reports(
             rep.total_hours += e.hours
             if projects.get(e.project_key) == 1:
                 rep.internal_hours += e.hours
+                rep.internal_entries.append(e)
             else:
                 rep.external_hours += e.hours
         if not skip_comment_classification:
