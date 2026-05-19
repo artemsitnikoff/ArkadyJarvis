@@ -24,10 +24,42 @@ from app.utils import parse_json_response
 
 logger = logging.getLogger("arkadyjarvis")
 
-# Минимальная норма часов в неделю — ниже → отгул-задача
+# Базовая норма часов в неделю (Пн-Пт минус 1 час за пятницу — общепринятая в DC)
 WEEKLY_HOURS_NORM = 32.0
+HOURS_PER_DAY = 8.0
 # Порог внутренних часов — выше → требует подтверждения, светится красным
 INTERNAL_HOURS_WARN = 8.0
+
+
+def _parse_holidays_in_week(since: date, until: date) -> int:
+    """Сколько РАБОЧИХ (пн-пт) дней внутри [since, until] помечены праздниками
+    в HUDSON_HOLIDAYS."""
+    from datetime import datetime as _dt
+
+    from app.config import settings
+    raw = (settings.hudson_holidays or "").strip()
+    if not raw:
+        return 0
+    count = 0
+    for piece in raw.split(","):
+        piece = piece.strip()
+        if not piece:
+            continue
+        try:
+            d = _dt.strptime(piece, "%Y-%m-%d").date()
+        except ValueError:
+            logger.warning("HUDSON_HOLIDAYS: bad date %r — skip", piece)
+            continue
+        if since <= d <= until and d.weekday() < 5:
+            count += 1
+    return count
+
+
+def compute_weekly_norm(since: date, until: date) -> float:
+    """Норма часов с учётом ТК РФ — вычитаем 8h за каждый рабочий праздничный
+    день в диапазоне. Не меньше 0."""
+    cut = _parse_holidays_in_week(since, until) * HOURS_PER_DAY
+    return max(0.0, WEEKLY_HOURS_NORM - cut)
 
 
 @dataclass
@@ -44,6 +76,7 @@ class DevReport:
     external_hours: float = 0.0
     bad_comments: list[tuple[WorklogEntry, str]] = field(default_factory=list)
     absence: str | None = None  # «🏖 Отпуск 15.05–22.05» / None если нет
+    weekly_norm: float = WEEKLY_HOURS_NORM  # с учётом праздников этой недели
 
     @property
     def on_leave(self) -> bool:
@@ -54,7 +87,7 @@ class DevReport:
         # На отпускников не вешаем недоборы — норма часов не действует
         if self.on_leave:
             return False
-        return self.total_hours < WEEKLY_HOURS_NORM
+        return self.total_hours < self.weekly_norm
 
 
 async def _load_web_pik_projects() -> dict[str, int]:
@@ -197,6 +230,13 @@ async def build_reports(
         except Exception as e:
             logger.warning("Hudson: не смог получить absences из Bitrix: %s", e)
 
+    week_norm = compute_weekly_norm(since, until)
+    if week_norm != WEEKLY_HOURS_NORM:
+        logger.info(
+            "Hudson: норма недели = %.0fh (праздники: %d рабочих дн.)",
+            week_norm, _parse_holidays_in_week(since, until),
+        )
+
     reports: list[DevReport] = []
     for d in devs:
         dev_entries = by_author.get(d["jira_username"], [])
@@ -207,6 +247,7 @@ async def build_reports(
             bitrix_id=d.get("developer_bitrix_id"),
             email=d.get("developer_email"),
             entries=dev_entries,
+            weekly_norm=week_norm,
         )
         if d.get("developer_bitrix_id") and absences:
             rep.absence = _format_absence(absences.get(d["developer_bitrix_id"], []))

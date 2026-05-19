@@ -83,7 +83,7 @@ def _dev_status(rep: DevReport) -> tuple[str, str]:
         return "🏖", f" ({rep.absence}, пропущен)"
     reasons: list[str] = []
     if rep.is_under_norm:
-        reasons.append(f"недобор до {WEEKLY_HOURS_NORM:.0f}h")
+        reasons.append(f"недобор до {rep.weekly_norm:.0f}h")
     if rep.internal_hours > INTERNAL_HOURS_WARN:
         reasons.append(f"внутр выше {INTERNAL_HOURS_WARN:.0f}h")
     flag = "🔴" if reasons else "🟢"
@@ -109,7 +109,7 @@ def _format_dev_block(rep: DevReport) -> str:
     bits = [line1]
     if rep.is_under_norm:
         bits.append(
-            f"   ⚠️ ниже нормы {WEEKLY_HOURS_NORM:.0f}h — поставим задачу на отгул",
+            f"   ⚠️ ниже нормы {rep.weekly_norm:.0f}h — поставим задачу на отгул",
         )
     if rep.bad_comments:
         bits.append(
@@ -453,7 +453,7 @@ async def _create_pq_tasks(
                         desc = (
                             f"За период {since} → {until} разработчик {r.name} "
                             f"списал в Jira {r.total_hours:.1f}h "
-                            f"(норма {WEEKLY_HOURS_NORM:.0f}h).\n\n"
+                            f"(норма {r.weekly_norm:.0f}h).\n\n"
                             f"Менеджер: {mgr}.\n"
                             f"Действие: оформить отгул или прокомментировать причину."
                         )
