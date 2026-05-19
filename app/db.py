@@ -76,6 +76,27 @@ CREATE TABLE IF NOT EXISTS zabbix_problems (
 
 CREATE INDEX IF NOT EXISTS idx_zabbix_unresolved
     ON zabbix_problems(resolved_at, jira_task_key, opened_at);
+
+-- DCJ — справочник проектов из корневого DCJ.xlsx
+CREATE TABLE IF NOT EXISTS dcj_projects (
+    project_key  TEXT PRIMARY KEY,
+    name         TEXT,
+    is_internal  INTEGER NOT NULL DEFAULT 0,    -- 1 если "Внутренний=Да"
+    direction    TEXT,                          -- "WEB - ПиК" / "1С" / "Маркетинг" / ...
+    category     TEXT,
+    updated_at   TEXT DEFAULT (datetime('now'))
+);
+
+-- Менеджеры проектов и их разработчики (для Мисис Хадсон)
+-- developer_pattern — substring (фамилия/часть) для поиска в Jira authorName или Bitrix LAST_NAME
+CREATE TABLE IF NOT EXISTS hudson_managers (
+    manager_name        TEXT NOT NULL,        -- ФИО как в Bitrix
+    manager_bitrix_id   INTEGER,              -- resolved через user.get LAST_NAME
+    developer_pattern   TEXT NOT NULL,        -- "Некрасова" / "Гусев" / etc.
+    developer_bitrix_id INTEGER,              -- resolved при загрузке
+    developer_email     TEXT,                 -- из Bitrix user.get
+    PRIMARY KEY (manager_name, developer_pattern)
+);
 """
 
 

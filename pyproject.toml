@@ -1,6 +1,6 @@
 [project]
 name = "arkadyjarvis"
-version = "4.20.0"
+version = "4.21.0"
 description = "Multi-user Telegram bot for chat summarization, Bitrix24/Jira integration"
 requires-python = ">=3.11"
 dependencies = [
@@ -15,6 +15,7 @@ dependencies = [
     "pypdf>=6,<7",
     "python-docx>=1,<2",
     "telethon>=1.36,<2",
+    "openpyxl>=3.1,<4",
 ]
 
 [project.optional-dependencies]
