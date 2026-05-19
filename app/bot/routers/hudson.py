@@ -11,7 +11,7 @@ from aiogram import F, Router
 from aiogram.types import CallbackQuery
 
 from app.config import settings
-from app.services.ai_client import AIClient
+from app.services.openrouter_client import OpenRouterClient
 
 logger = logging.getLogger("arkadyjarvis")
 router = Router()
@@ -26,8 +26,9 @@ def _parse_allowed_ids(csv: str) -> set[int]:
 HUDSON_ALLOWED = _parse_allowed_ids(settings.hudson_allowed)
 
 
-async def enter_hudson(callback: CallbackQuery, ai_client: AIClient) -> None:
-    """Показать сводку Хадсона за последние 7 дней (без рассылки)."""
+async def enter_hudson(callback: CallbackQuery, openrouter: OpenRouterClient) -> None:
+    """Показать сводку Хадсона за последние 7 дней (без рассылки).
+    Haiku-классификатор через OpenRouter, чтобы не жечь Claude subscription."""
     if callback.from_user.id not in HUDSON_ALLOWED:
         await callback.answer("🏠 Доступ закрыт", show_alert=True)
         return
@@ -44,7 +45,7 @@ async def enter_hudson(callback: CallbackQuery, ai_client: AIClient) -> None:
     since = until - timedelta(days=6)
 
     try:
-        reports = await build_reports(since, until, ai_client)
+        reports = await build_reports(since, until, openrouter)
     except Exception as e:
         logger.error("Hudson button: build_reports failed: %s", e, exc_info=True)
         await wait.edit_text(f"❌ Ошибка: {html.escape(str(e)[:300])}")

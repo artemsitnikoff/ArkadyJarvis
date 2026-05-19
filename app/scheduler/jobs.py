@@ -287,10 +287,10 @@ async def sales_dept_summary_job(
     )
 
 
-async def hudson_weekly_job(bot: Bot, ai_client: AIClient):
+async def hudson_weekly_job(bot: Bot, openrouter: OpenRouterClient):
     """Понедельник 11:00 (Нск): сбор worklog'ов WEB-ПиК за прошлую неделю
-    (пн-вс), классификация плохих комментариев, рассылка менеджерам, сводка
-    Алине, постановка задач в Jira PQ."""
+    (пн-вс), классификация плохих комментариев через OpenRouter Haiku,
+    рассылка менеджерам, сводка Алине, постановка задач в Jira PQ."""
     from datetime import date, timedelta
 
     from app.services.hudson_analyzer import build_reports
@@ -298,12 +298,11 @@ async def hudson_weekly_job(bot: Bot, ai_client: AIClient):
 
     tz = ZoneInfo(settings.timezone)
     today = datetime.now(tz).date()
-    # Прошлая полная неделя пн-вс (запуск в пн → since 7 дней назад, until вчера)
     until = today - timedelta(days=1)
     since = until - timedelta(days=6)
     logger.info("=== hudson_weekly_job: %s → %s", since, until)
     try:
-        reports = await build_reports(since, until, ai_client)
+        reports = await build_reports(since, until, openrouter)
         if not reports:
             logger.info("=== hudson_weekly_job: no reports, skipping")
             return

@@ -351,7 +351,7 @@ async def _enter_recruiter(callback: CallbackQuery, state: FSMContext, potok):
 @router.callback_query(F.data.startswith("hint:"))
 async def handle_hint(
     callback: CallbackQuery, state: FSMContext, bitrix, potok, ai_client, bot,
-    db_user: DbUser | None = None,
+    openrouter, db_user: DbUser | None = None,
 ):
     key = callback.data.split(":", 1)[1]
 
@@ -374,7 +374,7 @@ async def handle_hint(
         return
     if key == "hudson":
         from app.bot.routers.hudson import enter_hudson
-        await enter_hudson(callback, ai_client)
+        await enter_hudson(callback, openrouter)
         return
 
     # Data-driven FSM-entry hints (set state + show prompt).

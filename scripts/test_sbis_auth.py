@@ -31,13 +31,24 @@ async def call_rpc(
     params: dict,
     cookies: dict,
 ) -> dict | None:
+    import base64
     body = {"jsonrpc": "2.0", "protocol": 6, "method": method, "params": params, "id": 0}
+    # SBIS uses base64-encoded UTF-8 method name in X-OriginalMethodName for non-ASCII.
+    # X-CalledMethod can hold the ASCII fallback or the base64 too.
+    method_b64 = base64.b64encode(method.encode("utf-8")).decode("ascii")
     headers = {
         "Content-Type": "application/json; charset=utf-8",
         "Accept": "application/json, text/javascript, */*; q=0.01",
         "X-Requested-With": "XMLHttpRequest",
-        "X-CalledMethod": method,
+        "X-OriginalMethodName": method_b64,
     }
+    # Only add X-CalledMethod if method is ASCII
+    try:
+        method.encode("ascii")
+        headers["X-CalledMethod"] = method
+    except UnicodeEncodeError:
+        # For Cyrillic methods, use base64 version
+        headers["X-CalledMethod"] = method_b64
     print(f"\n→ POST {endpoint}  method={method}")
     print(f"  params: {json.dumps(params, ensure_ascii=False)[:200]}")
     try:
@@ -74,18 +85,30 @@ async def main(inn: str) -> None:
         # Try several method/endpoint combinations to find what works.
         # СБИС.ИнформацияОКонтрагенте is the basic EDO method for contractor info.
         attempts = [
-            ("https://online.sbis.ru/service/", "СБИС.ИнформацияОКонтрагенте", {"ИНН": inn}),
-            ("https://online.sbis.ru/service/", "Контрагент.СводкаПоКонтрагенту", {"ИНН": inn}),
-            ("https://online.sbis.ru/service/", "Контрагент.Найти", {"Запрос": inn, "Страница": 0, "РазмерСтраницы": 10}),
-            ("https://profile.saby.ru/service/", "СБИС.ИнформацияОКонтрагенте", {"ИНН": inn}),
+            # 1. Try Контрагент.НайтиПоРеквизитам — found it needs ДопПоля
+            ("https://online.sbis.ru/service/", "Контрагент.НайтиПоРеквизитам",
+             {"Реквизиты": inn, "ДопПоля": []}),
+            ("https://online.sbis.ru/service/", "Контрагент.НайтиПоРеквизитам",
+             {"Реквизиты": inn, "ДопПоля": ["Адрес", "Руководитель", "Телефон", "Email", "ОсновнойОКВЭД"]}),
+            ("https://online.sbis.ru/service/", "Контрагент.НайтиПоРеквизитам",
+             {"Реквизиты": inn, "ДопПоля": ["*"]}),
+            # 2. Other plausible search methods
+            ("https://online.sbis.ru/service/", "Контрагент.Найти",
+             {"Реквизиты": inn, "ДопПоля": []}),
+            ("https://online.sbis.ru/service/", "ВнешнееЛицо.НайтиПоРеквизитам",
+             {"Реквизиты": inn, "ДопПоля": []}),
         ]
+        successes = []
         for url, method, params in attempts:
             res = await call_rpc(http, url, method, params, cookies)
             if res:
-                print(f"\n  ✅ result preview:")
-                print(json.dumps(res, ensure_ascii=False, indent=2)[:2500])
-                print(f"\n  (full size: {len(json.dumps(res, ensure_ascii=False))} chars)")
-                break
+                successes.append((method, params, res))
+                print(f"  ✅ SUCCESS — preview:")
+                print(json.dumps(res, ensure_ascii=False, indent=2)[:1500])
+                print()
+        print(f"\n=== Summary: {len(successes)} succeeded out of {len(attempts)} ===")
+        for method, params, _ in successes:
+            print(f"  ✅ {method}  with params: {json.dumps(params, ensure_ascii=False)[:100]}")
 
 
 if __name__ == "__main__":

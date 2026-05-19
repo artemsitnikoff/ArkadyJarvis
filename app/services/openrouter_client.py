@@ -77,6 +77,42 @@ class OpenRouterClient:
     async def close(self):
         await self._client.aclose()
 
+    async def complete_text(
+        self,
+        prompt: str,
+        model: str = "anthropic/claude-haiku-4.5",
+        json_mode: bool = False,
+        timeout: float = 60.0,
+    ) -> str:
+        """Text completion через OpenRouter (для дешёвых классификаторов на Haiku,
+        чтобы не жечь Claude-subscription квоту опуса).
+
+        `model` — OpenRouter-стиль ID: 'anthropic/claude-haiku-4.5',
+        'anthropic/claude-sonnet-4.5' и т.п.
+        `json_mode=True` — просим JSON response.
+        """
+        payload: dict = {
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+        }
+        if json_mode:
+            payload["response_format"] = {"type": "json_object"}
+        resp = await self._client.post(BASE_URL, json=payload, timeout=timeout)
+        if resp.status_code >= 400:
+            body = resp.text[:300]
+            logger.error("OpenRouter complete_text %d: %s", resp.status_code, body)
+            raise ValueError(f"OpenRouter {resp.status_code}: {body}")
+        data = resp.json()
+        choices = data.get("choices") or []
+        if not choices:
+            err = data.get("error", {}).get("message", "no choices")
+            raise ValueError(f"OpenRouter: {err}")
+        msg = choices[0].get("message") or {}
+        content = msg.get("content")
+        if isinstance(content, list):
+            content = "".join(p.get("text", "") for p in content if p.get("type") == "text")
+        return (content or "").strip()
+
     async def generate_image(self, prompt: str, image_b64: str | None = None) -> bytes:
         """Generate an image via Gemini through OpenRouter. Returns raw PNG bytes.
 

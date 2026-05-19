@@ -17,8 +17,8 @@ from dataclasses import dataclass, field
 from datetime import date
 
 from app.db import get_db
-from app.services.ai_client import AIClient
 from app.services.jira_worklog import WorklogEntry, fetch_worklogs
+from app.services.openrouter_client import OpenRouterClient
 from app.services.prompts import load_prompt
 from app.utils import parse_json_response
 
@@ -70,9 +70,10 @@ async def _load_devs() -> list[dict]:
 async def _classify_comments(
     entries: list[WorklogEntry],
     developer_name: str,
-    ai_client: AIClient,
+    openrouter: OpenRouterClient,
 ) -> list[tuple[WorklogEntry, str]]:
-    """Параллельная (sem=5) Haiku-классификация. Возвращает список плохих."""
+    """Параллельная (sem=5) Haiku-классификация через OpenRouter (anthropic/claude-haiku-4.5).
+    Возвращает список плохих коммов."""
     if not entries:
         return []
     prompt_tmpl = load_prompt("hudson_bad_comment")
@@ -88,14 +89,14 @@ async def _classify_comments(
                 .replace("{hours}", f"{entry.hours:.2f}")
                 .replace("{comment}", entry.comment or "(пусто)")
             )
-            # Один повтор при таймауте/ошибке — Haiku изредка тупит >60с
             last_err: Exception | None = None
             for attempt in (1, 2):
                 try:
-                    resp = await ai_client.complete(
+                    resp = await openrouter.complete_text(
                         prompt,
-                        timeout=60,
-                        model="claude-haiku-4-5-20251001",
+                        model="anthropic/claude-haiku-4.5",
+                        json_mode=True,
+                        timeout=60.0,
                     )
                     data = parse_json_response(resp) or {}
                     if data.get("is_bad"):
@@ -117,7 +118,7 @@ async def _classify_comments(
 async def build_reports(
     since: date,
     until: date,
-    ai_client: AIClient,
+    openrouter: OpenRouterClient,
     skip_comment_classification: bool = False,
 ) -> list[DevReport]:
     """Полный сбор недельной аналитики per-dev."""
@@ -159,7 +160,7 @@ async def build_reports(
                 rep.external_hours += e.hours
         if not skip_comment_classification:
             rep.bad_comments = await _classify_comments(
-                dev_entries, d["developer_pattern"], ai_client,
+                dev_entries, d["developer_pattern"], openrouter,
             )
         reports.append(rep)
     return reports

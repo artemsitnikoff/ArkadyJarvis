@@ -32,9 +32,9 @@ logging.basicConfig(
 
 from app.bot.create import create_bot  # noqa: E402
 from app.db import close_db, init_db  # noqa: E402
-from app.services.ai_client import AIClient  # noqa: E402
 from app.services.hudson_analyzer import build_reports  # noqa: E402
 from app.services.hudson_notifier import notify  # noqa: E402
+from app.services.openrouter_client import OpenRouterClient  # noqa: E402
 
 
 def _last_full_week(offset: int = 0) -> tuple[date, date]:
@@ -65,10 +65,10 @@ async def main() -> None:
 
     print(f"=== Hudson manual run: {since} → {until} (dry={args.dry_run}) ===\n")
     await init_db()
-    ai = AIClient()
+    openrouter = OpenRouterClient()
     bot = create_bot()
     try:
-        reports = await build_reports(since, until, ai)
+        reports = await build_reports(since, until, openrouter)
         if not reports:
             print("Нет данных")
             return
@@ -94,6 +94,7 @@ async def main() -> None:
         print(f"  {stats}")
     finally:
         await bot.session.close()
+        await openrouter.close()
         await close_db()
 
 

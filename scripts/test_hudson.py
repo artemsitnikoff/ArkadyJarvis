@@ -24,11 +24,11 @@ logging.basicConfig(
 )
 
 from app.db import close_db, init_db  # noqa: E402
-from app.services.ai_client import AIClient  # noqa: E402
 from app.services.hudson_analyzer import (  # noqa: E402
     WEEKLY_HOURS_NORM,
     build_reports,
 )
+from app.services.openrouter_client import OpenRouterClient  # noqa: E402
 
 
 async def main() -> None:
@@ -52,10 +52,10 @@ async def main() -> None:
     print(f"   (норма {WEEKLY_HOURS_NORM:.0f}h/нед, ai={'off' if no_ai else 'on'})\n")
 
     await init_db()
-    ai = AIClient()
+    openrouter = OpenRouterClient()
     try:
         reports = await build_reports(
-            since, until, ai, skip_comment_classification=no_ai,
+            since, until, openrouter, skip_comment_classification=no_ai,
         )
         if not reports:
             print("Нет данных")
@@ -92,6 +92,7 @@ async def main() -> None:
             stats = await notify(reports, since, until, bot=None, dry_run=True)
             print(f"\n  итог: {stats}")
     finally:
+        await openrouter.close()
         await close_db()
 
 
