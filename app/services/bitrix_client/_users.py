@@ -81,6 +81,43 @@ class _BitrixUsersMixin:
                         return users
         return users
 
+    async def get_absences(
+        self, user_ids: list[int], since: str, until: str,
+    ) -> dict[int, list[dict]]:
+        """Тянет absence.list (отпуска/больничные/командировки) для указанных
+        пользователей в диапазоне дат. Возвращает {user_id: [absence_dict, …]}.
+
+        absence.TYPE: A — больничный/absence, V — отпуск/vacation, B — командировка.
+        Date format: 'YYYY-MM-DD' или ISO.
+        """
+        if not user_ids:
+            return {}
+        # absence.list возвращает максимум 50 записей за раз — пагинируем
+        result: dict[int, list[dict]] = {uid: [] for uid in user_ids}
+        start = 0
+        while True:
+            r = await self._request(
+                "absence.list",
+                {
+                    "filter": {
+                        "USER_ID": user_ids,
+                        ">=DATE_ACTIVE_FROM": since,
+                        "<=DATE_ACTIVE_TO": until,
+                    },
+                    "start": start,
+                },
+            )
+            batch = r.get("result") or []
+            for row in batch:
+                uid = int(row.get("USER_ID") or 0)
+                if uid in result:
+                    result[uid].append(row)
+            next_ = r.get("next")
+            if next_ is None or not batch:
+                break
+            start = int(next_)
+        return result
+
     async def get_employee_card(self, user_id: int) -> dict | None:
         """Fetch detailed employee card: name, position, department, phone, email, supervisor."""
         result = await self._request("user.get", {"ID": user_id})

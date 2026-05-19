@@ -242,7 +242,7 @@ async def lifespan(app: FastAPI):
             day_of_week="mon", hour=11, minute=0, timezone=settings.timezone,
         ),
         id="hudson_weekly",
-        args=[bot, ai_client, openrouter],
+        args=[bot, ai_client, openrouter, bitrix],
     )
     logger.info(
         "Scheduler: hudson_weekly at Mon 11:00 [%s] -> WEB-ПиК Jira",

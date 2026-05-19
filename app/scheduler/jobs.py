@@ -288,7 +288,7 @@ async def sales_dept_summary_job(
 
 
 async def hudson_weekly_job(
-    bot: Bot, ai_client: AIClient, openrouter: OpenRouterClient,
+    bot: Bot, ai_client: AIClient, openrouter: OpenRouterClient, bitrix=None,
 ):
     """Понедельник 11:00 (Нск): сбор worklog'ов WEB-ПиК за прошлую неделю.
     Classifier плохих коммов — Haiku через OpenRouter (массово).
@@ -304,7 +304,7 @@ async def hudson_weekly_job(
     since = until - timedelta(days=6)
     logger.info("=== hudson_weekly_job: %s → %s", since, until)
     try:
-        reports = await build_reports(since, until, openrouter)
+        reports = await build_reports(since, until, openrouter, bitrix=bitrix)
         if not reports:
             logger.info("=== hudson_weekly_job: no reports, skipping")
             return

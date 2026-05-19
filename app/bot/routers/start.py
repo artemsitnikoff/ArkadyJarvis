@@ -374,7 +374,7 @@ async def handle_hint(
         return
     if key == "hudson":
         from app.bot.routers.hudson import enter_hudson
-        await enter_hudson(callback, openrouter)
+        await enter_hudson(callback, openrouter, bitrix=bitrix)
         return
 
     # Data-driven FSM-entry hints (set state + show prompt).

@@ -43,9 +43,17 @@ class DevReport:
     internal_hours: float = 0.0
     external_hours: float = 0.0
     bad_comments: list[tuple[WorklogEntry, str]] = field(default_factory=list)
+    absence: str | None = None  # «🏖 Отпуск 15.05–22.05» / None если нет
+
+    @property
+    def on_leave(self) -> bool:
+        return bool(self.absence)
 
     @property
     def is_under_norm(self) -> bool:
+        # На отпускников не вешаем недоборы — норма часов не действует
+        if self.on_leave:
+            return False
         return self.total_hours < WEEKLY_HOURS_NORM
 
 
@@ -118,13 +126,37 @@ async def _classify_comments(
     return bad
 
 
+def _format_absence(items: list[dict]) -> str | None:
+    """Текстовое описание самой релевантной отлучки (отпуск > командировка > болезнь).
+    items — отдача absence.list по одному пользователю."""
+    if not items:
+        return None
+    type_label = {"V": "🏖 Отпуск", "B": "✈ Командировка", "A": "🤒 Болеет"}
+    # приоритет: V > B > A
+    priority = {"V": 0, "B": 1, "A": 2}
+    items_sorted = sorted(
+        items, key=lambda r: priority.get((r.get("TYPE") or "").upper(), 9),
+    )
+    a = items_sorted[0]
+    label = type_label.get((a.get("TYPE") or "").upper(), "Отсутствует")
+    df = (a.get("DATE_ACTIVE_FROM") or "")[:10]
+    dt = (a.get("DATE_ACTIVE_TO") or "")[:10]
+    if df and dt:
+        df_short = df[8:10] + "." + df[5:7]
+        dt_short = dt[8:10] + "." + dt[5:7]
+        return f"{label} {df_short}–{dt_short}"
+    return label
+
+
 async def build_reports(
     since: date,
     until: date,
     openrouter: OpenRouterClient,
+    bitrix=None,
     skip_comment_classification: bool = False,
 ) -> list[DevReport]:
-    """Полный сбор недельной аналитики per-dev."""
+    """Полный сбор недельной аналитики per-dev. `bitrix` — опционален, нужен для
+    подгрузки отпусков/больничных."""
     projects = await _load_web_pik_projects()
     if not projects:
         logger.warning("Hudson: dcj_projects не содержит WEB-ПиК проектов")
@@ -144,6 +176,17 @@ async def build_reports(
     for e in entries:
         by_author.setdefault(e.author, []).append(e)
 
+    # absences (опционально)
+    absences: dict[int, list[dict]] = {}
+    if bitrix is not None:
+        bx_ids = [d["developer_bitrix_id"] for d in devs if d.get("developer_bitrix_id")]
+        try:
+            absences = await bitrix.get_absences(
+                bx_ids, since.isoformat(), until.isoformat(),
+            )
+        except Exception as e:
+            logger.warning("Hudson: не смог получить absences из Bitrix: %s", e)
+
     reports: list[DevReport] = []
     for d in devs:
         dev_entries = by_author.get(d["jira_username"], [])
@@ -155,6 +198,8 @@ async def build_reports(
             email=d.get("developer_email"),
             entries=dev_entries,
         )
+        if d.get("developer_bitrix_id") and absences:
+            rep.absence = _format_absence(absences.get(d["developer_bitrix_id"], []))
         for e in dev_entries:
             rep.total_hours += e.hours
             if projects.get(e.project_key) == 1:

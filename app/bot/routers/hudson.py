@@ -26,7 +26,9 @@ def _parse_allowed_ids(csv: str) -> set[int]:
 HUDSON_ALLOWED = _parse_allowed_ids(settings.hudson_allowed)
 
 
-async def enter_hudson(callback: CallbackQuery, openrouter: OpenRouterClient) -> None:
+async def enter_hudson(
+    callback: CallbackQuery, openrouter: OpenRouterClient, bitrix=None,
+) -> None:
     """Показать сводку Хадсона за последние 7 дней (без рассылки).
     Haiku-классификатор через OpenRouter, чтобы не жечь Claude subscription."""
     if callback.from_user.id not in HUDSON_ALLOWED:
@@ -45,7 +47,7 @@ async def enter_hudson(callback: CallbackQuery, openrouter: OpenRouterClient) ->
     since = until - timedelta(days=6)
 
     try:
-        reports = await build_reports(since, until, openrouter)
+        reports = await build_reports(since, until, openrouter, bitrix=bitrix)
     except Exception as e:
         logger.error("Hudson button: build_reports failed: %s", e, exc_info=True)
         await wait.edit_text(f"❌ Ошибка: {html.escape(str(e)[:300])}")

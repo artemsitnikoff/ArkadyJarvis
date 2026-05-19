@@ -33,6 +33,7 @@ logging.basicConfig(
 from app.bot.create import create_bot  # noqa: E402
 from app.db import close_db, init_db  # noqa: E402
 from app.services.ai_client import AIClient  # noqa: E402
+from app.services.bitrix_client import BitrixClient  # noqa: E402
 from app.services.hudson_analyzer import build_reports  # noqa: E402
 from app.services.hudson_notifier import notify  # noqa: E402
 from app.services.openrouter_client import OpenRouterClient  # noqa: E402
@@ -68,9 +69,10 @@ async def main() -> None:
     await init_db()
     openrouter = OpenRouterClient()
     ai = AIClient()
+    bitrix = BitrixClient()
     bot = create_bot()
     try:
-        reports = await build_reports(since, until, openrouter)
+        reports = await build_reports(since, until, openrouter, bitrix=bitrix)
         if not reports:
             print("Нет данных")
             return
@@ -97,6 +99,7 @@ async def main() -> None:
     finally:
         await bot.session.close()
         await openrouter.close()
+        await bitrix.close()
         await close_db()
 
 

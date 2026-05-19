@@ -24,6 +24,7 @@ logging.basicConfig(
 )
 
 from app.db import close_db, init_db  # noqa: E402
+from app.services.bitrix_client import BitrixClient  # noqa: E402
 from app.services.hudson_analyzer import (  # noqa: E402
     WEEKLY_HOURS_NORM,
     build_reports,
@@ -53,9 +54,11 @@ async def main() -> None:
 
     await init_db()
     openrouter = OpenRouterClient()
+    bitrix = BitrixClient()
     try:
         reports = await build_reports(
-            since, until, openrouter, skip_comment_classification=no_ai,
+            since, until, openrouter, bitrix=bitrix,
+            skip_comment_classification=no_ai,
         )
         if not reports:
             print("Нет данных")
@@ -97,6 +100,7 @@ async def main() -> None:
             print(f"\n  итог: {stats}")
     finally:
         await openrouter.close()
+        await bitrix.close()
         await close_db()
 
 
