@@ -115,8 +115,8 @@ class Settings(BaseSettings):
     hudson_allowed: str = ""
     # Чат-группа для еженедельного отчёта Хадсона (с тэгом менеджеров)
     hudson_chat_id: int = 0  # e.g. -1002588304733
-    # «Тихий режим»: ничего не шлёт менеджерам/Алине/в группу + не создаёт Jira
-    hudson_dry_run: bool = False
+    # Отключить ТОЛЬКО создание Jira-задач (Telegram-рассылка работает как обычно)
+    hudson_skip_jira: bool = False
 
     # Telethon userbot (for sending messages from recruiter's personal account)
     telethon_api_id: int = 0

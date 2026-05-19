@@ -529,8 +529,11 @@ async def notify(
                 )
 
     created_keys: list[str] = []
-    if dry_run:
-        logger.info("[DRY-RUN] skipping Jira PQ task creation")
+    if dry_run or settings.hudson_skip_jira:
+        logger.info(
+            "[skip] Jira PQ task creation (dry=%s skip_jira=%s)",
+            dry_run, settings.hudson_skip_jira,
+        )
     else:
         created_keys = await _create_pq_tasks(by_manager, since, until)
 
