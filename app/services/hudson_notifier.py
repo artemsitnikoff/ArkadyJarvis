@@ -124,7 +124,43 @@ def _format_dev_block(rep: DevReport) -> str:
     return "\n".join(bits)
 
 
-TG_MAX = 4000  # Telegram cap 4096, оставляем запас на HTML overhead
+TG_MAX = 3800  # Telegram cap 4096, оставляем запас на HTML-сущности (&amp; и т.п.)
+
+
+def _split_block(blk: str, limit: int = TG_MAX) -> list[str]:
+    """Если блок >limit — делим по строкам. Возвращает список chunk'ов."""
+    if len(blk) <= limit:
+        return [blk]
+    lines = blk.split("\n")
+    chunks: list[str] = []
+    cur = ""
+    for line in lines:
+        candidate = (cur + "\n" + line) if cur else line
+        if len(candidate) <= limit:
+            cur = candidate
+        else:
+            if cur:
+                chunks.append(cur)
+            cur = line if len(line) <= limit else line[:limit]
+    if cur:
+        chunks.append(cur)
+    return chunks
+
+
+def _append_block_to_messages(
+    blk: str, current: str, messages: list[str],
+) -> str:
+    """Пытается дописать блок к текущему сообщению; если не влезает — делит блок
+    и переносит на следующее сообщение. Возвращает обновлённое `current`."""
+    for sub in _split_block(blk):
+        candidate = (current + "\n\n" + sub) if current else sub
+        if len(candidate) <= TG_MAX:
+            current = candidate
+        else:
+            if current:
+                messages.append(current)
+            current = sub
+    return current
 
 
 async def _format_manager_messages(
@@ -144,12 +180,7 @@ async def _format_manager_messages(
     messages: list[str] = []
     current = header
     for blk in blocks:
-        candidate = current + "\n\n" + blk
-        if len(candidate) <= TG_MAX:
-            current = candidate
-        else:
-            messages.append(current)
-            current = blk
+        current = _append_block_to_messages(blk, current, messages)
     if current:
         messages.append(current)
     return messages
@@ -177,26 +208,14 @@ async def _format_alina_messages(
         bad = sum(len(r.bad_comments) for r in reps)
         mgr_display = full_names.get(mgr, mgr)
         mgr_header = (
-            f"\n— <b>{html.escape(mgr_display)}</b> — "
+            f"— <b>{html.escape(mgr_display)}</b> — "
             f"{len(reps)} разрабов · {total:.0f}h всего · внутр {intern:.0f}h · "
             f"под нормой {len(under_norm)} · плохих коммов {bad}"
         )
-        # Сначала пробуем добавить mgr-header целиком
-        candidate = current + "\n" + mgr_header
-        if len(candidate) > TG_MAX:
-            messages.append(current)
-            current = mgr_header
-        else:
-            current = candidate
-
+        current = _append_block_to_messages(mgr_header, current, messages)
         for r in reps:
             blk = _format_dev_block(r)
-            candidate = current + "\n\n" + blk
-            if len(candidate) <= TG_MAX:
-                current = candidate
-            else:
-                messages.append(current)
-                current = blk
+            current = _append_block_to_messages(blk, current, messages)
     if current:
         messages.append(current)
     return messages
@@ -435,21 +454,12 @@ async def _format_group_messages(
     for mgr in sorted(by_manager):
         reps = sorted(by_manager[mgr], key=lambda x: x.name)
         display_name = full_names.get(mgr, mgr)
-        mgr_header = f"\n— <b>{html.escape(display_name)}</b> —"
-        candidate = current + "\n" + mgr_header
-        if len(candidate) > TG_MAX:
-            messages.append(current)
-            current = mgr_header
-        else:
-            current = candidate
+        current = _append_block_to_messages(
+            f"— <b>{html.escape(display_name)}</b> —", current, messages,
+        )
         for r in reps:
             blk = _format_dev_block(r)
-            candidate = current + "\n\n" + blk
-            if len(candidate) <= TG_MAX:
-                current = candidate
-            else:
-                messages.append(current)
-                current = blk
+            current = _append_block_to_messages(blk, current, messages)
     if current:
         messages.append(current)
     return messages
