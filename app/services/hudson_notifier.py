@@ -16,6 +16,7 @@ import logging
 from datetime import date
 
 from aiogram import Bot
+from aiogram.types import BufferedInputFile
 
 from app.config import settings
 from app.db import get_db, get_user_by_bitrix_id
@@ -97,8 +98,8 @@ def _jira_link(issue_key: str) -> str:
 
 
 def _format_dev_block(rep: DevReport) -> str:
-    """HTML-блок для одного разработчика. Все плохие комменты до конца,
-    с кликабельными ссылками на Jira."""
+    """Компактный HTML-блок per-dev: статус + счётчик плохих.
+    Детали (сами комменты и часы по задачам) — в прикреплённых .md."""
     flag, reason_tag = _dev_status(rep)
     name = html.escape(rep.name)
     line1 = (
@@ -112,16 +113,80 @@ def _format_dev_block(rep: DevReport) -> str:
         )
     if rep.bad_comments:
         bits.append(
-            f"   💬 плохих комментариев: {len(rep.bad_comments)}/{len(rep.entries)}"
+            f"   💬 плохих коммов: {len(rep.bad_comments)}/{len(rep.entries)} "
+            f"(см. .md)"
         )
-        for entry, reason in rep.bad_comments:
-            c = html.escape(entry.comment or "(пусто)")
-            r = html.escape(reason)
-            bits.append(
-                f"     • {_jira_link(entry.issue_key)} "
-                f"({entry.hours:.1f}h): «{c}» — {r}"
-            )
     return "\n".join(bits)
+
+
+def _build_bad_comments_md(
+    by_manager: dict[str, list[DevReport]],
+    full_names: dict[str, str],
+    since: date, until: date,
+) -> str:
+    """Markdown-документ со всеми плохими комментариями."""
+    period = f"{since.strftime('%d.%m')}–{until.strftime('%d.%m')}"
+    base = settings.jira_url.rstrip("/")
+    out = [f"# Плохие комментарии за {period}", ""]
+    has_any = False
+    for mgr in sorted(by_manager):
+        mgr_full = full_names.get(mgr, mgr)
+        for r in sorted(by_manager[mgr], key=lambda x: x.name):
+            if not r.bad_comments:
+                continue
+            has_any = True
+            out.append(
+                f"## {mgr_full} → {r.name} "
+                f"({len(r.bad_comments)}/{len(r.entries)})"
+            )
+            out.append("")
+            for entry, reason in r.bad_comments:
+                c = (entry.comment or "(пусто)").replace("\n", " ")
+                link = f"[{entry.issue_key}]({base}/browse/{entry.issue_key})"
+                out.append(
+                    f"- {link} ({entry.hours:.2f}h): «{c}» — {reason}"
+                )
+            out.append("")
+    if not has_any:
+        out.append("_Нет плохих комментариев за период — красавцы!_")
+    return "\n".join(out)
+
+
+def _build_internal_md(
+    by_manager: dict[str, list[DevReport]],
+    full_names: dict[str, str],
+    since: date, until: date,
+) -> str:
+    """Markdown-документ с разбивкой внутренних часов по задачам."""
+    period = f"{since.strftime('%d.%m')}–{until.strftime('%d.%m')}"
+    base = settings.jira_url.rstrip("/")
+    out = [f"# Внутренние часы по задачам за {period}", ""]
+    has_any = False
+    for mgr in sorted(by_manager):
+        mgr_full = full_names.get(mgr, mgr)
+        for r in sorted(by_manager[mgr], key=lambda x: x.name):
+            if not r.internal_entries:
+                continue
+            has_any = True
+            out.append(f"## {mgr_full} → {r.name} ({r.internal_hours:.1f}h всего)")
+            out.append("")
+            by_issue: dict[str, tuple[float, list[str]]] = {}
+            for e in r.internal_entries:
+                hours, comments = by_issue.get(e.issue_key, (0.0, []))
+                c = (e.comment or "").strip().replace("\n", " ")
+                if c:
+                    comments.append(c)
+                by_issue[e.issue_key] = (hours + e.hours, comments)
+            for ikey, (h, comments) in sorted(
+                by_issue.items(), key=lambda kv: -kv[1][0],
+            ):
+                link = f"[{ikey}]({base}/browse/{ikey})"
+                joined = "; ".join(comments) if comments else "(без комментариев)"
+                out.append(f"- {link} — {h:.2f}h — {joined}")
+            out.append("")
+    if not has_any:
+        out.append("_Внутренних часов нет — все на внешних проектах._")
+    return "\n".join(out)
 
 
 TG_MAX = 3800  # Telegram cap 4096, оставляем запас на HTML-сущности (&amp; и т.п.)
@@ -482,9 +547,10 @@ async def notify(
     sent_managers = 0
     sent_alina = False
     sent_group = False
-    # Кешируем (tg_id, display_name) каждого менеджера — пригодится для тэга в группе
+
+    # Резолвим telegram_id всех менеджеров (для тэгов в группе и DM-рассылки)
     manager_telegrams: dict[str, tuple[int, str]] = {}
-    for mgr, reps in by_manager.items():
+    for mgr in by_manager:
         manager_bitrix_id = await _manager_bitrix_id(mgr)
         if not manager_bitrix_id:
             logger.warning("Hudson notify: no Bitrix ID for manager %s", mgr)
@@ -500,38 +566,63 @@ async def notify(
             int(user["telegram_id"]),
             user.get("display_name") or mgr,
         )
+
+    # Готовим .md-файлы (одни и те же для всех получателей)
+    full_names = await _manager_full_names(list(by_manager.keys()))
+    period_tag = f"{since.isoformat()}_{until.isoformat()}"
+    bad_md_bytes = _build_bad_comments_md(
+        by_manager, full_names, since, until,
+    ).encode("utf-8")
+    internal_md_bytes = _build_internal_md(
+        by_manager, full_names, since, until,
+    ).encode("utf-8")
+
+    async def _send_with_md(chat_id: int, messages: list[str]) -> None:
+        for text in messages:
+            await bot.send_message(chat_id, text, disable_web_page_preview=True)
+        await bot.send_document(
+            chat_id,
+            BufferedInputFile(bad_md_bytes, filename=f"bad_comments_{period_tag}.md"),
+        )
+        await bot.send_document(
+            chat_id,
+            BufferedInputFile(
+                internal_md_bytes, filename=f"internal_hours_{period_tag}.md",
+            ),
+        )
+
+    # 1) DM каждому менеджеру — только его команда
+    for mgr, reps in by_manager.items():
+        if mgr not in manager_telegrams:
+            continue
+        tg_id, _ = manager_telegrams[mgr]
         messages = await _format_manager_messages(mgr, reps, since, until)
         if dry_run:
             logger.info(
-                "[DRY-RUN] would send %d message(s) to %s (tg=%s)",
-                len(messages), mgr, user["telegram_id"],
+                "[DRY-RUN] would send %d msg(s) + 2 .md to %s (tg=%s)",
+                len(messages), mgr, tg_id,
             )
             sent_managers += 1
             continue
         try:
-            for text in messages:
-                await bot.send_message(
-                    user["telegram_id"], text, disable_web_page_preview=True,
-                )
+            await _send_with_md(tg_id, messages)
             sent_managers += 1
         except Exception as e:
             logger.error("Hudson notify: send to %s failed: %s", mgr, e)
 
+    # 2) Алина — полный отчёт + .md
     alina = await get_user_by_bitrix_id(settings.hudson_dept_head_bitrix_id)
     if alina:
         alina_msgs = await _format_alina_messages(by_manager, since, until)
         if dry_run:
             logger.info(
-                "[DRY-RUN] would send %d message(s) Alina summary (tg=%s)",
+                "[DRY-RUN] would send %d msg(s) + 2 .md to Алина (tg=%s)",
                 len(alina_msgs), alina["telegram_id"],
             )
             sent_alina = True
         else:
             try:
-                for text in alina_msgs:
-                    await bot.send_message(
-                        alina["telegram_id"], text, disable_web_page_preview=True,
-                    )
+                await _send_with_md(int(alina["telegram_id"]), alina_msgs)
                 sent_alina = True
             except Exception as e:
                 logger.error("Hudson notify: send to Алина failed: %s", e)
@@ -541,24 +632,20 @@ async def notify(
             settings.hudson_dept_head_bitrix_id,
         )
 
-    # Group message — полный per-dev отчёт + тэги менеджеров + мотивация
+    # 3) Группа — компактная шапка с тэгами + мотивация + .md
     if settings.hudson_chat_id:
         group_msgs = await _format_group_messages(
             by_manager, since, until, manager_telegrams, ai_client,
         )
         if dry_run:
             logger.info(
-                "[DRY-RUN] would send %d group msg(s) to %s (%d managers tagged)",
-                len(group_msgs), settings.hudson_chat_id, len(manager_telegrams),
+                "[DRY-RUN] would send %d group msg(s) + 2 .md to %s",
+                len(group_msgs), settings.hudson_chat_id,
             )
             sent_group = True
         else:
             try:
-                for text in group_msgs:
-                    await bot.send_message(
-                        settings.hudson_chat_id, text,
-                        disable_web_page_preview=True,
-                    )
+                await _send_with_md(settings.hudson_chat_id, group_msgs)
                 sent_group = True
             except Exception as e:
                 logger.error(

@@ -8,7 +8,7 @@ import logging
 from datetime import date, timedelta
 
 from aiogram import F, Router
-from aiogram.types import CallbackQuery
+from aiogram.types import BufferedInputFile, CallbackQuery
 
 from app.config import settings
 from app.services.openrouter_client import OpenRouterClient
@@ -29,19 +29,38 @@ HUDSON_ALLOWED = _parse_allowed_ids(settings.hudson_allowed)
 async def enter_hudson(
     callback: CallbackQuery, openrouter: OpenRouterClient, bitrix=None,
 ) -> None:
-    """Показать сводку Хадсона за последние 7 дней (без рассылки).
-    Haiku-классификатор через OpenRouter, чтобы не жечь Claude subscription."""
+    """Отчёт Хадсона за последние 7 дней — отправляется в ЛИЧКУ пользователю,
+    чтобы не светить в группе. Доступ: HUDSON_ALLOWED (я + менеджеры)."""
     if callback.from_user.id not in HUDSON_ALLOWED:
         await callback.answer("🏠 Доступ закрыт", show_alert=True)
         return
-    await callback.answer()
-    wait = await callback.message.answer(
-        "🏠 Хадсон собирает worklog'и WEB-ПиК за неделю, "
-        "+ Haiku-классификация комментариев. Ждать минуту…",
-    )
+    await callback.answer("🏠 Сейчас пришлю отчёт тебе в личку", show_alert=False)
 
     from app.services.hudson_analyzer import build_reports
-    from app.services.hudson_notifier import _format_alina_messages
+    from app.services.hudson_notifier import (
+        _build_bad_comments_md,
+        _build_internal_md,
+        _format_alina_messages,
+        _manager_full_names,
+    )
+
+    user_id = callback.from_user.id
+    bot = callback.bot
+
+    try:
+        wait = await bot.send_message(
+            user_id,
+            "🏠 Хадсон собирает worklog'и WEB-ПиК за неделю, "
+            "+ Haiku-классификация комментариев. Ждать минуту…",
+        )
+    except Exception as e:
+        # Юзер не нажимал /start у бота, поэтому DM закрыт
+        logger.warning("Hudson button: cannot DM user %s: %s", user_id, e)
+        await callback.message.answer(
+            "❌ Открой со мной личку (нажми /start в DM боту), "
+            "и попробуй ещё раз — отчёт большой, чтобы не светить его в группе.",
+        )
+        return
 
     until = date.today() - timedelta(days=1)
     since = until - timedelta(days=6)
@@ -60,9 +79,21 @@ async def enter_hudson(
     by_manager: dict[str, list] = {}
     for r in reports:
         by_manager.setdefault(r.manager_name, []).append(r)
-    messages = await _format_alina_messages(by_manager, since, until)
 
-    # Первый чанк — в место «Хадсон собирает…», остальные отдельными сообщениями
+    messages = await _format_alina_messages(by_manager, since, until)
     await wait.edit_text(messages[0], disable_web_page_preview=True)
     for extra in messages[1:]:
-        await callback.message.answer(extra, disable_web_page_preview=True)
+        await bot.send_message(user_id, extra, disable_web_page_preview=True)
+
+    full_names = await _manager_full_names(list(by_manager.keys()))
+    period_tag = f"{since.isoformat()}_{until.isoformat()}"
+    bad_md = _build_bad_comments_md(by_manager, full_names, since, until).encode("utf-8")
+    intl_md = _build_internal_md(by_manager, full_names, since, until).encode("utf-8")
+    await bot.send_document(
+        user_id,
+        BufferedInputFile(bad_md, filename=f"bad_comments_{period_tag}.md"),
+    )
+    await bot.send_document(
+        user_id,
+        BufferedInputFile(intl_md, filename=f"internal_hours_{period_tag}.md"),
+    )
