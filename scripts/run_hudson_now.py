@@ -90,7 +90,7 @@ async def main() -> None:
                 )
 
         print("\n=== Notifier ===")
-        stats = await notify(reports, since, until, bot, dry_run=args.dry_run)
+        stats = await notify(reports, since, until, bot, openrouter, dry_run=args.dry_run)
         print(f"  {stats}")
     finally:
         await bot.session.close()

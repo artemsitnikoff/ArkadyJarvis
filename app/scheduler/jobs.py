@@ -306,7 +306,7 @@ async def hudson_weekly_job(bot: Bot, openrouter: OpenRouterClient):
         if not reports:
             logger.info("=== hudson_weekly_job: no reports, skipping")
             return
-        stats = await notify(reports, since, until, bot)
+        stats = await notify(reports, since, until, bot, openrouter)
         logger.info("=== hudson_weekly_job done: %s", stats)
     except Exception as e:
         logger.error("=== hudson_weekly_job failed: %s", e, exc_info=True)

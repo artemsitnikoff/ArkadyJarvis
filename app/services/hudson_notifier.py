@@ -13,7 +13,6 @@
 """
 import html
 import logging
-import random
 from datetime import date
 
 from aiogram import Bot
@@ -26,21 +25,58 @@ from app.services.hudson_analyzer import (
     DevReport,
 )
 from app.services.jira_client import JiraClient
+from app.services.openrouter_client import OpenRouterClient
 
 logger = logging.getLogger("arkadyjarvis")
 
 PQ_PROJECT_KEY = "PQ"  # «Стратегия и развитие департамента Production&Quality»
 
-MOTIVATIONAL_PHRASES = [
-    "Поехали, ребят, новая неделя — новый шанс показать, кто здесь главный 💪",
-    "За дело, команда! Внутреннее тушим, внешним зажигаем 🔥",
-    "Друзья, прошлая неделя позади — впереди только победы. Погнали 🚀",
-    "Утро понедельника — лучший момент чтобы навести порядок. Вперёд! ⚡",
-    "Команда, спасибо за прошлую неделю — а теперь делаем лучше 🎯",
-    "Ребят, верю в каждого. Эта неделя — наша 💼",
-    "Подтянем хвосты и полетели — клиенты ждут 🏎️",
-    "Старт недели, заряжаемся! Прошлая — урок, эта — рекорд 🏆",
-]
+MOTIVATION_FALLBACK = (
+    "Команда P&Q, новая неделя — погнали! Подтягиваем хвосты, внутреннее "
+    "тушим, внешним зажигаем 🔥"
+)
+
+
+async def _generate_motivation(
+    openrouter: OpenRouterClient,
+    by_manager: dict[str, list[DevReport]],
+) -> str:
+    """Sonnet генерит уникальную мотивационную фразу с учётом цифр недели."""
+    total_devs = sum(len(rs) for rs in by_manager.values())
+    total_hours = sum(r.total_hours for rs in by_manager.values() for r in rs)
+    intern = sum(r.internal_hours for rs in by_manager.values() for r in rs)
+    under = sum(1 for rs in by_manager.values() for r in rs if r.is_under_norm)
+    bad = sum(len(r.bad_comments) for rs in by_manager.values() for r in rs)
+
+    prompt = (
+        "Ты — Мисис Хадсон, AI-«комендант» департамента Production&Quality "
+        "компании Digital Clouds (IT-аутсорсинг, ~130 человек, Новосибирск). "
+        "Команда состоит из 4 менеджеров и их разработчиков (WEB-ПиК).\n\n"
+        f"Цифры за прошлую неделю: разрабов {total_devs}, всего часов "
+        f"{total_hours:.0f}h, из них внутренних {intern:.0f}h, "
+        f"под нормой 32h было {under} человек, плохих комментариев к worklog "
+        f"{bad}.\n\n"
+        "Сгенерируй ОДНУ короткую (1-2 предложения, не более 200 символов) "
+        "оригинальную мотивирующую фразу для понедельника — чтобы команда "
+        "взбодрилась и зашла в новую неделю с настроением.\n"
+        "Тон: тёплый, по-человечески, без канцеляризмов, можно один уместный "
+        "эмодзи. Без обращения «Здравствуйте» и без подписи. Не повторяй "
+        "цифры дословно — лишь их дух/настроение.\n"
+        "Верни только саму фразу, без кавычек и без префиксов."
+    )
+    try:
+        phrase = await openrouter.complete_text(
+            prompt,
+            model="anthropic/claude-sonnet-4.5",
+            timeout=30.0,
+        )
+        # на всякий — обрезаем кавычки/перенос
+        phrase = phrase.strip().strip('"').strip("«»").strip()
+        if phrase:
+            return phrase
+    except Exception as e:
+        logger.warning("Hudson motivation generation failed: %s", e)
+    return MOTIVATION_FALLBACK
 
 
 def _dev_status(rep: DevReport) -> tuple[str, str]:
@@ -314,9 +350,10 @@ async def _format_group_message(
     since: date,
     until: date,
     manager_telegrams: dict[str, tuple[int, str]],
+    openrouter: OpenRouterClient,
 ) -> str:
     """Сообщение в общую группу: per-manager статистика + тэг менеджеров +
-    мотивационная фраза."""
+    Sonnet-сгенерированная мотивационная фраза."""
     period = f"{since.strftime('%d.%m')}–{until.strftime('%d.%m')}"
     lines = [
         f"📊 <b>Мисис Хадсон · недельный отчёт {period}</b>",
@@ -340,7 +377,7 @@ async def _format_group_message(
             f"внутр {intern:.0f}h · отгулов {under} · плохих коммов {bad}"
         )
     lines.append("")
-    lines.append(random.choice(MOTIVATIONAL_PHRASES))
+    lines.append(await _generate_motivation(openrouter, by_manager))
     return "\n".join(lines)
 
 
@@ -349,6 +386,7 @@ async def notify(
     since: date,
     until: date,
     bot: Bot,
+    openrouter: OpenRouterClient,
     dry_run: bool = False,
 ) -> dict:
     """Главная точка входа: рассылка менеджерам + сводка Алине + Jira-задачи.
@@ -419,10 +457,10 @@ async def notify(
             settings.hudson_dept_head_bitrix_id,
         )
 
-    # Group message — с тэгом менеджеров и мотивацией
+    # Group message — с тэгом менеджеров и Sonnet-мотивацией
     if settings.hudson_chat_id:
         group_text = await _format_group_message(
-            by_manager, since, until, manager_telegrams,
+            by_manager, since, until, manager_telegrams, openrouter,
         )
         if dry_run:
             logger.info(
