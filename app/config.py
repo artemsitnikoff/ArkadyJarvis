@@ -108,6 +108,10 @@ class Settings(BaseSettings):
     zabbix_jira_project: str = "DA"
     zabbix_threshold_hours: int = 24
 
+    # Мисис Хадсон — РОП P&Q (Алина Васькова, bitrix_id=37).
+    # Получает копию сводки по всем задачам, которые Хадсон ставит менеджерам.
+    hudson_dept_head_bitrix_id: int = 37
+
     # Telethon userbot (for sending messages from recruiter's personal account)
     telethon_api_id: int = 0
     telethon_api_hash: str = ""

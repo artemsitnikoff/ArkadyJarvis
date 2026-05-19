@@ -19,9 +19,24 @@ logger = logging.getLogger("arkadyjarvis")
 # Дефолтный маппинг WEB-ПиК. Может быть расширен через UI / API позже.
 DEFAULT_MANAGER_MAPPING: dict[str, list[str]] = {
     "Бешеля": ["Некрасова", "Константинова"],
-    "Даниленко": ["Присняжнюк", "Геливанов", "Овсянников", "Осицины", "Ушаков"],
-    "Васильева": ["Казачок", "Гусев", "Кузнецов"],
-    "Васькова": ["Скородумов"],  # был «Скорадумов» — опечатка, в Bitrix через «о»
+    "Даниленко": [
+        "Присяжнюк",  # был «Присняжнюк» — лишняя «н», в Bitrix без неё
+        "Геливанов",
+        "Овсянников",
+        "Осицын",  # был «Осицины» — в Bitrix через «ы» в конце нет
+        "Ушаков",
+        "Кузнецова Юлия",  # Юля — Кузнецова, не путать с Кузнецовым у Васильевой
+    ],
+    "Васильева": [
+        "Казачок",
+        "Гусев",
+        "Кузнецов",
+        "Попок",  # Филипп
+        "Зеленских",  # Марк
+    ],
+    "Васькова": [
+        "Скородумов",  # был «Скорадумов» — опечатка, в Bitrix через «о»
+    ],
 }
 
 
@@ -133,20 +148,22 @@ async def seed_default_managers(bitrix) -> tuple[int, list[str]]:
 
 
 async def _find_user_by_last_name(bitrix, last_name: str) -> tuple[int, str | None] | None:
-    """Bitrix user.get filter[LAST_NAME] — берём первого активного."""
-    try:
-        r = await bitrix._request(
-            "user.get",
-            {"filter": {"LAST_NAME": last_name, "ACTIVE": True}},
-        )
-        users = r.get("result") or []
-        if not users:
-            return None
-        u = users[0]
-        return int(u.get("ID")), (u.get("EMAIL") or None)
-    except Exception as e:
-        logger.warning("Bitrix user.get LAST_NAME=%s failed: %s", last_name, e)
-        return None
+    """Bitrix user.get filter[LAST_NAME] — берём первого активного.
+    Fallback на LIKE (%foo%): в Bitrix у некоторых пользователей LAST_NAME содержит
+    trailing-пробел или другие артефакты — точный матч промахивается."""
+    for value in (last_name, f"%{last_name}%"):
+        try:
+            r = await bitrix._request(
+                "user.get",
+                {"filter": {"LAST_NAME": value, "ACTIVE": True}},
+            )
+            users = r.get("result") or []
+            if users:
+                u = users[0]
+                return int(u.get("ID")), (u.get("EMAIL") or None)
+        except Exception as e:
+            logger.warning("Bitrix user.get LAST_NAME=%s failed: %s", value, e)
+    return None
 
 
 async def get_manager_for_developer(developer_pattern: str) -> dict | None:
