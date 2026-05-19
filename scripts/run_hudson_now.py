@@ -81,8 +81,10 @@ async def main() -> None:
         by_manager: dict[str, list] = {}
         for r in reports:
             by_manager.setdefault(r.manager_name, []).append(r)
+        from app.services.hudson_notifier import _manager_full_names
+        full_names = await _manager_full_names(list(by_manager.keys()))
         for mgr in sorted(by_manager):
-            print(f"\n— {mgr} —")
+            print(f"\n— {full_names.get(mgr, mgr)} —")
             for r in sorted(by_manager[mgr], key=lambda x: x.name):
                 flag = "🔴" if r.is_under_norm else "🟢"
                 print(
