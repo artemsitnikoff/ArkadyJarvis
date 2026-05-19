@@ -19,13 +19,13 @@ from aiogram import Bot
 
 from app.config import settings
 from app.db import get_db, get_user_by_bitrix_id
+from app.services.ai_client import AIClient
 from app.services.hudson_analyzer import (
     INTERNAL_HOURS_WARN,
     WEEKLY_HOURS_NORM,
     DevReport,
 )
 from app.services.jira_client import JiraClient
-from app.services.openrouter_client import OpenRouterClient
 
 logger = logging.getLogger("arkadyjarvis")
 
@@ -38,10 +38,11 @@ MOTIVATION_FALLBACK = (
 
 
 async def _generate_motivation(
-    openrouter: OpenRouterClient,
+    ai_client: AIClient,
     by_manager: dict[str, list[DevReport]],
 ) -> str:
-    """Sonnet генерит уникальную мотивационную фразу с учётом цифр недели."""
+    """Уникальная мотивационная фраза через Claude CLI (subscription).
+    1 вызов в неделю — на цену subscription'а не влияет."""
     total_devs = sum(len(rs) for rs in by_manager.values())
     total_hours = sum(r.total_hours for rs in by_manager.values() for r in rs)
     intern = sum(r.internal_hours for rs in by_manager.values() for r in rs)
@@ -51,7 +52,7 @@ async def _generate_motivation(
     prompt = (
         "Ты — Мисис Хадсон, AI-«комендант» департамента Production&Quality "
         "компании Digital Clouds (IT-аутсорсинг, ~130 человек, Новосибирск). "
-        "Команда состоит из 4 менеджеров и их разработчиков (WEB-ПиК).\n\n"
+        "Команда: 4 менеджера и их разработчики (WEB-ПиК).\n\n"
         f"Цифры за прошлую неделю: разрабов {total_devs}, всего часов "
         f"{total_hours:.0f}h, из них внутренних {intern:.0f}h, "
         f"под нормой 32h было {under} человек, плохих комментариев к worklog "
@@ -65,12 +66,7 @@ async def _generate_motivation(
         "Верни только саму фразу, без кавычек и без префиксов."
     )
     try:
-        phrase = await openrouter.complete_text(
-            prompt,
-            model="anthropic/claude-sonnet-4.5",
-            timeout=30.0,
-        )
-        # на всякий — обрезаем кавычки/перенос
+        phrase = await ai_client.complete(prompt, timeout=60)
         phrase = phrase.strip().strip('"').strip("«»").strip()
         if phrase:
             return phrase
@@ -350,7 +346,7 @@ async def _format_group_message(
     since: date,
     until: date,
     manager_telegrams: dict[str, tuple[int, str]],
-    openrouter: OpenRouterClient,
+    ai_client: AIClient,
 ) -> str:
     """Сообщение в общую группу: per-manager статистика + тэг менеджеров +
     Sonnet-сгенерированная мотивационная фраза."""
@@ -377,7 +373,7 @@ async def _format_group_message(
             f"внутр {intern:.0f}h · отгулов {under} · плохих коммов {bad}"
         )
     lines.append("")
-    lines.append(await _generate_motivation(openrouter, by_manager))
+    lines.append(await _generate_motivation(ai_client, by_manager))
     return "\n".join(lines)
 
 
@@ -386,7 +382,7 @@ async def notify(
     since: date,
     until: date,
     bot: Bot,
-    openrouter: OpenRouterClient,
+    ai_client: AIClient,
     dry_run: bool = False,
 ) -> dict:
     """Главная точка входа: рассылка менеджерам + сводка Алине + Jira-задачи.
@@ -457,10 +453,10 @@ async def notify(
             settings.hudson_dept_head_bitrix_id,
         )
 
-    # Group message — с тэгом менеджеров и Sonnet-мотивацией
+    # Group message — с тэгом менеджеров и AI-мотивацией (Claude CLI subscription)
     if settings.hudson_chat_id:
         group_text = await _format_group_message(
-            by_manager, since, until, manager_telegrams, openrouter,
+            by_manager, since, until, manager_telegrams, ai_client,
         )
         if dry_run:
             logger.info(

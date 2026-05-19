@@ -88,10 +88,11 @@ async def main() -> None:
                     )
         if pipe:
             print("\n=== Pipe dry-run (что бы отправилось / в Jira) ===\n")
+            from app.services.ai_client import AIClient
             from app.services.hudson_notifier import notify
             stats = await notify(
-                reports, since, until, bot=None, openrouter=openrouter,
-                dry_run=True,
+                reports, since, until, bot=None,
+                ai_client=AIClient(), dry_run=True,
             )
             print(f"\n  итог: {stats}")
     finally:

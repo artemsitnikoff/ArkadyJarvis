@@ -287,10 +287,12 @@ async def sales_dept_summary_job(
     )
 
 
-async def hudson_weekly_job(bot: Bot, openrouter: OpenRouterClient):
-    """Понедельник 11:00 (Нск): сбор worklog'ов WEB-ПиК за прошлую неделю
-    (пн-вс), классификация плохих комментариев через OpenRouter Haiku,
-    рассылка менеджерам, сводка Алине, постановка задач в Jira PQ."""
+async def hudson_weekly_job(
+    bot: Bot, ai_client: AIClient, openrouter: OpenRouterClient,
+):
+    """Понедельник 11:00 (Нск): сбор worklog'ов WEB-ПиК за прошлую неделю.
+    Classifier плохих коммов — Haiku через OpenRouter (массово).
+    Мотивашка в группу — Claude CLI subscription (1 вызов/нед)."""
     from datetime import date, timedelta
 
     from app.services.hudson_analyzer import build_reports
@@ -306,7 +308,7 @@ async def hudson_weekly_job(bot: Bot, openrouter: OpenRouterClient):
         if not reports:
             logger.info("=== hudson_weekly_job: no reports, skipping")
             return
-        stats = await notify(reports, since, until, bot, openrouter)
+        stats = await notify(reports, since, until, bot, ai_client)
         logger.info("=== hudson_weekly_job done: %s", stats)
     except Exception as e:
         logger.error("=== hudson_weekly_job failed: %s", e, exc_info=True)
