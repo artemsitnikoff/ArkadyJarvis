@@ -13,6 +13,7 @@ from app.config import settings
 from app.db import close_db, get_recruiter_contact, init_db
 from app.scheduler.jobs import (
     daily_summary_job,
+    hudson_weekly_job,
     monday_poster_job,
     sales_dept_summary_job,
     wednesday_frog_job,
@@ -233,6 +234,20 @@ async def lifespan(app: FastAPI):
             "Scheduler: zabbix_check at 10:00 [%s] -> Jira project %s",
             settings.timezone, settings.zabbix_jira_project,
         )
+
+    # Мисис Хадсон — Пн 11:00 Нск: недельный аудит worklog'ов WEB-ПиК
+    scheduler.add_job(
+        hudson_weekly_job,
+        CronTrigger(
+            day_of_week="mon", hour=11, minute=0, timezone=settings.timezone,
+        ),
+        id="hudson_weekly",
+        args=[bot, ai_client],
+    )
+    logger.info(
+        "Scheduler: hudson_weekly at Mon 11:00 [%s] -> WEB-ПиК Jira",
+        settings.timezone,
+    )
 
     scheduler.start()
     logger.info(

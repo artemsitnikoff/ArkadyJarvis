@@ -1,0 +1,239 @@
+"""Мисис Хадсон — рассылка уведомлений + постановка Jira-задач.
+
+После того как hudson_analyzer.build_reports вернул per-dev отчёты, этот модуль
+формирует и шлёт:
+1. Каждому менеджеру — сводку по его разработчикам (часы, плохие комменты,
+   список того что попадёт в задачи на подтверждение)
+2. Алине Васьковой (РОП P&Q, HUDSON_DEPT_HEAD_BITRIX_ID) — общую сводку
+3. В Jira-проект «PQ»:
+   - На каждого менеджера: task «Подтвердить внутренние часы за неделю
+     по разработчикам X, Y, Z»
+   - На каждого разработчика с total < 32h: task «Поставить отгул
+     разработчику X (X.Yh за неделю)»
+"""
+import html
+import logging
+from datetime import date
+
+from aiogram import Bot
+
+from app.config import settings
+from app.db import get_db, get_user_by_bitrix_id
+from app.services.hudson_analyzer import WEEKLY_HOURS_NORM, DevReport
+from app.services.jira_client import JiraClient
+
+logger = logging.getLogger("arkadyjarvis")
+
+PQ_PROJECT_KEY = "PQ"  # «Стратегия и развитие департамента Production&Quality»
+
+
+def _format_dev_block(rep: DevReport) -> str:
+    """HTML-блок для одного разработчика."""
+    flag = "🔴" if rep.is_under_norm else "🟢"
+    name = html.escape(rep.name)
+    line1 = (
+        f"{flag} <b>{name}</b> — {rep.total_hours:.1f}h "
+        f"(внутр {rep.internal_hours:.1f}h / внешн {rep.external_hours:.1f}h)"
+    )
+    bits = [line1]
+    if rep.is_under_norm:
+        bits.append(
+            f"   ⚠️ ниже нормы {WEEKLY_HOURS_NORM:.0f}h — поставим задачу на отгул",
+        )
+    if rep.bad_comments:
+        bits.append(f"   💬 плохих комментариев: {len(rep.bad_comments)}/{len(rep.entries)}")
+        for entry, reason in rep.bad_comments[:3]:
+            c = html.escape((entry.comment or "(пусто)")[:50])
+            r = html.escape(reason[:80])
+            bits.append(f"     • <code>{entry.issue_key}</code> ({entry.hours:.1f}h): «{c}» — {r}")
+        if len(rep.bad_comments) > 3:
+            bits.append(f"     • … и ещё {len(rep.bad_comments) - 3}")
+    return "\n".join(bits)
+
+
+def _format_manager_message(
+    manager: str, reports: list[DevReport], since: date, until: date,
+) -> str:
+    period = f"{since.strftime('%d.%m')}–{until.strftime('%d.%m')}"
+    header = (
+        f"#хадсон_{period.replace('.', '_').replace('–', '_')}\n"
+        f"📋 <b>Недельный отчёт {period}</b>\n"
+        f"Менеджер: <b>{html.escape(manager)}</b>\n"
+        f"Разработчиков: {len(reports)}\n"
+    )
+    blocks = [_format_dev_block(r) for r in sorted(reports, key=lambda x: x.name)]
+    return header + "\n\n" + "\n\n".join(blocks)
+
+
+def _format_alina_summary(
+    by_manager: dict[str, list[DevReport]], since: date, until: date,
+) -> str:
+    """Общая сводка для Алины — компактная таблица."""
+    period = f"{since.strftime('%d.%m')}–{until.strftime('%d.%m')}"
+    lines = [
+        f"#хадсон_сводка_{period.replace('.', '_').replace('–', '_')}",
+        f"📊 <b>Хадсон: сводка P&amp;Q за {period}</b>",
+        "",
+    ]
+    for mgr in sorted(by_manager):
+        reps = sorted(by_manager[mgr], key=lambda x: x.name)
+        total = sum(r.total_hours for r in reps)
+        intern = sum(r.internal_hours for r in reps)
+        under_norm = [r for r in reps if r.is_under_norm]
+        bad = sum(len(r.bad_comments) for r in reps)
+        lines.append(
+            f"<b>{html.escape(mgr)}</b> — {len(reps)} разрабов · "
+            f"{total:.0f}h всего · внутр {intern:.0f}h · "
+            f"под нормой {len(under_norm)} · плохих коммов {bad}"
+        )
+        for r in reps:
+            flag = "🔴" if r.is_under_norm else "🟢"
+            lines.append(
+                f"  {flag} {html.escape(r.name)}: {r.total_hours:.1f}h "
+                f"(внутр {r.internal_hours:.1f}h)"
+            )
+        lines.append("")
+    return "\n".join(lines)
+
+
+async def _manager_bitrix_id(manager_name: str) -> int | None:
+    db = get_db()
+    async with db.execute(
+        "SELECT manager_bitrix_id FROM hudson_managers WHERE manager_name = ? LIMIT 1",
+        (manager_name,),
+    ) as cur:
+        row = await cur.fetchone()
+        return int(row[0]) if row and row[0] else None
+
+
+async def _create_pq_tasks(
+    by_manager: dict[str, list[DevReport]], since: date, until: date,
+) -> list[str]:
+    """Постановка задач в Jira PQ. Возвращает список созданных ключей."""
+    period = f"{since.strftime('%d.%m')}–{until.strftime('%d.%m')}"
+    created: list[str] = []
+    try:
+        async with JiraClient() as jira:
+            for mgr, reports in by_manager.items():
+                devs_with_internal = [r for r in reports if r.internal_hours > 0]
+                if devs_with_internal:
+                    devs_str = ", ".join(
+                        f"{r.name} ({r.internal_hours:.1f}h)"
+                        for r in devs_with_internal
+                    )
+                    summary = f"[Хадсон {period}] Подтвердить внутренние часы — {mgr}"
+                    desc = (
+                        f"Подтвердить, что внутренние часы корректны для:\n\n{devs_str}\n\n"
+                        f"Период: {since} → {until}.\n"
+                        f"Если часы списаны верно — закрыть задачу. "
+                        f"Если ошибочно — попросить разработчика переписать на внешний проект."
+                    )
+                    try:
+                        issue = await jira.create_issue(
+                            PQ_PROJECT_KEY, summary, desc,
+                        )
+                        created.append(issue["key"])
+                    except Exception as e:
+                        logger.warning("Hudson Jira create (mgr %s) failed: %s", mgr, e)
+
+                for r in reports:
+                    if r.is_under_norm:
+                        summary = (
+                            f"[Хадсон {period}] Отгул: {r.name} "
+                            f"({r.total_hours:.1f}h за неделю)"
+                        )
+                        desc = (
+                            f"За период {since} → {until} разработчик {r.name} "
+                            f"списал в Jira {r.total_hours:.1f}h "
+                            f"(норма {WEEKLY_HOURS_NORM:.0f}h).\n\n"
+                            f"Менеджер: {mgr}.\n"
+                            f"Действие: оформить отгул или прокомментировать причину."
+                        )
+                        try:
+                            issue = await jira.create_issue(
+                                PQ_PROJECT_KEY, summary, desc,
+                            )
+                            created.append(issue["key"])
+                        except Exception as e:
+                            logger.warning(
+                                "Hudson Jira create (dev %s) failed: %s", r.name, e,
+                            )
+    except Exception as e:
+        logger.error("Hudson Jira context failed: %s", e, exc_info=True)
+    return created
+
+
+async def notify(
+    reports: list[DevReport],
+    since: date,
+    until: date,
+    bot: Bot,
+    dry_run: bool = False,
+) -> dict:
+    """Главная точка входа: рассылка менеджерам + сводка Алине + Jira-задачи.
+    При dry_run=True не отправляет Telegram-сообщения и не создаёт Jira."""
+    by_manager: dict[str, list[DevReport]] = {}
+    for r in reports:
+        by_manager.setdefault(r.manager_name, []).append(r)
+
+    sent_managers = 0
+    sent_alina = False
+    for mgr, reps in by_manager.items():
+        manager_bitrix_id = await _manager_bitrix_id(mgr)
+        if not manager_bitrix_id:
+            logger.warning("Hudson notify: no Bitrix ID for manager %s", mgr)
+            continue
+        user = await get_user_by_bitrix_id(manager_bitrix_id)
+        if not user:
+            logger.warning(
+                "Hudson notify: manager %s (bitrix_id=%s) ещё не в users — пропуск",
+                mgr, manager_bitrix_id,
+            )
+            continue
+        text = _format_manager_message(mgr, reps, since, until)
+        if dry_run:
+            logger.info("[DRY-RUN] would send to %s (tg=%s)", mgr, user["telegram_id"])
+            sent_managers += 1
+            continue
+        try:
+            await bot.send_message(user["telegram_id"], text)
+            sent_managers += 1
+        except Exception as e:
+            logger.error("Hudson notify: send to %s failed: %s", mgr, e)
+
+    alina = await get_user_by_bitrix_id(settings.hudson_dept_head_bitrix_id)
+    if alina:
+        if dry_run:
+            logger.info("[DRY-RUN] would send Alina summary (tg=%s)", alina["telegram_id"])
+            sent_alina = True
+        else:
+            try:
+                await bot.send_message(
+                    alina["telegram_id"],
+                    _format_alina_summary(by_manager, since, until),
+                )
+                sent_alina = True
+            except Exception as e:
+                logger.error("Hudson notify: send to Алина failed: %s", e)
+    else:
+        logger.warning(
+            "Hudson notify: РОП (bitrix_id=%s) ещё не в users",
+            settings.hudson_dept_head_bitrix_id,
+        )
+
+    created_keys: list[str] = []
+    if dry_run:
+        logger.info("[DRY-RUN] skipping Jira PQ task creation")
+    else:
+        created_keys = await _create_pq_tasks(by_manager, since, until)
+
+    logger.info(
+        "Hudson notify done (dry=%s): managers=%d alina=%s jira_keys=%s",
+        dry_run, sent_managers, sent_alina, created_keys,
+    )
+    return {
+        "managers_sent": sent_managers,
+        "alina_sent": sent_alina,
+        "jira_keys": created_keys,
+        "dry_run": dry_run,
+    }

@@ -22,6 +22,7 @@ from app.services.hudson_repo import (  # noqa: E402
     list_managers,
     seed_default_managers,
 )
+from app.services.jira_client import JiraClient  # noqa: E402
 
 
 async def main() -> None:
@@ -32,8 +33,9 @@ async def main() -> None:
         ins, upd = await import_dcj_xlsx("DCJ.xlsx")
         print(f"  inserted={ins}  updated={upd}")
 
-        print("\n=== 2. Сидаю менеджеров (резолв через Bitrix) ===")
-        rows, warnings = await seed_default_managers(bitrix)
+        print("\n=== 2. Сидаю менеджеров (Bitrix + Jira) ===")
+        async with JiraClient() as jira:
+            rows, warnings = await seed_default_managers(bitrix, jira=jira)
         print(f"  rows={rows}")
         if warnings:
             print(f"  warnings ({len(warnings)}):")
@@ -47,9 +49,10 @@ async def main() -> None:
         print("\n=== 4. Разработчики ===")
         for d in await list_developers():
             email = d["developer_email"] or "—"
+            jira_u = d.get("jira_username") or "—"
             print(
                 f"  {d['developer_pattern']:<30} мгр={d['manager_name']:<15} "
-                f"bitrix_id={d['developer_bitrix_id']!s:<5} email={email}"
+                f"bx={d['developer_bitrix_id']!s:<5} jira={jira_u:<25} email={email}"
             )
     finally:
         await bitrix.close()

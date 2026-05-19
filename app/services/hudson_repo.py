@@ -96,9 +96,10 @@ async def get_project(project_key: str) -> dict | None:
         return dict(row) if row else None
 
 
-async def seed_default_managers(bitrix) -> tuple[int, list[str]]:
+async def seed_default_managers(bitrix, jira=None) -> tuple[int, list[str]]:
     """Заполняет hudson_managers из DEFAULT_MANAGER_MAPPING и резолвит ID+email
-    через Bitrix по LAST_NAME. Возвращает (inserted_rows, unresolved_warnings)."""
+    через Bitrix по LAST_NAME. Если передан jira-клиент — резолвит jira_username
+    по email. Возвращает (inserted_rows, unresolved_warnings)."""
     db = get_db()
     inserted = 0
     warnings: list[str] = []
@@ -128,16 +129,28 @@ async def seed_default_managers(bitrix) -> tuple[int, list[str]]:
             else:
                 dev_id, dev_email = dev_info
 
+            jira_username = None
+            if jira and dev_email:
+                try:
+                    jira_username = await jira.find_user_by_email(dev_email)
+                except Exception as e:
+                    logger.warning("Jira lookup for %s failed: %s", dev_email, e)
+                if not jira_username:
+                    warnings.append(
+                        f"Jira username для {dev_pattern} ({dev_email}) не найден"
+                    )
+
             await db.execute(
                 """INSERT INTO hudson_managers
                        (manager_name, manager_bitrix_id, developer_pattern,
-                        developer_bitrix_id, developer_email)
-                   VALUES (?, ?, ?, ?, ?)
+                        developer_bitrix_id, developer_email, jira_username)
+                   VALUES (?, ?, ?, ?, ?, ?)
                    ON CONFLICT(manager_name, developer_pattern) DO UPDATE SET
                        manager_bitrix_id = excluded.manager_bitrix_id,
                        developer_bitrix_id = excluded.developer_bitrix_id,
-                       developer_email = excluded.developer_email""",
-                (mgr_last, mgr_id, dev_pattern, dev_id, dev_email),
+                       developer_email = excluded.developer_email,
+                       jira_username = excluded.jira_username""",
+                (mgr_last, mgr_id, dev_pattern, dev_id, dev_email, jira_username),
             )
             inserted += 1
     await db.commit()

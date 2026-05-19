@@ -95,6 +95,7 @@ CREATE TABLE IF NOT EXISTS hudson_managers (
     developer_pattern   TEXT NOT NULL,        -- "Некрасова" / "Гусев" / etc.
     developer_bitrix_id INTEGER,              -- resolved при загрузке
     developer_email     TEXT,                 -- из Bitrix user.get
+    jira_username       TEXT,                 -- resolved через Jira /user/search?username=email
     PRIMARY KEY (manager_name, developer_pattern)
 );
 """
@@ -103,6 +104,7 @@ CREATE TABLE IF NOT EXISTS hudson_managers (
 MIGRATIONS: list[str] = [
     "DROP TABLE IF EXISTS jira_credentials;",
     "INSERT OR IGNORE INTO muted_groups (chat_id) VALUES (-1001408128567);",
+    "ALTER TABLE hudson_managers ADD COLUMN jira_username TEXT;",
 ]
 
 
@@ -118,7 +120,13 @@ async def _run_migrations(db: aiosqlite.Connection) -> None:
     for i, sql in enumerate(MIGRATIONS, start=1):
         if i > current:
             logger.info("Running migration %d ...", i)
-            await db.executescript(sql)
+            try:
+                await db.executescript(sql)
+            except aiosqlite.OperationalError as e:
+                # ALTER TABLE ADD COLUMN — игнорируем «duplicate column» (новые БД уже имеют колонку в CREATE)
+                if "duplicate column" not in str(e).lower():
+                    raise
+                logger.info("Migration %d: column already exists, skipping", i)
             if current == 0:
                 await db.execute("INSERT INTO schema_version (version) VALUES (?)", (i,))
             else:

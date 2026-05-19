@@ -287,6 +287,32 @@ async def sales_dept_summary_job(
     )
 
 
+async def hudson_weekly_job(bot: Bot, ai_client: AIClient):
+    """Понедельник 11:00 (Нск): сбор worklog'ов WEB-ПиК за прошлую неделю
+    (пн-вс), классификация плохих комментариев, рассылка менеджерам, сводка
+    Алине, постановка задач в Jira PQ."""
+    from datetime import date, timedelta
+
+    from app.services.hudson_analyzer import build_reports
+    from app.services.hudson_notifier import notify
+
+    tz = ZoneInfo(settings.timezone)
+    today = datetime.now(tz).date()
+    # Прошлая полная неделя пн-вс (запуск в пн → since 7 дней назад, until вчера)
+    until = today - timedelta(days=1)
+    since = until - timedelta(days=6)
+    logger.info("=== hudson_weekly_job: %s → %s", since, until)
+    try:
+        reports = await build_reports(since, until, ai_client)
+        if not reports:
+            logger.info("=== hudson_weekly_job: no reports, skipping")
+            return
+        stats = await notify(reports, since, until, bot)
+        logger.info("=== hudson_weekly_job done: %s", stats)
+    except Exception as e:
+        logger.error("=== hudson_weekly_job failed: %s", e, exc_info=True)
+
+
 async def zabbix_check_unresolved_job():
     """Daily 10:00: scan Zabbix problems open >24h, escalate to Jira (DA project)."""
     from app.services.jira_client import JiraClient
