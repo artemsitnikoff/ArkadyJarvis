@@ -26,6 +26,8 @@ logger = logging.getLogger("arkadyjarvis")
 
 # Минимальная норма часов в неделю — ниже → отгул-задача
 WEEKLY_HOURS_NORM = 32.0
+# Порог внутренних часов — выше → требует подтверждения, светится красным
+INTERNAL_HOURS_WARN = 8.0
 
 
 @dataclass

@@ -19,7 +19,11 @@ from aiogram import Bot
 
 from app.config import settings
 from app.db import get_db, get_user_by_bitrix_id
-from app.services.hudson_analyzer import WEEKLY_HOURS_NORM, DevReport
+from app.services.hudson_analyzer import (
+    INTERNAL_HOURS_WARN,
+    WEEKLY_HOURS_NORM,
+    DevReport,
+)
 from app.services.jira_client import JiraClient
 
 logger = logging.getLogger("arkadyjarvis")
@@ -27,13 +31,25 @@ logger = logging.getLogger("arkadyjarvis")
 PQ_PROJECT_KEY = "PQ"  # «Стратегия и развитие департамента Production&Quality»
 
 
+def _dev_status(rep: DevReport) -> tuple[str, str]:
+    """Возвращает (flag, причина-в-скобках). Red если ниже нормы ИЛИ внутр > 8h."""
+    reasons: list[str] = []
+    if rep.is_under_norm:
+        reasons.append(f"<{WEEKLY_HOURS_NORM:.0f}h недобор")
+    if rep.internal_hours > INTERNAL_HOURS_WARN:
+        reasons.append(f"внутр >{INTERNAL_HOURS_WARN:.0f}h")
+    flag = "🔴" if reasons else "🟢"
+    tag = f" ({', '.join(reasons)})" if reasons else ""
+    return flag, tag
+
+
 def _format_dev_block(rep: DevReport) -> str:
     """HTML-блок для одного разработчика."""
-    flag = "🔴" if rep.is_under_norm else "🟢"
+    flag, reason_tag = _dev_status(rep)
     name = html.escape(rep.name)
     line1 = (
-        f"{flag} <b>{name}</b> — {rep.total_hours:.1f}h "
-        f"(внутр {rep.internal_hours:.1f}h / внешн {rep.external_hours:.1f}h)"
+        f"{flag} <b>{name}</b>: {rep.total_hours:.1f}h/<b>{rep.internal_hours:.1f}h</b>"
+        f"{reason_tag}"
     )
     bits = [line1]
     if rep.is_under_norm:
@@ -87,10 +103,10 @@ def _format_alina_summary(
             f"под нормой {len(under_norm)} · плохих коммов {bad}"
         )
         for r in reps:
-            flag = "🔴" if r.is_under_norm else "🟢"
+            flag, reason_tag = _dev_status(r)
             lines.append(
-                f"  {flag} {html.escape(r.name)}: {r.total_hours:.1f}h "
-                f"(внутр {r.internal_hours:.1f}h)"
+                f"  {flag} {html.escape(r.name)}: "
+                f"{r.total_hours:.1f}h/<b>{r.internal_hours:.1f}h</b>{reason_tag}"
             )
         lines.append("")
     return "\n".join(lines)
