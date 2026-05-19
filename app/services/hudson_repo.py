@@ -106,15 +106,17 @@ async def seed_default_managers(bitrix, jira=None) -> tuple[int, list[str]]:
     inserted = 0
     warnings: list[str] = []
 
-    # Резолвим менеджеров отдельно (раз каждого): Bitrix ID + email + Jira-username
-    manager_lookup: dict[str, tuple[int | None, str | None, str | None]] = {}
+    # Резолвим менеджеров отдельно: Bitrix ID + email + Jira-username + full name
+    manager_lookup: dict[
+        str, tuple[int | None, str | None, str | None, str | None]
+    ] = {}
     for mgr_last in DEFAULT_MANAGER_MAPPING.keys():
         info = await _find_user_by_last_name(bitrix, mgr_last)
         if not info:
             warnings.append(f"Менеджер «{mgr_last}» не найден в Bitrix")
-            manager_lookup[mgr_last] = (None, None, None)
+            manager_lookup[mgr_last] = (None, None, None, None)
             continue
-        bx_id, email = info
+        bx_id, email, full_name = info
         mgr_jira: str | None = None
         if jira and email:
             try:
@@ -125,10 +127,10 @@ async def seed_default_managers(bitrix, jira=None) -> tuple[int, list[str]]:
                 warnings.append(
                     f"Jira username менеджера {mgr_last} ({email}) не найден",
                 )
-        manager_lookup[mgr_last] = (bx_id, email, mgr_jira)
+        manager_lookup[mgr_last] = (bx_id, email, mgr_jira, full_name)
 
     for mgr_last, devs in DEFAULT_MANAGER_MAPPING.items():
-        mgr_id, _mgr_email, mgr_jira = manager_lookup[mgr_last]
+        mgr_id, _mgr_email, mgr_jira, mgr_full = manager_lookup[mgr_last]
         for dev_pattern in devs:
             # Пытаемся каждое слово как LAST_NAME (вдруг в паттерне «Имя Фамилия»)
             dev_info = None
@@ -142,7 +144,7 @@ async def seed_default_managers(bitrix, jira=None) -> tuple[int, list[str]]:
                 )
                 dev_id, dev_email = None, None
             else:
-                dev_id, dev_email = dev_info
+                dev_id, dev_email, _dev_full = dev_info
 
             jira_username = None
             if jira and dev_email:
@@ -159,17 +161,18 @@ async def seed_default_managers(bitrix, jira=None) -> tuple[int, list[str]]:
                 """INSERT INTO hudson_managers
                        (manager_name, manager_bitrix_id, developer_pattern,
                         developer_bitrix_id, developer_email, jira_username,
-                        manager_jira_username)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)
+                        manager_jira_username, manager_full_name)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                    ON CONFLICT(manager_name, developer_pattern) DO UPDATE SET
                        manager_bitrix_id = excluded.manager_bitrix_id,
                        developer_bitrix_id = excluded.developer_bitrix_id,
                        developer_email = excluded.developer_email,
                        jira_username = excluded.jira_username,
-                       manager_jira_username = excluded.manager_jira_username""",
+                       manager_jira_username = excluded.manager_jira_username,
+                       manager_full_name = excluded.manager_full_name""",
                 (
                     mgr_last, mgr_id, dev_pattern, dev_id, dev_email,
-                    jira_username, mgr_jira,
+                    jira_username, mgr_jira, mgr_full,
                 ),
             )
             inserted += 1
@@ -180,10 +183,11 @@ async def seed_default_managers(bitrix, jira=None) -> tuple[int, list[str]]:
     return inserted, warnings
 
 
-async def _find_user_by_last_name(bitrix, last_name: str) -> tuple[int, str | None] | None:
+async def _find_user_by_last_name(
+    bitrix, last_name: str,
+) -> tuple[int, str | None, str | None] | None:
     """Bitrix user.get filter[LAST_NAME] — берём первого активного.
-    Fallback на LIKE (%foo%): в Bitrix у некоторых пользователей LAST_NAME содержит
-    trailing-пробел или другие артефакты — точный матч промахивается."""
+    Возвращает (id, email, full_name='Имя Фамилия')."""
     for value in (last_name, f"%{last_name}%"):
         try:
             r = await bitrix._request(
@@ -193,7 +197,10 @@ async def _find_user_by_last_name(bitrix, last_name: str) -> tuple[int, str | No
             users = r.get("result") or []
             if users:
                 u = users[0]
-                return int(u.get("ID")), (u.get("EMAIL") or None)
+                full = " ".join(
+                    p for p in (u.get("NAME", ""), u.get("LAST_NAME", "")) if p
+                ).strip()
+                return int(u.get("ID")), (u.get("EMAIL") or None), (full or None)
         except Exception as e:
             logger.warning("Bitrix user.get LAST_NAME=%s failed: %s", value, e)
     return None

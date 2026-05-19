@@ -82,9 +82,9 @@ def _dev_status(rep: DevReport) -> tuple[str, str]:
         return "🏖", f" ({rep.absence}, пропущен)"
     reasons: list[str] = []
     if rep.is_under_norm:
-        reasons.append(f"<{WEEKLY_HOURS_NORM:.0f}h недобор")
+        reasons.append(f"недобор до {WEEKLY_HOURS_NORM:.0f}h")
     if rep.internal_hours > INTERNAL_HOURS_WARN:
-        reasons.append(f"внутр >{INTERNAL_HOURS_WARN:.0f}h")
+        reasons.append(f"внутр выше {INTERNAL_HOURS_WARN:.0f}h")
     flag = "🔴" if reasons else "🟢"
     tag = f" ({', '.join(reasons)})" if reasons else ""
     return flag, tag
@@ -127,15 +127,16 @@ def _format_dev_block(rep: DevReport) -> str:
 TG_MAX = 4000  # Telegram cap 4096, оставляем запас на HTML overhead
 
 
-def _format_manager_messages(
+async def _format_manager_messages(
     manager: str, reports: list[DevReport], since: date, until: date,
 ) -> list[str]:
     """Возвращает список сообщений (≤ TG_MAX каждое). Сплит — между разработчиками."""
     period = f"{since.strftime('%d.%m')}–{until.strftime('%d.%m')}"
+    display_name = await _manager_full_name(manager)
     header = (
         f"#хадсон_{period.replace('.', '_').replace('–', '_')}\n"
         f"📋 <b>Недельный отчёт {period}</b>\n"
-        f"Менеджер: <b>{html.escape(manager)}</b>\n"
+        f"Менеджер: <b>{html.escape(display_name)}</b>\n"
         f"Разработчиков: {len(reports)}"
     )
     blocks = [_format_dev_block(r) for r in sorted(reports, key=lambda x: x.name)]
@@ -154,12 +155,13 @@ def _format_manager_messages(
     return messages
 
 
-def _format_alina_messages(
+async def _format_alina_messages(
     by_manager: dict[str, list[DevReport]], since: date, until: date,
 ) -> list[str]:
     """Сводка для Алины: per-manager группировка, под каждым разработчиком —
     весь его плохой лог (как у менеджера). Возвращает список chunk'ов ≤ TG_MAX."""
     period = f"{since.strftime('%d.%m')}–{until.strftime('%d.%m')}"
+    full_names = await _manager_full_names(list(by_manager.keys()))
     header = (
         f"#хадсон_сводка_{period.replace('.', '_').replace('–', '_')}\n"
         f"📊 <b>Хадсон: сводка P&amp;Q за {period}</b>"
@@ -173,8 +175,9 @@ def _format_alina_messages(
         intern = sum(r.internal_hours for r in reps)
         under_norm = [r for r in reps if r.is_under_norm]
         bad = sum(len(r.bad_comments) for r in reps)
+        mgr_display = full_names.get(mgr, mgr)
         mgr_header = (
-            f"\n— <b>{html.escape(mgr)}</b> — "
+            f"\n— <b>{html.escape(mgr_display)}</b> — "
             f"{len(reps)} разрабов · {total:.0f}h всего · внутр {intern:.0f}h · "
             f"под нормой {len(under_norm)} · плохих коммов {bad}"
         )
@@ -199,13 +202,6 @@ def _format_alina_messages(
     return messages
 
 
-# Backward compat alias for bot button (hudson router)
-def _format_alina_summary(
-    by_manager: dict[str, list[DevReport]], since: date, until: date,
-) -> str:
-    """Однострочная склейка для UI (кнопка). Шлёт первый чанк — остальное
-    обрежется на стороне отправителя при > 4000."""
-    return _format_alina_messages(by_manager, since, until)[0]
 
 
 async def _manager_bitrix_id(manager_name: str) -> int | None:
@@ -227,6 +223,35 @@ async def _manager_jira_username(manager_name: str) -> str | None:
     ) as cur:
         row = await cur.fetchone()
         return row[0] if row and row[0] else None
+
+
+async def _manager_full_name(manager_name: str) -> str:
+    """Возвращает 'Имя Фамилия' для менеджера, либо его фамилию-ключ если не нашли."""
+    db = get_db()
+    async with db.execute(
+        "SELECT manager_full_name FROM hudson_managers "
+        "WHERE manager_name = ? LIMIT 1",
+        (manager_name,),
+    ) as cur:
+        row = await cur.fetchone()
+        return (row[0] if row and row[0] else manager_name) or manager_name
+
+
+async def _manager_full_names(manager_names: list[str]) -> dict[str, str]:
+    """Батчем тянет 'Имя Фамилия' для списка менеджеров."""
+    result: dict[str, str] = {}
+    db = get_db()
+    placeholders = ",".join("?" * len(manager_names))
+    async with db.execute(
+        f"SELECT DISTINCT manager_name, manager_full_name FROM hudson_managers "
+        f"WHERE manager_name IN ({placeholders})",
+        manager_names,
+    ) as cur:
+        for row in await cur.fetchall():
+            result[row[0]] = row[1] or row[0]
+    for m in manager_names:
+        result.setdefault(m, m)
+    return result
 
 
 def _build_internal_breakdown(reports: list[DevReport]) -> str:
@@ -374,6 +399,7 @@ async def _format_group_messages(
     per-dev блоки (часы, плохие комменты с Jira-ссылками). Сплит по TG_MAX."""
     period = f"{since.strftime('%d.%m')}–{until.strftime('%d.%m')}"
     motivation = await _generate_motivation(ai_client, by_manager)
+    full_names = await _manager_full_names(list(by_manager.keys()))
 
     # Header: общая сводка с тэгами + мотивация
     header_lines = [
@@ -387,12 +413,13 @@ async def _format_group_messages(
         under = sum(1 for r in reps if r.is_under_norm)
         on_leave = sum(1 for r in reps if r.on_leave)
         bad = sum(len(r.bad_comments) for r in reps)
+        display_name = full_names.get(mgr, mgr)
         tg = manager_telegrams.get(mgr)
         if tg:
-            tg_id, name = tg
-            mention = f'<a href="tg://user?id={tg_id}">{html.escape(name or mgr)}</a>'
+            tg_id, _ = tg
+            mention = f'<a href="tg://user?id={tg_id}">{html.escape(display_name)}</a>'
         else:
-            mention = f"<b>{html.escape(mgr)}</b>"
+            mention = f"<b>{html.escape(display_name)}</b>"
         header_lines.append(
             f"{mention} — {len(reps)} разрабов · {total:.0f}h всего · "
             f"внутр {intern:.0f}h · отгулов {under} · в отпуске {on_leave} · "
@@ -407,7 +434,8 @@ async def _format_group_messages(
     current = header
     for mgr in sorted(by_manager):
         reps = sorted(by_manager[mgr], key=lambda x: x.name)
-        mgr_header = f"\n— <b>{html.escape(mgr)}</b> —"
+        display_name = full_names.get(mgr, mgr)
+        mgr_header = f"\n— <b>{html.escape(display_name)}</b> —"
         candidate = current + "\n" + mgr_header
         if len(candidate) > TG_MAX:
             messages.append(current)
@@ -462,7 +490,7 @@ async def notify(
             int(user["telegram_id"]),
             user.get("display_name") or mgr,
         )
-        messages = _format_manager_messages(mgr, reps, since, until)
+        messages = await _format_manager_messages(mgr, reps, since, until)
         if dry_run:
             logger.info(
                 "[DRY-RUN] would send %d message(s) to %s (tg=%s)",
@@ -481,7 +509,7 @@ async def notify(
 
     alina = await get_user_by_bitrix_id(settings.hudson_dept_head_bitrix_id)
     if alina:
-        alina_msgs = _format_alina_messages(by_manager, since, until)
+        alina_msgs = await _format_alina_messages(by_manager, since, until)
         if dry_run:
             logger.info(
                 "[DRY-RUN] would send %d message(s) Alina summary (tg=%s)",

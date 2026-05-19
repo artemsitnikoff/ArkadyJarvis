@@ -60,7 +60,7 @@ async def enter_hudson(
     by_manager: dict[str, list] = {}
     for r in reports:
         by_manager.setdefault(r.manager_name, []).append(r)
-    messages = _format_alina_messages(by_manager, since, until)
+    messages = await _format_alina_messages(by_manager, since, until)
 
     # Первый чанк — в место «Хадсон собирает…», остальные отдельными сообщениями
     await wait.edit_text(messages[0], disable_web_page_preview=True)

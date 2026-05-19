@@ -97,6 +97,7 @@ CREATE TABLE IF NOT EXISTS hudson_managers (
     developer_email     TEXT,                 -- из Bitrix user.get
     jira_username       TEXT,                 -- resolved через Jira /user/search?username=email
     manager_jira_username TEXT,               -- Jira-username менеджера (assignee для PQ-задач)
+    manager_full_name   TEXT,                 -- «Иван Бешеля» — для красивого отображения
     PRIMARY KEY (manager_name, developer_pattern)
 );
 """
@@ -107,6 +108,7 @@ MIGRATIONS: list[str] = [
     "INSERT OR IGNORE INTO muted_groups (chat_id) VALUES (-1001408128567);",
     "ALTER TABLE hudson_managers ADD COLUMN jira_username TEXT;",
     "ALTER TABLE hudson_managers ADD COLUMN manager_jira_username TEXT;",
+    "ALTER TABLE hudson_managers ADD COLUMN manager_full_name TEXT;",
 ]
 
 
