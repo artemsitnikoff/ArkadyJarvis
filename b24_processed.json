@@ -1,0 +1,126 @@
+{
+  "semena74.com": {
+    "status": "ok",
+    "lead_id": 7451,
+    "timeline_id": 1163781,
+    "ts": "2026-05-21T17:04:54.022676"
+  },
+  "navi-cars.ru": {
+    "status": "ok",
+    "lead_id": 7453,
+    "timeline_id": 1163787,
+    "ts": "2026-05-21T17:07:40.158245"
+  },
+  "baden74.ru": {
+    "status": "ok",
+    "lead_id": 7455,
+    "timeline_id": 1163791,
+    "ts": "2026-05-21T17:10:12.162715"
+  },
+  "pzsp.ru": {
+    "status": "ok",
+    "lead_id": 7457,
+    "timeline_id": 1163795,
+    "ts": "2026-05-21T17:12:40.347778"
+  },
+  "doninturflot.com": {
+    "status": "ok",
+    "lead_id": 7459,
+    "timeline_id": 1163799,
+    "ts": "2026-05-21T17:14:57.109493"
+  },
+  "ber.lada.ru": {
+    "status": "ok",
+    "lead_id": 7463,
+    "timeline_id": 1163825,
+    "ts": "2026-05-21T17:18:52.096424"
+  },
+  "artroline.ru": {
+    "status": "ok",
+    "lead_id": 7465,
+    "timeline_id": 1163839,
+    "ts": "2026-05-21T17:20:37.850791"
+  },
+  "sagradocorp.org": {
+    "status": "ok",
+    "lead_id": 7467,
+    "timeline_id": 1163849,
+    "ts": "2026-05-21T17:22:47.166760"
+  },
+  "chiedocover.ru": {
+    "status": "ok",
+    "lead_id": 7469,
+    "timeline_id": 1163853,
+    "ts": "2026-05-21T17:24:45.843451"
+  },
+  "orchestramodern.ru": {
+    "status": "ok",
+    "lead_id": 7471,
+    "timeline_id": 1163863,
+    "ts": "2026-05-21T17:28:01.847864"
+  },
+  "abber-shop.ru": {
+    "status": "ok",
+    "lead_id": 7473,
+    "timeline_id": 1163867,
+    "ts": "2026-05-21T17:30:06.202515"
+  },
+  "mehamalina.ru": {
+    "status": "ok",
+    "lead_id": 7475,
+    "timeline_id": 1163871,
+    "ts": "2026-05-21T17:32:25.886614"
+  },
+  "warpoint.ru": {
+    "status": "ok",
+    "lead_id": 7477,
+    "timeline_id": 1163875,
+    "ts": "2026-05-21T17:34:23.522652"
+  },
+  "oknapensioneram.ru": {
+    "status": "ok",
+    "lead_id": 7479,
+    "timeline_id": 1163885,
+    "ts": "2026-05-21T17:36:27.134541"
+  },
+  "garant.ur.ru": {
+    "status": "skip_recon",
+    "error": "сайт недоступен",
+    "ts": "2026-05-21T17:41:24.630750"
+  },
+  "x-m.su": {
+    "status": "ok",
+    "lead_id": 7481,
+    "timeline_id": 1163889,
+    "ts": "2026-05-21T17:44:43.807220"
+  },
+  "dvddom.ru": {
+    "status": "ok",
+    "lead_id": 7483,
+    "timeline_id": 1163899,
+    "ts": "2026-05-21T17:46:52.212621"
+  },
+  "forum-city.one": {
+    "status": "ok",
+    "lead_id": 7485,
+    "timeline_id": 1163903,
+    "ts": "2026-05-21T17:49:24.559771"
+  },
+  "hfe-hfe.ru": {
+    "status": "ok",
+    "lead_id": 7487,
+    "timeline_id": 1163907,
+    "ts": "2026-05-21T17:51:32.382785"
+  },
+  "dt-franshiz.ru": {
+    "status": "skip_recon",
+    "error": "claude CLI не ответил за 300с",
+    "ts": "2026-05-21T17:56:32.418909"
+  },
+  "ohana-fitness.ru": {
+    "status": "ok",
+    "lead_id": 7489,
+    "timeline_id": 1163917,
+    "ts": "2026-05-21T17:58:37.041588"
+  }
+}

@@ -21,6 +21,7 @@ import json
 import logging
 import os
 import sys
+from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -47,6 +48,26 @@ TEST_DOMAINS = [
     "gtkbt.ru",
     "energostan.ru",
 ]
+
+STATE_FILE = Path("b24_processed.json")  # в корне репо — гит-трекаемое
+
+
+
+def _load_state() -> dict:
+    if STATE_FILE.exists():
+        try:
+            return json.loads(STATE_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+    return {}
+
+
+def _save_state(state: dict) -> None:
+    STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    STATE_FILE.write_text(
+        json.dumps(state, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
 
 
 def _load_xlsx(path: str) -> dict[str, dict]:
@@ -292,8 +313,11 @@ async def main() -> None:
     g.add_argument("--test", action="store_true", help="прогон по 3 тестовым доменам")
     g.add_argument("--all", action="store_true", help="по листу «Клиенты»")
     g.add_argument("--site", help="один конкретный домен (например energostan.ru)")
-    ap.add_argument("--limit", type=int, default=5, help="макс. кол-во строк при --all")
+    ap.add_argument("--limit", type=int, default=0,
+                    help="макс. кол-во строк при --all (0 = без лимита)")
     ap.add_argument("--dry-run", action="store_true", help="не создавать лида в B24")
+    ap.add_argument("--force", action="store_true",
+                    help="игнорировать чекпоинт — переобрабатывать всех")
     args = ap.parse_args()
 
     path = "b24.xlsx"
@@ -302,49 +326,87 @@ async def main() -> None:
     xlsx_data = _load_xlsx(path)
     logger.info("Загрузил %d записей из xlsx", len(xlsx_data))
 
+    state = _load_state()
     if args.test:
         domains = TEST_DOMAINS
     elif args.site:
         domains = [args.site.strip().lower()]
     else:
-        domains = list(xlsx_data.keys())[: args.limit]
-    logger.info("Будем обрабатывать %d доменов", len(domains))
+        domains = list(xlsx_data.keys())
+        if args.limit:
+            domains = domains[: args.limit]
+
+    pending = [
+        d for d in domains
+        if args.force or state.get(d, {}).get("status") != "ok"
+    ]
+    skipped_already_done = len(domains) - len(pending)
+    logger.info(
+        "Всего %d доменов, к обработке %d, уже сделано %d",
+        len(domains), len(pending), skipped_already_done,
+    )
 
     ai = AIClient()
     bitrix = BitrixClient()
+    stats = {"ok": 0, "err": 0, "skip_recon": 0}
     try:
-        for site in domains:
+        for idx, site in enumerate(pending, start=1):
+            print(f"\n[{idx}/{len(pending)}] === {site} ===")
             recon = await _recon_one(site, ai)
-            print(f"\n=== {site} ===")
-            print(json.dumps(recon, ensure_ascii=False, indent=2))
             if recon.get("error"):
                 logger.warning("Skip %s: %s", site, recon["error"])
+                stats["skip_recon"] += 1
+                state[site] = {
+                    "status": "skip_recon",
+                    "error": str(recon.get("error"))[:200],
+                    "ts": datetime.now().isoformat(),
+                }
+                _save_state(state)
                 continue
             fin = xlsx_data.get(site)
             fields = _build_lead_fields(site, recon, fin)
             if args.dry_run:
-                print("[DRY-RUN] lead fields:")
-                print(json.dumps(fields, ensure_ascii=False, indent=2)[:2500])
+                print(f"[DRY-RUN] {site} — recon ok, lead не создан")
                 continue
             try:
                 res = await bitrix.create_lead(fields)
                 lead_id = res.get("id")
-                print(f"✓ Лид создан: id={lead_id}")
+                cid = None
                 if lead_id:
                     timeline = _build_timeline_comment(site, recon, fin)
                     try:
                         cid = await bitrix.add_timeline_comment(
                             lead_id, "lead", timeline,
                         )
-                        print(f"✓ Timeline-коммент добавлен: id={cid}")
                     except Exception as e:
-                        logger.error(
-                            "Bitrix timeline_comment %s failed: %s", site, e,
-                        )
+                        logger.error("timeline %s failed: %s", site, e)
+                stats["ok"] += 1
+                state[site] = {
+                    "status": "ok",
+                    "lead_id": lead_id,
+                    "timeline_id": cid,
+                    "ts": datetime.now().isoformat(),
+                }
+                _save_state(state)
+                print(
+                    f"✓ {site}: lead={lead_id} timeline={cid} "
+                    f"| итого ok={stats['ok']} err={stats['err']} skip={stats['skip_recon']}"
+                )
             except Exception as e:
-                logger.error("Bitrix create_lead %s failed: %s", site, e)
+                stats["err"] += 1
+                logger.error("create_lead %s failed: %s", site, e)
+                state[site] = {
+                    "status": "error",
+                    "error": str(e)[:200],
+                    "ts": datetime.now().isoformat(),
+                }
+                _save_state(state)
     finally:
         await bitrix.close()
+        print(
+            f"\n=== ИТОГ === ok={stats['ok']} err={stats['err']} "
+            f"skip_recon={stats['skip_recon']} state={STATE_FILE}"
+        )
 
 
 asyncio.run(main())
