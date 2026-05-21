@@ -200,6 +200,43 @@ def _build_timeline_comment(site: str, recon: dict, fin: dict | None) -> str:
             nb.append(f"- {n}")
         sections.append("\n".join(nb))
 
+    # === Анализ рынка ===
+    industry_dynamics = recon.get("industry_dynamics")
+    industry_research = recon.get("industry_research") or []
+    competitor_dyn = recon.get("competitor_count_dynamics")
+    if industry_dynamics or industry_research or competitor_dyn:
+        mb = ["[B]=== АНАЛИЗ РЫНКА ===[/B]"]
+        if industry_dynamics:
+            mb.append(f"Динамика индустрии: {industry_dynamics}")
+        if competitor_dyn:
+            mb.append(f"Число игроков: {competitor_dyn}")
+        if industry_research:
+            mb.append("\nИсследования:")
+            for r in industry_research:
+                title = r.get("title", "")
+                url = r.get("url", "")
+                kt = r.get("key_takeaway", "")
+                mb.append(f"- {title}{(' — ' + kt) if kt else ''}")
+                if url:
+                    mb.append(f"  {url}")
+        sections.append("\n".join(mb))
+
+    # === Топ конкурентов ===
+    top_comp = recon.get("top_competitors") or []
+    if top_comp:
+        tc = ["[B]=== ТОП-3 КОНКУРЕНТА ===[/B]"]
+        for c in top_comp[:3]:
+            name = c.get("name", "")
+            site_c = c.get("site", "")
+            why = c.get("why_competitor", "")
+            line = f"- {name}"
+            if site_c:
+                line += f" ({site_c})"
+            if why:
+                line += f" — {why}"
+            tc.append(line)
+        sections.append("\n".join(tc))
+
     # === Боли и план ===
     if recon.get("pain_points_hypothesis") or recon.get("why_dc_can_help"):
         pb = ["[B]=== ГИПОТЕЗА: БОЛИ И ПОДХОД DC ===[/B]"]
