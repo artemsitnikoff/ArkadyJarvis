@@ -209,10 +209,7 @@ def _build_timeline_comment(site: str, recon: dict, fin: dict | None) -> str:
             pb.append(f"\nЧем DC может помочь:\n{recon['why_dc_can_help']}")
         sections.append("\n".join(pb))
 
-    # BBCODE: используем [BR] для гарантированных переносов, плюс \n как paragraph
-    return _strip_emoji("[BR][BR]---[BR][BR]".join(
-        "[BR]".join(s.split("\n")) for s in sections
-    ))
+    return _strip_emoji("\n\n---\n\n".join(sections))
 
 
 def _build_lead_fields(site: str, recon: dict, fin: dict | None = None) -> dict:
