@@ -20,6 +20,9 @@ from app.config import settings
 logger = logging.getLogger("arkadyjarvis")
 
 TOKEN_FILE = Path("data/.claude_token.json")
+# Claude CLI читает токен отсюда при прямых вызовах (docker exec etc.) —
+# синхронизируем после рефреша чтобы не было рассинхрона.
+CLI_CREDENTIALS_FILE = Path.home() / ".claude" / "credentials.json"
 TOKEN_URL = "https://api.anthropic.com/v1/oauth/token"
 REFRESH_BUFFER_MS = 600_000  # refresh 10 min before expiry
 
@@ -47,6 +50,28 @@ def _save(data: dict) -> None:
     tmp = TOKEN_FILE.with_suffix(TOKEN_FILE.suffix + ".tmp")
     tmp.write_text(json.dumps(data, indent=2))
     os.replace(tmp, TOKEN_FILE)
+    _sync_cli_credentials(data)
+
+
+def _sync_cli_credentials(data: dict) -> None:
+    """Кладёт те же токены в ~/.claude/credentials.json — Claude CLI читает
+    их при прямых вызовах (docker exec и т.п.). Формат: вложенный
+    claudeAiOauth-объект."""
+    try:
+        CLI_CREDENTIALS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "claudeAiOauth": {
+                "accessToken": data.get("access_token", ""),
+                "refreshToken": data.get("refresh_token", ""),
+                "expiresAt": int(data.get("expires_at", 0)),
+                "scopes": ["user:inference", "user:profile"],
+            },
+        }
+        tmp = CLI_CREDENTIALS_FILE.with_suffix(".tmp")
+        tmp.write_text(json.dumps(payload, indent=2))
+        os.replace(tmp, CLI_CREDENTIALS_FILE)
+    except Exception as e:
+        logger.warning("Не смог записать %s: %s", CLI_CREDENTIALS_FILE, e)
 
 
 def init_token_file() -> None:
