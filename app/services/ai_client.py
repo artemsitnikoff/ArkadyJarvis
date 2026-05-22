@@ -107,7 +107,19 @@ class AIClient:
             )
         except asyncio.TimeoutError:
             proc.kill()
-            await proc.wait()
+            try:
+                # читаем что успело упасть в потоки, чтобы понять причину тишины
+                stdout_partial, stderr_partial = await asyncio.wait_for(
+                    proc.communicate(), timeout=2,
+                )
+                out_tail = (stdout_partial or b"").decode(errors="replace").strip()[-400:]
+                err_tail = (stderr_partial or b"").decode(errors="replace").strip()[-400:]
+                logger.error(
+                    "claude CLI timeout %ds — stderr_tail=%r stdout_tail=%r",
+                    timeout, err_tail, out_tail,
+                )
+            except Exception:
+                pass
             raise TimeoutError(f"claude CLI не ответил за {timeout}с")
         if proc.returncode != 0:
             err = stderr.decode().strip()[:300] or stdout.decode().strip()[:300]
