@@ -128,15 +128,20 @@ async def _recon_one(site: str, ai: AIClient) -> dict:
     try:
         resp = await ai.complete(
             prompt,
-            timeout=300,  # CL может долго ходить по сайту
+            timeout=300,
             allowed_tools="WebSearch,WebFetch",
         )
     except Exception as e:
         logger.error("recon %s failed: %s", site, e)
         return {"error": str(e)}
-    data = parse_json_response(resp) or {}
+    try:
+        data = parse_json_response(resp) or {}
+    except Exception as e:
+        # Claude иногда возвращает невалидный JSON (внутренние кавычки и пр.)
+        logger.error("recon %s: invalid JSON: %s", site, e)
+        return {"error": f"invalid JSON: {e}", "raw": resp[:500]}
     if not data:
-        data = {"error": "не смог распарсить JSON", "raw": resp[:500]}
+        data = {"error": "пустой JSON", "raw": resp[:500]}
     return data
 
 
