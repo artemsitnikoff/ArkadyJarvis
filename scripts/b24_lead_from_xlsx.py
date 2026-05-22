@@ -128,7 +128,7 @@ async def _recon_one(site: str, ai: AIClient) -> dict:
     try:
         resp = await ai.complete(
             prompt,
-            timeout=300,
+            timeout=180,  # >60с лимит +запас; битые сайты ловим быстрее
             allowed_tools="WebSearch,WebFetch",
         )
     except Exception as e:
@@ -341,9 +341,13 @@ async def main() -> None:
         if args.limit:
             domains = domains[: args.limit]
 
+    # Уже обработанные (ok) И ранее зафейлившиеся (skip_recon / error) — пропускаем.
+    # Без --force повторно их не дёргаем (иначе на каждом перезапуске жжём по 5
+    # мин на каждый битый домен впустую).
+    DONE_STATUSES = {"ok", "skip_recon", "error"}
     pending = [
         d for d in domains
-        if args.force or state.get(d, {}).get("status") != "ok"
+        if args.force or state.get(d, {}).get("status") not in DONE_STATUSES
     ]
     skipped_already_done = len(domains) - len(pending)
     logger.info(
