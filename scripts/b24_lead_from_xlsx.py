@@ -121,33 +121,52 @@ def _fmt_pop(v) -> str:
         return "—"
 
 
+async def _recon_searchonly(site: str, ai: AIClient) -> dict:
+    """Fallback: только WebSearch, без WebFetch. Для сайтов которые висят/Cloudflare."""
+    prompt = load_prompt("b24_lead_recon_searchonly").replace("{site}", site)
+    logger.info("→ recon_searchonly %s", site)
+    try:
+        resp = await ai.complete(
+            prompt, timeout=90, allowed_tools="WebSearch",
+        )
+    except Exception as e:
+        logger.warning("searchonly %s failed: %s", site, e)
+        return {"site_unreachable": True, "error_reason": str(e)[:200]}
+    try:
+        data = parse_json_response(resp) or {}
+    except Exception as e:
+        return {"site_unreachable": True, "error_reason": f"invalid JSON: {e}"}
+    data["site_unreachable"] = True
+    return data
+
+
 async def _recon_one(site: str, ai: AIClient) -> dict:
-    """Запуск Claude с WebFetch+WebSearch — возвращает recon JSON."""
+    """Запуск Claude с WebFetch+WebSearch — возвращает recon JSON.
+    При таймауте/ошибке делает fallback на WebSearch-only."""
     prompt = load_prompt("b24_lead_recon").replace("{site}", site)
     logger.info("→ recon %s", site)
     try:
         resp = await ai.complete(
-            prompt,
-            timeout=180,  # >60с лимит +запас; битые сайты ловим быстрее
-            allowed_tools="WebSearch,WebFetch",
+            prompt, timeout=180, allowed_tools="WebSearch,WebFetch",
         )
     except Exception as e:
-        logger.error("recon %s failed: %s", site, e)
-        return {"error": str(e)}
+        logger.warning("recon %s failed: %s — fallback на WebSearch-only", site, e)
+        return await _recon_searchonly(site, ai)
     try:
         data = parse_json_response(resp) or {}
     except Exception as e:
-        # Claude иногда возвращает невалидный JSON (внутренние кавычки и пр.)
-        logger.error("recon %s: invalid JSON: %s", site, e)
-        return {"error": f"invalid JSON: {e}", "raw": resp[:500]}
+        logger.warning("recon %s: invalid JSON — fallback на WebSearch-only", site)
+        return await _recon_searchonly(site, ai)
     if not data:
-        data = {"error": "пустой JSON", "raw": resp[:500]}
+        return await _recon_searchonly(site, ai)
     return data
 
 
 def _build_short_summary(site: str, recon: dict, fin: dict | None) -> str:
     """Короткая шапка для COMMENTS (видна в канбане). 2-4 строки."""
     bits = []
+    if recon.get("site_unreachable"):
+        bits.append("[Сайт не открылся — данные из b24.xlsx + WebSearch]")
     if fin:
         bits.append(
             f"Выручка {fin.get('period') or '-'}: {_fmt_money(fin.get('revenue'))} "
@@ -164,6 +183,17 @@ def _build_short_summary(site: str, recon: dict, fin: dict | None) -> str:
 def _build_timeline_comment(site: str, recon: dict, fin: dict | None) -> str:
     """Полная карточка recon для timeline.comment (BBCODE)."""
     sections: list[str] = []
+
+    # === Плашка если сайт не открылся ===
+    if recon.get("site_unreachable"):
+        warn = [
+            "[B]=== ⚠ САЙТ НЕ ОТКРЫЛСЯ ===[/B]",
+            "Не удалось получить контент с сайта (вероятно Cloudflare / антибот / 5xx / таймаут).",
+            "Данные ниже собраны из b24.xlsx и WebSearch — поэтому могут быть неполными.",
+        ]
+        if recon.get("error_reason"):
+            warn.append(f"Причина: {recon['error_reason']}")
+        sections.append(_strip_emoji("\n".join(warn)))
 
     # === Финансы (из b24.xlsx) ===
     if fin:
@@ -362,12 +392,18 @@ async def main() -> None:
         for idx, site in enumerate(pending, start=1):
             print(f"\n[{idx}/{len(pending)}] === {site} ===")
             recon = await _recon_one(site, ai)
-            if recon.get("error"):
-                logger.warning("Skip %s: %s", site, recon["error"])
+            # skip только если ВООБЩЕ нет данных — ни recon, ни даже searchonly
+            has_any_data = bool(
+                recon.get("company_name") or recon.get("industry")
+                or recon.get("what_they_do")
+            )
+            if recon.get("error") or not has_any_data:
+                err_text = recon.get("error") or recon.get("error_reason") or "нет данных"
+                logger.warning("Skip %s: %s", site, err_text)
                 stats["skip_recon"] += 1
                 state[site] = {
                     "status": "skip_recon",
-                    "error": str(recon.get("error"))[:200],
+                    "error": str(err_text)[:200],
                     "ts": datetime.now().isoformat(),
                 }
                 _save_state(state)
