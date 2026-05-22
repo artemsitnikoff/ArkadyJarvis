@@ -430,11 +430,13 @@ async def main() -> None:
                     "status": "ok",
                     "lead_id": lead_id,
                     "timeline_id": cid,
+                    "site_unreachable": bool(recon.get("site_unreachable")),
                     "ts": datetime.now().isoformat(),
                 }
                 _save_state(state)
+                unr_marker = " [⚠ site_unreachable]" if recon.get("site_unreachable") else ""
                 print(
-                    f"✓ {site}: lead={lead_id} timeline={cid} "
+                    f"✓ {site}: lead={lead_id} timeline={cid}{unr_marker} "
                     f"| итого ok={stats['ok']} err={stats['err']} skip={stats['skip_recon']}"
                 )
             except Exception as e:
