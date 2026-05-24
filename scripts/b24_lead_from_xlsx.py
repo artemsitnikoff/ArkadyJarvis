@@ -49,11 +49,21 @@ TEST_DOMAINS = [
     "energostan.ru",
 ]
 
-STATE_FILE = Path("b24_processed.json")  # в корне репо — гит-трекаемое
+# В data/ — это volume-mounted директория, переживает docker compose up --build.
+# Раньше лежал в корне репо → пересоздание контейнера обнуляло state, а лиды
+# в B24 оставались (расхождение state и реальности).
+STATE_FILE = Path("data/b24_processed.json")
+LEGACY_STATE_FILE = Path("b24_processed.json")
 
 
 
 def _load_state() -> dict:
+    # Миграция: если в новом месте пусто, но есть старый файл в корне — переезжаем
+    if not STATE_FILE.exists() and LEGACY_STATE_FILE.exists():
+        STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        STATE_FILE.write_text(
+            LEGACY_STATE_FILE.read_text(encoding="utf-8"), encoding="utf-8",
+        )
     if STATE_FILE.exists():
         try:
             return json.loads(STATE_FILE.read_text(encoding="utf-8"))
