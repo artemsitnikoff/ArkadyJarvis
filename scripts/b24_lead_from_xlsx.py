@@ -43,6 +43,9 @@ from app.utils import parse_json_response  # noqa: E402
 # Костя Карачев — bitrix_user_id из CLAUDE.md
 KOSTYA_BITRIX_ID = 697
 
+# Значение в селекте «Источник» (СRM Lead) — пользователь создаёт эту опцию в B24 руками
+LEAD_SOURCE_NAME = "База Яндекс"
+
 TEST_DOMAINS = [
     "dmitriev-ivan.ru",
     "gtkbt.ru",
@@ -315,7 +318,24 @@ def _build_timeline_comment(site: str, recon: dict, fin: dict | None) -> str:
     return _strip_emoji("\n\n---\n\n".join(sections))
 
 
-def _build_lead_fields(site: str, recon: dict, fin: dict | None = None) -> dict:
+async def _resolve_source_id(bitrix, name: str) -> str | None:
+    """Ищет в справочнике CRM 'Источник' (SOURCE) опцию с указанным NAME,
+    возвращает её STATUS_ID. None если не нашли."""
+    r = await bitrix._request("crm.status.list", {
+        "filter": {"ENTITY_ID": "SOURCE"},
+    })
+    rows = r.get("result") or []
+    name_low = name.strip().lower()
+    for row in rows:
+        if (row.get("NAME") or "").strip().lower() == name_low:
+            return row.get("STATUS_ID")
+    return None
+
+
+def _build_lead_fields(
+    site: str, recon: dict, fin: dict | None = None,
+    source_id: str | None = None,
+) -> dict:
     """Поля для crm.lead.add. Полный recon идёт ОТДЕЛЬНО в timeline.comment.add."""
     company = recon.get("company_name") or site
     title = f"{company} ({site})"
@@ -330,7 +350,7 @@ def _build_lead_fields(site: str, recon: dict, fin: dict | None = None) -> dict:
         "COMMENTS": _build_short_summary(site, recon, fin),
         "ASSIGNED_BY_ID": KOSTYA_BITRIX_ID,
         "STATUS_ID": "NEW",
-        "SOURCE_ID": "OTHER",
+        "SOURCE_ID": source_id or "OTHER",
         "SOURCE_DESCRIPTION": f"Recon из b24.xlsx ({fin.get('period') if fin else '-'})",
         "WEB": [{"VALUE": f"https://{site}", "VALUE_TYPE": "WORK"}],
     }
@@ -399,6 +419,17 @@ async def main() -> None:
     bitrix = BitrixClient()
     stats = {"ok": 0, "err": 0, "skip_recon": 0}
     try:
+        source_id = await _resolve_source_id(bitrix, LEAD_SOURCE_NAME)
+        if source_id:
+            logger.info(
+                "Lead SOURCE_ID для «%s» → %s", LEAD_SOURCE_NAME, source_id,
+            )
+        else:
+            logger.warning(
+                "Источник «%s» не найден в B24 — оставляю SOURCE_ID=OTHER. "
+                "Создай опцию в Bitrix24 (CRM → Настройки → Справочники → "
+                "Источник).", LEAD_SOURCE_NAME,
+            )
         for idx, site in enumerate(pending, start=1):
             print(f"\n[{idx}/{len(pending)}] === {site} ===")
             recon = await _recon_one(site, ai)
@@ -419,7 +450,7 @@ async def main() -> None:
                 _save_state(state)
                 continue
             fin = xlsx_data.get(site)
-            fields = _build_lead_fields(site, recon, fin)
+            fields = _build_lead_fields(site, recon, fin, source_id=source_id)
             if args.dry_run:
                 print(f"[DRY-RUN] {site} — recon ok, lead не создан")
                 continue
