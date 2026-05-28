@@ -158,7 +158,7 @@ FIELD_TARGETS = {
 FIELD_OVERRIDES = {
     "agency":     "UF_CRM_1779947430020",   # string «Агентство Текущее»
     "city":       "ADDRESS_CITY",            # стандартное поле адреса
-    "industry":   "UF_CRM_1779947512191",   # string «Сфера деятельности»
+    "industry":   "UF_CRM_1779951351014",   # enum «Сфера» — 18 значений
     "has_mobile": "UF_CRM_1779947540127",   # boolean «Есть сотовый»
     "budget":     "UF_CRM_1779947613495",   # enumeration «Бюджет на рекламу»
 }
