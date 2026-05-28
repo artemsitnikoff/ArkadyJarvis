@@ -12,7 +12,7 @@
 import asyncio
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from app.config import settings
@@ -88,12 +88,22 @@ class DailySalesActivity:
     errors: list[str] = field(default_factory=list)
 
 
-def _period_bounds(tz_name: str, days: int = 1) -> tuple[str, str]:
-    """ISO-строки начала и конца периода (N последних суток, включая сегодня)."""
+def _period_bounds(
+    tz_name: str, days: int = 1, as_of: "date | None" = None,
+) -> tuple[str, str]:
+    """ISO-строки начала и конца периода (N последних суток, включая as_of).
+    Если as_of=None — берётся 'сегодня'. Иначе период заканчивается as_of."""
+    from datetime import date as _date  # noqa: F401
     tz = ZoneInfo(tz_name)
-    now = datetime.now(tz)
-    end = now.replace(hour=23, minute=59, second=59, microsecond=0)
-    start = (now - timedelta(days=days - 1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    if as_of:
+        end = datetime(
+            as_of.year, as_of.month, as_of.day, 23, 59, 59, tzinfo=tz,
+        )
+    else:
+        end = datetime.now(tz).replace(hour=23, minute=59, second=59, microsecond=0)
+    start = (end - timedelta(days=days - 1)).replace(
+        hour=0, minute=0, second=0, microsecond=0,
+    )
     return start.isoformat(), end.isoformat()
 
 
@@ -125,11 +135,15 @@ async def collect_user_activity(
     openrouter=None,
     ai_client=None,
     with_transcripts: bool = False,
+    as_of: "date | None" = None,
 ) -> DailySalesActivity:
     """Собрать активность менеджера за период. Если `with_transcripts=True` и
     переданы `openrouter` + `ai_client` — для каждого звонка с записью
-    скачивает MP3, транскрибирует и формирует AI-выжимку."""
-    day_start, day_end = _period_bounds(tz_name, period_days)
+    скачивает MP3, транскрибирует и формирует AI-выжимку.
+
+    `as_of` — конкретная дата конца периода (для backfill). None = сейчас.
+    """
+    day_start, day_end = _period_bounds(tz_name, period_days, as_of=as_of)
     activity = DailySalesActivity(
         user_id=user_id,
         period_days=period_days,
@@ -398,13 +412,14 @@ async def collect_for_user_ids(
     openrouter=None,
     ai_client=None,
     with_transcripts: bool = False,
+    as_of: "date | None" = None,
 ) -> list[DailySalesActivity]:
     return await asyncio.gather(
         *[
             collect_user_activity(
                 bitrix, uid, tz_name, period_days,
                 openrouter=openrouter, ai_client=ai_client,
-                with_transcripts=with_transcripts,
+                with_transcripts=with_transcripts, as_of=as_of,
             )
             for uid in user_ids
         ]

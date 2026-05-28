@@ -2,15 +2,24 @@
 """Прогнать сбор + AI-резюме отдела продаж прямо сейчас (без ожидания 19:00)
 и **отправить отчёт всем получателям из SALES_REPORT_RECIPIENTS** (DM).
 
-    docker compose exec bot python scripts/test_sales_report.py [bitrix_user_id] [days] [--no-send]
+    docker compose exec bot python scripts/test_sales_report.py [bitrix_user_id] [days] [--no-send] [--date YYYY-MM-DD]
 
 `days` — 1 (по-умолчанию, сегодня), 7 — за неделю, 30 — за месяц.
 `--no-send` — только напечатать в консоль, никому не отправлять.
+`--date YYYY-MM-DD` — для backfill: отчёт за конкретную дату (период
+   заканчивается этой датой). Без флага — берётся «сегодня».
+
+Примеры:
+    # отчёт за прошедший вторник (26.05.2026) для всех продажников из .env
+    python scripts/test_sales_report.py --date 2026-05-26
+    # за конкретного менеджера 697 за вторник
+    python scripts/test_sales_report.py 697 1 --date 2026-05-26
 """
 import asyncio
 import json
 import os
 import sys
+from datetime import date as _date, datetime
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -35,6 +44,14 @@ async def main() -> None:
     no_send = "--no-send" in args
     args = [a for a in args if a != "--no-send"]
 
+    as_of: _date | None = None
+    if "--date" in args:
+        idx = args.index("--date")
+        if idx + 1 >= len(args):
+            sys.exit("--date requires YYYY-MM-DD value")
+        as_of = datetime.strptime(args[idx + 1], "%Y-%m-%d").date()
+        args = args[:idx] + args[idx + 2:]
+
     if args:
         bitrix_ids = [int(args[0])]
     else:
@@ -48,7 +65,7 @@ async def main() -> None:
     recipients = [int(x.strip()) for x in recipients_raw.split(",") if x.strip()]
 
     print(f"\nCollecting activity for Bitrix user IDs: {bitrix_ids}")
-    print(f"Period: last {days} day(s)")
+    print(f"Period: last {days} day(s){' (as of ' + str(as_of) + ')' if as_of else ''}")
     print(f"Timezone: {settings.timezone}")
     print(f"Recipients ({len(recipients)}): {recipients}")
     print(f"Send mode: {'DRY-RUN (no send)' if no_send else 'LIVE — отправляю в Telegram'}\n")
@@ -62,6 +79,7 @@ async def main() -> None:
         activities = await collect_for_user_ids(
             bitrix, bitrix_ids, settings.timezone, period_days=days,
             openrouter=openrouter, ai_client=ai, with_transcripts=True,
+            as_of=as_of,
         )
         print(f"=== RAW ACTIVITY JSON ===")
         def _to_dict(a):
