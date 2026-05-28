@@ -42,6 +42,76 @@ from app.services.bitrix_client import BitrixClient  # noqa: E402
 
 # --- Парсинг ---
 
+# Группировка 1400+ AI-формулировок и 100+ xlsx subindustry → 14 крупных категорий.
+# Поиск по подстрокам (lowercase). Первое совпадение выигрывает, порядок важен:
+# более узкие категории идут раньше.
+INDUSTRY_GROUPS: list[tuple[str, list[str]]] = [
+    ("Медицина и стоматология", [
+        "стоматолог", "ортодонт", "имплант", "офтальм", "пластическ хирург",
+        "клиник", "медиц", "ветерин", "психотерап", "массаж", "реабилитац",
+        "наркологич", "гинеколог", "косметолог",
+    ]),
+    ("Недвижимость и девелопмент", [
+        "недвижим", "девелопмент", "застройщ", "новостройк", "апартамент",
+        "жилая", "жилое", "коттедж", "загородн", "поселок", "посёлок",
+        "новострой",
+    ]),
+    ("Стройка, ремонт и материалы", [
+        "стройк", "строительств", "ремонт квартир", "ремонт отделк", "отделочн",
+        "окн", "сантехник", "стройматериал", "напольное покрыт", "плитк",
+        "обои", "лакокрасоч", "кровл", "фасад",
+    ]),
+    ("Мебель и интерьер", [
+        "мебел", "интерьер", "кухн на заказ", "шкаф", "стиль интерьер",
+    ]),
+    ("Автомобили и автосервис", [
+        "автотранспорт", "автосервис", "автомоб", "автодилер", "автозапчаст",
+        "автомойк", "автоэкспер", "грузоперев", "такси", "каршеринг",
+        "товары для авто", "автоаксессуар", "автозвук", "шины", "коммерческий автотранспорт",
+    ]),
+    ("Промышленное оборудование и B2B-сервис", [
+        "промышленн", "оборудован", "технические сервис", "инжиниринг",
+        "металлообраб", "станк", "приборостро", "горелоч", "котельн",
+        "энергетическ", "сварочн",
+    ]),
+    ("Телеком и IT", [
+        "телеком", "интернет-провайд", "хостинг", "облачн", "data-центр",
+        "saas", "ит-услуг", "it-услуг", "разработк", "крм", "1с-",
+    ]),
+    ("HoReCa и общепит", [
+        "qsr", "рестора", "кафе", "пиццер", "столов", "общепит", "доставк еды",
+        "гостиниц", "отел", "хостел", "санатор", "горнолыжн", "курорт",
+        "база отдых", "термальн",
+    ]),
+    ("Бьюти и фитнес", [
+        "салон красот", "бьют", "spa", "парикмахер", "ногтев", "маникюр",
+        "лазерн эпиляц", "аппаратн косметол", "тату", "пирсинг",
+        "фитнес", "тренаж", "спорт", "йог", "танц", "бассейн",
+    ]),
+    ("Развлечения и мероприятия", [
+        "развлечен", "мероприят", "событ", "event", "концерт", "театр",
+        "квест", "vr-разв", "lbe-vr", "детск центр", "детск разв", "анимац",
+        "ивент",
+    ]),
+    ("Образование", [
+        "образован", "обучен", "курс", "школ", "репетит", "детский сад",
+        "детсад", "колледж", "вуз",
+    ]),
+    ("B2B-услуги (юр/консалтинг/маркетинг)", [
+        "юридическ", "консалтинг", "адвокат", "нотариус", "бухгалт",
+        "аудит", "маркетинг", "рекламн агентств", "реклам услуг",
+        "услуги в области реклам",
+    ]),
+    ("Ритейл и e-commerce", [
+        "ритейл", "розничн", "интернет-магазин", "e-commerce", "одежд",
+        "обув", "цвет", "флорист", "семен", "садов товар", "товары для дом",
+        "non-food", "продукт", "галантер",
+    ]),
+    ("Книги и медиа", [
+        "книги", "издательств", "медиа", "сми",
+    ]),
+]
+
 COMMENTS_INDUSTRY_RE = re.compile(r"Отрасль:\s*([^.]+)\.")
 COMMENTS_REGION_RE = re.compile(r"Регион:\s*([^.]+)\.")
 TITLE_DOMAIN_RE = re.compile(r"\(([a-zA-Z0-9.\-_]+\.[a-zA-Zа-яА-Я]+)\)\s*$")
@@ -99,6 +169,22 @@ def extract_city(region: str | None) -> str | None:
         "", head, flags=re.IGNORECASE,
     )
     return head.strip() or None
+
+
+def classify_industry(
+    ai_industry: str | None, xlsx_subindustry: str | None,
+) -> str:
+    """Группирует сферу деятельности в одну из 14 категорий по ключевым словам.
+    Ищем сначала в AI-формулировке, затем в xlsx.subindustry. Fallback — «Прочее»."""
+    haystack = " ".join([
+        (ai_industry or "").lower(),
+        (xlsx_subindustry or "").lower(),
+    ])
+    for group, keywords in INDUSTRY_GROUPS:
+        for kw in keywords:
+            if kw in haystack:
+                return group
+    return "Прочее"
 
 
 def has_mobile(phones: list) -> bool:
@@ -252,12 +338,13 @@ def build_update(
     """Возвращает словарь поле→значение для crm.lead.update."""
     upd: dict = {}
 
-    industry, region = parse_comment(lead.get("COMMENTS") or "")
+    ai_industry, region = parse_comment(lead.get("COMMENTS") or "")
     city = extract_city(region)
     phones = lead.get("PHONE") or []
     mobile = has_mobile(phones)
     agency = (fin or {}).get("agency")
     budget_label = bucket_budget((fin or {}).get("revenue"))
+    industry = classify_industry(ai_industry, (fin or {}).get("subindustry"))
 
     def set_field(fkey: str, value):
         if value is None or value == "":
@@ -340,21 +427,25 @@ async def main() -> None:
         leads = await list_b24_leads(bx, extra_select=extra)
         print(f"Найдено b24-лидов: {len(leads)}\n")
 
-        # --industries: собираем уникальные сферы
+        # --industries: собираем уникальные сферы + распределение по группам
         if args.industries:
             uniq: dict[str, int] = {}
+            grouped: dict[str, int] = {}
             for ld in leads:
+                site = extract_domain(ld.get("TITLE") or "", ld.get("WEB"))
+                fin = xlsx.get(site) if site else None
                 ind, _ = parse_comment(ld.get("COMMENTS") or "")
                 if ind:
-                    key = ind.strip()
-                    uniq[key] = uniq.get(key, 0) + 1
+                    uniq[ind.strip()] = uniq.get(ind.strip(), 0) + 1
+                group = classify_industry(ind, (fin or {}).get("subindustry"))
+                grouped[group] = grouped.get(group, 0) + 1
             with open("industries.txt", "w", encoding="utf-8") as f:
                 for ind, cnt in sorted(uniq.items(), key=lambda x: -x[1]):
                     f.write(f"{cnt:4}  {ind}\n")
-            print(f"✓ industries.txt — {len(uniq)} уникальных сфер "
-                  f"(топ-10 ниже)")
-            for ind, cnt in sorted(uniq.items(), key=lambda x: -x[1])[:10]:
-                print(f"  {cnt:4}  {ind}")
+            print(f"\n✓ industries.txt — {len(uniq)} уникальных AI-формулировок")
+            print(f"\n=== Сгруппировано в {len(grouped)} категорий ===")
+            for g, cnt in sorted(grouped.items(), key=lambda x: -x[1]):
+                print(f"  {cnt:5}  {g}")
             return
 
         # 3. Обновляем
