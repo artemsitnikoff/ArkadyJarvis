@@ -275,11 +275,86 @@ docker compose exec bot python scripts/test_sales_report.py <bitrix_user_id> [da
   3. `classify_rejection_intent(text, ai_client)` через Haiku по `prompts/rejection_classifier.md` → {score, reasoning}
   4. Если `score > REJECTION_CLASSIFIER_THRESHOLD` (default 70) → `potok.set_applicant_active(active=False)` + audit-комментарий
 
+### Мисис Хадсон (Weekly P&Q Analyst)
+
+Еженедельный аудит worklog'ов отдела Production&Quality. Cron Пн 11:00 Нск.
+
+**Что считает**:
+- Тянет `dcj_projects` где `direction = "WEB - ПиК"` (289 проектов из DCJ.xlsx).
+- Для каждого разработчика из `hudson_managers` (14 человек, 4 менеджера) — Jira worklog за прошлую полную неделю (Пн-Вс) через `services/jira_worklog.py` (`fetch_worklogs(jira_authors, since, until, project_keys)` — JQL `worklogAuthor in (…) AND worklogDate >= … AND <= …` + per-issue worklog для деталей).
+- Суммирует часы → `total / internal / external` (internal по `dcj_projects.is_internal=1`).
+- Норма по ТК РФ — `compute_weekly_norm()`:
+  - База `WEEKLY_HOURS_NORM=32h` минус 8h за каждый рабочий (Пн-Пт) праздник из производственного календаря РФ (`services/holidays_api.py` — `isdayoff.ru`, кэш в памяти).
+  - Минус 8h за каждый рабочий день отпуска/больничного/командировки (`bitrix.get_absences()` — `absence.list`, fallback на `calendar.event.get` по ключевым словам когда HR-модуль не установлен; флаг `_ABSENCE_LIST_DEAD` кэширует 404).
+  - `weekly_norm <= 0` → `on_leave=True` (всю неделю пропустил, не оцениваем).
+- Плохие комменты — **Haiku через OpenRouter** (`anthropic/claude-haiku-4.5`, не Claude CLI subscription — потому что 150+ вызовов на прогон, иначе квоту сожжёт), классификатор `prompts/hudson_bad_comment.md` (мягкий: ≤30мин комменты «дейлик/викли» норма, ловит только явные косяки — «работа», «правки», пустые). Sem(5) параллель, 60с timeout + 1 повтор.
+
+**Рассылка** (`services/hudson_notifier.py`):
+- Менеджерам (DM): краткий per-dev summary (`🔴 Гусев: 32.0h/<b>17.2h</b> (внутр выше 8h)` + счётчик плохих коммов).
+- Алине Васьковой (РОП P&Q, `HUDSON_DEPT_HEAD_BITRIX_ID=37`): то же.
+- В группу `HUDSON_CHAT_ID`: шапка с тэгами менеджеров (`tg://user?id=…`) + AI-мотивашка от Claude CLI (1 вызов/нед, опускается на subscription) + per-manager блоки.
+- Всем — **2 .md аттачмента**: `bad_comments_<period>.md` (все плохие комменты с кликабельными Jira-ссылками `[PQ-918](jira.dclouds.ru/browse/PQ-918)`) и `internal_hours_<period>.md` (внутренние часы по задачам, сгруппированы per-dev). Полные данные в .md, в Telegram только сводка чтобы не упереться в лимит 4096 байт (`TG_MAX=3800` + `_split_block` режет по строкам).
+
+**Jira-задачи в проекте `PQ`** (если `HUDSON_SKIP_JIRA=false`):
+- «Подтвердить внутренние часы» — на каждого менеджера, assignee = его Jira-username (из `hudson_managers.manager_jira_username`, резолвится через email при seed). Description содержит per-dev разбивку внутренних часов по issue и список плохих коммов.
+- «Отгул: <разработчик>» — если `is_under_norm`, assignee = менеджер.
+
+**Кнопка «🏠 Мисис Хадсон» в меню**:
+- Доступ через `HUDSON_ALLOWED` (TG IDs).
+- При клике — полный отчёт **в личку нажавшему** (не в общий чат). Сообщения + 2 .md.
+- Если у юзера DM с ботом закрыт — пишет в группу что надо открыть `/start` в личке.
+
+**Маппинг менеджер↔разработчики**:
+- В `services/hudson_repo.py:DEFAULT_MANAGER_MAPPING` (hardcoded, потому что в Bitrix у групп разработки head=NULL — связи нет).
+- 4 менеджера / 14 разработчиков.
+- Seed резолвит Bitrix ID/email/full_name/jira_username — `_find_user_by_last_name` (LAST_NAME filter + LIKE fallback, потому что у Осицына в Bitrix `LAST_NAME='Осицын '` с trailing-пробелом — exact match не находит).
+- Запуск: `scripts/init_hudson_db.py` — парсит `DCJ.xlsx` и сидит маппинг.
+
+**Скрипты**:
+- `scripts/run_hudson_now.py` — ручной прогон, поддерживает `--offset N` (позапрошлая неделя), `--since/--until`, `--dry-run`.
+- `scripts/test_hudson.py` — console dry-run, печатает таблицу.
+
 ### Zabbix Monitor
 
 - **Real-time** (`bot/routers/zabbix.py`): `@router.channel_post(F.chat.id == settings.zabbix_channel_id, F.text)` парсит сообщения от Zabbix-бота через regex (🔴 = открытие, 🟢 = закрытие; key = `Original problem ID`). UPSERT в `zabbix_problems` таблицу.
 - **Cron 10:00** (`zabbix_check_unresolved_job`): берёт проблемы где `resolved_at IS NULL AND jira_task_key IS NULL AND opened_at <= now-24h`, фильтрует по severity (Warning+ через `ESCALATING_SEVERITIES = {Warning, Average, High, Disaster}`), создаёт Jira-задачу в `ZABBIX_JIRA_PROJECT` (default `DA`), маркирует `jira_task_key` чтобы не задвоить.
 - **Backfill**: `scripts/scan_zabbix_month.py` использует **Telethon-userbot** (обычный бот не умеет читать историю каналов) для 30-дневного скана + создание задач по всему ещё открытому.
+
+### B24 Lead Recon (xlsx → CRM лиды Косте)
+
+Одноразовый перевод базы из `b24.xlsx` (вкладка «Клиенты», ~4500 строк) в B24 CRM как leads на Костю Карачева (`bitrix_id=697`, `SOURCE_ID="UC_XOBJMV"` = «База Яндекс»).
+
+**Конвейер** (`scripts/b24_lead_from_xlsx.py`):
+1. По каждому домену из xlsx — Claude CLI с `allowed_tools="WebSearch,WebFetch"`, промт `prompts/b24_lead_recon.md` — собирает JSON-карточку (company_name, отрасль, регион, контакты, новости, гипотезы болей, top-3 конкурента, industry_dynamics с ссылками на исследования).
+2. Если WebFetch виснет/Cloudflare (180с timeout) → **fallback** на `prompts/b24_lead_recon_searchonly.md` (только WebSearch, 90с). Сайты которые WebFetch не открывает помечаются `site_unreachable=true`, лид всё равно создаётся с тем что нашлось через WebSearch.
+3. Лид создаётся через `crm.lead.add`. **Полный recon** уходит в **timeline.comment** (правая колонка карточки) через `bitrix.add_timeline_comment()`. В `COMMENTS` лида — однострочный summary (виден в канбане).
+4. Контакты: телефоны/emails в стандартные поля `PHONE`/`EMAIL`. Telegram/WhatsApp из соцсетей — в `IM`.
+
+**Бэкфилл UF-полей** (`scripts/b24_lead_backfill_fields.py`) — отдельный проход, БЕЗ Claude, только Bitrix API:
+- `UF_CRM_1779947430020` (string) — **Агентство Текущее** ← xlsx колонка C
+- `ADDRESS_CITY` (standard) — **Город** ← regex «Регион: …» из COMMENTS
+- `UF_CRM_1779951351014` (enum, 18 значений) — **Сфера** ← `classify_industry()` по keywords (Стоматология, Застройщики, Риелторы, Промышленное оборудование, B2B-сервис и инжиниринг, Медицина, и т.д. — см. `INDUSTRY_GROUPS`)
+- `UF_CRM_1779947540127` (boolean Y/N) — **Есть сотовый** ← regex `^[78]?9\d{9}$` по PHONE
+- `UF_CRM_1779947613495` (enum 4) — **Бюджет на рекламу** ← bucket xlsx revenue (`<500к | 500к-1М | 1М-3М | >3М`, exact labels `«до 500.000»`/`«500.000-1.000.000»`/`«1.000.000-3.000.000»`/`«Выше 3.000.000»`)
+
+`FIELD_OVERRIDES` хардкодит UF-коды (title в Bitrix долго не подтягивается после создания поля). После переименования полей в UI auto-match по title тоже сработает.
+
+**Чекпоинт-стейт** (`b24_processed.json`):
+- Лежит в **`data/b24_processed.json`** (volume-mounted) — раньше был в корне репо, но docker compose up --build обнулял (`/app/` НЕ примонтирован). Скрипт делает миграцию из старого места если есть.
+- Записывает каждый домен с `status: ok/skip_recon/error` + `lead_id`, `timeline_id`, `site_unreachable`, `ts`.
+- При перезапуске пропускает все 3 статуса (раньше пропускал только `ok` и каждый раз тратил 5 мин на висящие сайты впустую).
+
+**Восстановление** (`scripts/rebuild_b24_state.py`): тянет `crm.lead.list` по `%SOURCE_DESCRIPTION="Recon из b24.xlsx"`, парсит домен из `WEB[0]` или TITLE, восстанавливает state. Использовался когда обнаружили что state писался в /app/ (ephemeral) — было 1000+ лидов в B24 при 108 в state.
+
+**Доп. скрипты**:
+- `scripts/b24_lead_set_source.py` — массово выставляет `SOURCE_ID="UC_XOBJMV"` (была временно `OTHER`).
+- `scripts/dump_unreachable.py` — выгружает список доменов с `site_unreachable=true` + кликабельные ссылки на лиды для ручного прохода.
+
+**Запуск на сервере**:
+```bash
+screen -S b24 -dm bash -c 'docker compose exec -T bot python scripts/b24_lead_from_xlsx.py --all > data/b24_run.log 2>&1'
+```
+~2.5 мин/лид. 4500 доменов = ~7 суток непрерывной работы (включая subscription weekly quota Claude Max — реально сжирает её за пару дней).
 
 ### Cicero, Contract, Meeting, Free Slots, Lead, Image, Socrates — без изменений, см. `prompts/` и роутеры.
 
@@ -316,6 +391,18 @@ zabbix_problems (
     problem_id PK, host, name, severity, opened_at, resolved_at, jira_task_key,
     raw_text, last_seen
 ) + INDEX idx_zabbix_unresolved(resolved_at, jira_task_key, opened_at)
+
+-- Мисис Хадсон — справочник проектов из DCJ.xlsx (642 проекта, 289 в WEB-ПиК)
+dcj_projects (
+    project_key PK, name, is_internal, direction, category, updated_at
+)
+
+-- Мисис Хадсон — маппинг менеджер↔разработчики (DC-specific, в Bitrix у групп head=NULL)
+hudson_managers (
+    manager_name + developer_pattern PK,
+    manager_bitrix_id, manager_jira_username, manager_full_name,
+    developer_bitrix_id, developer_email, jira_username
+)
 ```
 
 ## Config (.env)
@@ -362,6 +449,12 @@ zabbix_problems (
 - `ZABBIX_CHANNEL_ID` (numeric, начинается с `-100`)
 - `ZABBIX_JIRA_PROJECT` (default `DA`)
 - `ZABBIX_THRESHOLD_HOURS` (default 24)
+
+### Мисис Хадсон
+- `HUDSON_DEPT_HEAD_BITRIX_ID` (default `37` — Алина Васькова, РОП P&Q; получает копию отчёта)
+- `HUDSON_ALLOWED` — TG IDs кому доступна кнопка «🏠 Мисис Хадсон» (я + менеджеры P&Q)
+- `HUDSON_CHAT_ID` — общая группа отчёта (например `-1002588304733`). Бот должен быть в группе.
+- `HUDSON_SKIP_JIRA` (default `false`) — если `true`, Telegram-рассылка работает, но Jira-задачи в PQ не создаются (на время тестов чтобы не плодить задачи).
 
 ### DaData (Штирлиц)
 - `DADATA_API_KEY`, `DADATA_SECRET_KEY` (secret для clean/standard API, не обязателен для find/suggest)
@@ -441,3 +534,11 @@ Docker: `docker compose up --build` (port 8002), logs: `docker compose logs -f b
 - **VOK API Saby** — платная подписка. Через интерактивный логин (без app credentials) не работает, нашими cookies спрятанный VOK тоже не пускает. Не интегрируем.
 - **`crm.stagehistory.list` нельзя фильтровать по user** — только по `OWNER_ID=deal_id`. N+1 по сделкам менеджера.
 - **`tasks_done` метрика убрана** — в DC не работают по «задачам», метрика бесполезна.
+- **State-файлы должны жить в `data/`** — это volume-mounted директория (`./data:/app/data`). Любые `Path("xxx.json")` в корне `/app/` УБИВАЮТСЯ при `docker compose up --build`. Прецедент: `b24_processed.json` лежал в корне → 1000 лидов в B24 при 108 в state. `scripts/rebuild_b24_state.py` восстанавливает из API.
+- **Bitrix CRM `COMMENTS` поле — MySQL utf8 (3-байтовая)** — 4-байтные emoji (📊 💡 🔧 и пр., supplementary plane U+10000+) обрезают всё поле начиная с первой эмодзи. В `b24_lead_from_xlsx.py:_strip_emoji()` чистим. Стандартные русские буквы и `₽` (BMP, ≤3 байта) — норм.
+- **Bitrix CRM `COMMENTS` — BBCODE, не HTML** — `<b>...</b>` ломает field. Используем `[B][/B]`, `[BR]`. В `timeline.comment` — обычные `\n` норм.
+- **Claude CLI читает токен — env var `CLAUDE_CODE_OAUTH_TOKEN` ПЕРВЕЕ чем `~/.claude/credentials.json`**. Если Python wrapper обновил токен через `claude_token.ensure_fresh_token()`, прямой `docker exec bot claude --print …` всё равно ловит 401 (env от .env стейл). Фикс: `_sync_cli_credentials()` после рефреша пишет `~/.claude/credentials.json` в формате `{claudeAiOauth: {accessToken, refreshToken, expiresAt, scopes}}`. Прямой `claude` тоже работает.
+- **WebFetch от Claude CLI ходит с Anthropic dataclass IP** — многие RU-сайты (Cloudflare, гео-блок, антибот) висят бесконечно, stderr пустой. Решение в `b24_lead_from_xlsx.py`: 180с timeout → fallback на WebSearch-only `prompts/b24_lead_recon_searchonly.md`. Сайт помечается `site_unreachable=true`, лид всё равно создаётся.
+- **Bitrix `absence.list` 404** — требует HR-модуль (платный). Fallback в `bitrix_client._users.get_absences()` через `calendar.event.get` + поиск ключевых слов («отпуск/болеет/командировк»). Кэшируем `_ABSENCE_LIST_DEAD=True` после первого 404 чтобы не дёргать.
+- **APScheduler НЕ догоняет пропущенные cron'ы после рестарта контейнера** — например ребут после 11:00 Пн вайпает hudson_weekly до следующего понедельника. Запускать руками `scripts/run_hudson_now.py` или добавить `misfire_grace_time` (пока не сделали).
+- **Industries для B24** — Claude каждый раз даёт уникальную AI-формулировку отрасли (1409 уникальных из 1479 лидов). В скрипте бэкфилла keyword-классификация в 18 категорий (`INDUSTRY_GROUPS`), порядок важен — узкие категории (Стоматология, Риелторы, Промышленное оборудование) идут РАНЬШЕ более широких (Медицина, Застройщики, B2B-сервис) — первое совпадение выигрывает.
