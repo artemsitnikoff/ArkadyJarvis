@@ -32,11 +32,12 @@ INTERNAL_HOURS_WARN = 8.0
 
 # Проекты, попадающие в аудит часов ПОМИМО direction='WEB - ПиК'.
 # key → is_internal по умолчанию (если проекта нет в dcj_projects).
-# COZYHOME («CozyHome.ru Marketing») в DCJ.xlsx лежит под «Маркетинг»; MZNN в dcj_projects
-# вообще нет — но ПиК-команда списывает на них часы и они должны учитываться (как внешние,
-# is_internal=0). Override применяется на лету при загрузке — переживает пере-импорт DCJ.xlsx.
-# Если ключа нет в dcj_projects, берётся значение отсюда (0 = внешний / 1 = внутренний).
-EXTRA_AUDIT_PROJECTS: dict[str, int] = {"COZYHOME": 0, "MZNN": 0}
+# Проекты, учитываемые помимо direction='WEB - ПиК'. Значение = is_internal по умолчанию
+# (0 внешний / 1 внутренний) — используется если ключа нет в dcj_projects; если есть,
+# берётся флаг из dcj_projects. COZYHOME («Маркетинг») и MZNN (нет в dcj_projects) —
+# внешние; DCNEW («Новый корпсайт DC», в dcj_projects под АУП, is_internal=1) — внутренний.
+# Override применяется на лету при загрузке — переживает пере-импорт DCJ.xlsx.
+EXTRA_AUDIT_PROJECTS: dict[str, int] = {"COZYHOME": 0, "MZNN": 0, "DCNEW": 1}
 
 # Проекты-инстансы ПРОСТОЯ (bench). Часы по ним — это «простой», НЕ внутренняя работа.
 # В DCJ.xlsx они помечены is_internal=1 → раньше ошибочно валились во внутренние часы
