@@ -17,16 +17,24 @@ from app.db import get_db
 logger = logging.getLogger("arkadyjarvis")
 
 # Дефолтный маппинг WEB-ПиК. Может быть расширен через UI / API позже.
+# Реорг 2026-06: Даниленко удалён — все 7 его разработчиков перераспределены
+# (Геливанов/Присяжнюк → Бешеля; Овсянников/Осицын/Сердюков/Ушаков → Кузнецова Юлия;
+# сама Кузнецова Юлия выделена менеджером).
 DEFAULT_MANAGER_MAPPING: dict[str, list[str]] = {
-    "Бешеля": ["Некрасова", "Константинова"],
-    "Даниленко": [
-        "Присяжнюк",  # был «Присняжнюк» — лишняя «н», в Bitrix без неё
-        "Геливанов",
+    "Бешеля": [
+        "Некрасова",
+        "Константинова",
+        "Геливанов",  # ← переведён от Даниленко
+        "Присяжнюк",  # ← переведён от Даниленко; был «Присняжнюк» — лишняя «н», в Bitrix без неё
+    ],
+    # Юля Кузнецова выделена менеджером (была разработчиком у Даниленко).
+    # Ключ двусоставный — резолв менеджера ниже разбивает на слова (как разработчиков).
+    # «Кузнецова» (не путать с Кузнецовым у Васильевой) → её Bitrix ID.
+    "Кузнецова Юлия": [
         "Овсянников",
         "Осицын",  # был «Осицины» — в Bitrix через «ы» в конце нет
-        "Ушаков",
-        "Кузнецова Юлия",  # Юля — Кузнецова, не путать с Кузнецовым у Васильевой
         "Сердюков",
+        "Ушаков",
     ],
     "Васильева": [
         "Казачок",
@@ -98,10 +106,15 @@ async def get_project(project_key: str) -> dict | None:
         return dict(row) if row else None
 
 
-async def seed_default_managers(bitrix, jira=None) -> tuple[int, list[str]]:
+async def seed_default_managers(
+    bitrix, jira=None,
+) -> tuple[int, list[tuple[str, str]], list[str]]:
     """Заполняет hudson_managers из DEFAULT_MANAGER_MAPPING и резолвит ID+email
     через Bitrix по LAST_NAME. Если передан jira-клиент — резолвит jira_username
-    по email. Возвращает (inserted_rows, unresolved_warnings)."""
+    по email. После сида делает реконсиляцию — удаляет пары (менеджер, разработчик),
+    которых больше нет в маппинге (иначе перевод разработчика к другому менеджеру
+    оставлял бы залипшую старую привязку — задвоение в аудите).
+    Возвращает (upserted_rows, removed_pairs, unresolved_warnings)."""
     db = get_db()
     inserted = 0
     warnings: list[str] = []
@@ -111,7 +124,13 @@ async def seed_default_managers(bitrix, jira=None) -> tuple[int, list[str]]:
         str, tuple[int | None, str | None, str | None, str | None]
     ] = {}
     for mgr_last in DEFAULT_MANAGER_MAPPING.keys():
-        info = await _find_user_by_last_name(bitrix, mgr_last)
+        # Ключ менеджера может быть «Имя Фамилия» (напр. «Кузнецова Юлия») —
+        # пробуем каждое слово как LAST_NAME, как и для разработчиков ниже.
+        info = None
+        for word in mgr_last.split():
+            info = await _find_user_by_last_name(bitrix, word)
+            if info:
+                break
         if not info:
             warnings.append(f"Менеджер «{mgr_last}» не найден в Bitrix")
             manager_lookup[mgr_last] = (None, None, None, None)
@@ -176,11 +195,38 @@ async def seed_default_managers(bitrix, jira=None) -> tuple[int, list[str]]:
                 ),
             )
             inserted += 1
+
+    # Реконсиляция: сид — upsert, сам старые пары не удаляет. Сносим всё, чего
+    # больше нет в DEFAULT_MANAGER_MAPPING (перераспределённые/убранные разработчики,
+    # упразднённые менеджеры вроде Даниленко).
+    desired_pairs = {
+        (mgr, dev)
+        for mgr, devs in DEFAULT_MANAGER_MAPPING.items()
+        for dev in devs
+    }
+    async with db.execute(
+        "SELECT manager_name, developer_pattern FROM hudson_managers"
+    ) as cur:
+        existing_pairs = {(r[0], r[1]) for r in await cur.fetchall()}
+    stale_pairs = sorted(existing_pairs - desired_pairs)
+    for mgr_name, dev_pat in stale_pairs:
+        await db.execute(
+            "DELETE FROM hudson_managers "
+            "WHERE manager_name = ? AND developer_pattern = ?",
+            (mgr_name, dev_pat),
+        )
+
     await db.commit()
     logger.info(
-        "Hudson managers seed: %d rows, %d warnings", inserted, len(warnings),
+        "Hudson managers seed: %d upserted, %d removed, %d warnings",
+        inserted, len(stale_pairs), len(warnings),
     )
-    return inserted, warnings
+    if stale_pairs:
+        logger.info(
+            "Hudson reconcile removed: %s",
+            ", ".join(f"{m}/{d}" for m, d in stale_pairs),
+        )
+    return inserted, stale_pairs, warnings
 
 
 async def _find_user_by_last_name(

@@ -35,8 +35,12 @@ async def main() -> None:
 
         print("\n=== 2. Сидаю менеджеров (Bitrix + Jira) ===")
         async with JiraClient() as jira:
-            rows, warnings = await seed_default_managers(bitrix, jira=jira)
-        print(f"  rows={rows}")
+            rows, removed, warnings = await seed_default_managers(bitrix, jira=jira)
+        print(f"  upserted={rows}  removed={len(removed)}")
+        if removed:
+            print("  удалены устаревшие привязки:")
+            for mgr_name, dev_pat in removed:
+                print(f"    🗑️  {mgr_name} / {dev_pat}")
         if warnings:
             print(f"  warnings ({len(warnings)}):")
             for w in warnings:

@@ -281,7 +281,7 @@ docker compose exec bot python scripts/test_sales_report.py <bitrix_user_id> [da
 
 **Что считает**:
 - Тянет `dcj_projects` где `direction = "WEB - ПиК"` (289 проектов из DCJ.xlsx).
-- Для каждого разработчика из `hudson_managers` (14 человек, 4 менеджера) — Jira worklog за прошлую полную неделю (Пн-Вс) через `services/jira_worklog.py` (`fetch_worklogs(jira_authors, since, until, project_keys)` — JQL `worklogAuthor in (…) AND worklogDate >= … AND <= …` + per-issue worklog для деталей).
+- Для каждого разработчика из `hudson_managers` (15 человек, 4 менеджера) — Jira worklog за прошлую полную неделю (Пн-Вс) через `services/jira_worklog.py` (`fetch_worklogs(jira_authors, since, until, project_keys)` — JQL `worklogAuthor in (…) AND worklogDate >= … AND <= …` + per-issue worklog для деталей).
 - Суммирует часы → `total / internal / external` (internal по `dcj_projects.is_internal=1`).
 - Норма по ТК РФ — `compute_weekly_norm()`:
   - База `WEEKLY_HOURS_NORM=32h` минус 8h за каждый рабочий (Пн-Пт) праздник из производственного календаря РФ (`services/holidays_api.py` — `isdayoff.ru`, кэш в памяти).
@@ -306,9 +306,10 @@ docker compose exec bot python scripts/test_sales_report.py <bitrix_user_id> [da
 
 **Маппинг менеджер↔разработчики**:
 - В `services/hudson_repo.py:DEFAULT_MANAGER_MAPPING` (hardcoded, потому что в Bitrix у групп разработки head=NULL — связи нет).
-- 4 менеджера / 14 разработчиков.
+- 4 менеджера / 15 разработчиков. Реорг 2026-06: Даниленко упразднён, его люди разведены (Геливанов/Присяжнюк → Бешеля; Овсянников/Осицын/Сердюков/Ушаков → новый менеджер Кузнецова Юлия, выделена из разработчиков). Ключ менеджера может быть «Имя Фамилия» (как «Кузнецова Юлия») — резолв менеджера разбивает на слова, как у разработчиков.
 - Seed резолвит Bitrix ID/email/full_name/jira_username — `_find_user_by_last_name` (LAST_NAME filter + LIKE fallback, потому что у Осицына в Bitrix `LAST_NAME='Осицын '` с trailing-пробелом — exact match не находит).
-- Запуск: `scripts/init_hudson_db.py` — парсит `DCJ.xlsx` и сидит маппинг.
+- **Seed идемпотентен**: после upsert делает реконсиляцию — удаляет пары (менеджер, разработчик), которых больше нет в маппинге. Без этого перевод разработчика к другому менеджеру оставлял бы залипшую старую привязку (задвоение в аудите). Возвращает `(upserted, removed_pairs, warnings)`.
+- Запуск: `scripts/init_hudson_db.py` — парсит `DCJ.xlsx` и сидит маппинг. **Менять маппинг → перезапустить этот скрипт на проде**, иначе таблица `hudson_managers` останется старой.
 
 **Скрипты**:
 - `scripts/run_hudson_now.py` — ручной прогон, поддерживает `--offset N` (позапрошлая неделя), `--since/--until`, `--dry-run`.
