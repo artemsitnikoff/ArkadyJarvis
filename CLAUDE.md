@@ -47,6 +47,7 @@ app/
       glafira.py           # «Марфа» (AI офис-менеджер) — OpenClaw streaming. ВНИМАНИЕ: persona в UI = «Марфа», файл/класс остался Glafira
       recruiter.py         # «Глафира» (AI рекрутёр) — Potok.io скоринг + Telethon-рассылка + HH-fallback. Persona UI = «Глафира», класс = Recruiter
       zabbix.py            # channel_post handler для Zabbix-канала → SQLite
+      auto_reply.py        # пасхалка: «ситников» в тексте → «Аве, Цезарь!» + цитата Сенеки (Haiku). Перед buffer, после FSM-роутеров
       work.py              # work:* callback (dead code — кнопки удалены, файл оставлен)
       group.py             # on_bot_added/removed — track group_chats
       buffer.py            # Catch-all (LAST!) — буферизация всех group messages
@@ -153,7 +154,7 @@ scripts/
 
 Order matters — `buffer.py` ВСЕГДА последний (catch-all):
 
-1. start → 2. summarize → 3. meeting → 4. free_slots → 5. jira_task → 6. lead → 7. image → 8. ask_ai → 9. contract → 10. employee → 11. cicero → 12. socrates → 13. glafira → 14. recruiter → 15. stirlitz → 16. zabbix → 17. group → 18. **buffer**
+1. start → 2. summarize → 3. meeting → 4. free_slots → 5. jira_task → 6. lead → 7. image → 8. ask_ai → 9. contract → 10. employee → 11. cicero → 12. socrates → 13. glafira → 14. recruiter → 15. stirlitz → 16. hudson → 17. zabbix → 18. auto_reply → 19. group → 20. **buffer**
 
 ⚠️ ВАЖНО про `hint:*` callbacks: общий обработчик `F.data.startswith("hint:")` в `start.py` ловит ВСЕ hint-клики первым. Узкие хендлеры в роутерах-фичах перебить его НЕ могут. Любая новая кнопка-открыватель FSM должна быть зарегистрирована в `_simple_fsm_hints()` внутри `start.py`.
 
