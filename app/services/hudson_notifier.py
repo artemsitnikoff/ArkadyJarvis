@@ -110,6 +110,10 @@ def _format_dev_block(rep: DevReport) -> str:
         f"{reason_tag}"
     )
     bits = [line1]
+    if rep.downtime_hours > 0:
+        bits.append(
+            f"   💤 простой: {rep.downtime_hours:.1f}h — нужна приёмка менеджером (см. .md)",
+        )
     if rep.is_under_norm:
         bits.append(
             f"   ⚠️ ниже нормы {rep.weekly_norm:.0f}h — поставим задачу на отгул",
@@ -192,6 +196,43 @@ def _build_internal_md(
     return "\n".join(out)
 
 
+def _build_downtime_md(
+    by_manager: dict[str, list[DevReport]],
+    full_names: dict[str, str],
+    since: date, until: date,
+) -> str:
+    """Markdown-документ с часами ПРОСТОЯ (DCBE и пр.) по разработчикам.
+    Менеджер должен принять простой (задача в Jira PQ)."""
+    period = f"{since.strftime('%d.%m')}–{until.strftime('%d.%m')}"
+    base = settings.jira_url.rstrip("/")
+    out = [
+        f"# Простой за {period}",
+        "",
+        "_Часы, списанные на инстансы простоя (DCBE/DCFE/DCAP/DCQQ/DCDE — «Простой "
+        "<роль> Digital Clouds»). Это НЕ внутренняя работа: в норму идут, но менеджер "
+        "должен принять простой (по каждому — задача в Jira PQ)._",
+        "",
+    ]
+    has_any = False
+    total_all = 0.0
+    for mgr in sorted(by_manager):
+        mgr_full = full_names.get(mgr, mgr)
+        for r in sorted(by_manager[mgr], key=lambda x: x.name):
+            if not r.downtime_entries:
+                continue
+            has_any = True
+            total_all += r.downtime_hours
+            out.append(f"## {mgr_full} → {r.name} ({r.downtime_hours:.1f}h простоя)")
+            out.append("")
+            _emit_worklog_lines(out, r.downtime_entries, base, show_project=True)
+            out.append("")
+    if not has_any:
+        out.append("_Простоя за период нет — все при деле 🎉_")
+    else:
+        out.insert(4, f"**Всего простоя за неделю: {total_all:.1f}h**\n")
+    return "\n".join(out)
+
+
 def _emit_worklog_lines(
     out: list[str], entries: list, base: str, *, show_project: bool = False,
 ) -> None:
@@ -223,6 +264,8 @@ def _build_all_worklogs_md(
         "_Полный список списанного времени по каждому разработчику._",
         "- **✅ учтено** — проект входит в аудит часов (направление WEB-ПиК "
         "+ доп. проекты вроде COZYHOME). Эти часы идут в норму и в отчёт.",
+        "- **💤 простой** — инстансы простоя (DCBE и пр.): в норму идут, но это не "
+        "работа — менеджер принимает простой отдельно.",
         "- **⚠️ не учтено** — проект вне аудита: часы по нему **не считаются**. "
         "Если такой проект должен учитываться — напишите, добавим в аудит.",
         "",
@@ -231,25 +274,29 @@ def _build_all_worklogs_md(
     for mgr in sorted(by_manager):
         mgr_full = full_names.get(mgr, mgr)
         for r in sorted(by_manager[mgr], key=lambda x: x.name):
-            if not r.entries and not r.out_of_scope_entries:
+            if not r.entries and not r.downtime_entries and not r.out_of_scope_entries:
                 continue
             has_any = True
-            counted_note = (
-                f" · ⚠️ не учтено {r.out_of_scope_hours:.2f}h"
-                if r.out_of_scope_hours > 0
-                else ""
-            )
+            notes = ""
+            if r.downtime_hours > 0:
+                notes += f" · 💤 простой {r.downtime_hours:.2f}h"
+            if r.out_of_scope_hours > 0:
+                notes += f" · ⚠️ не учтено {r.out_of_scope_hours:.2f}h"
             out.append(f"## {mgr_full} → {r.name}")
             out.append("")
             out.append(
                 f"**Учтено {r.total_hours:.2f}h** "
                 f"(внутр {r.internal_hours:.2f}h / внеш {r.external_hours:.2f}h)"
-                f"{counted_note}"
+                f"{notes}"
             )
             out.append("")
             if r.entries:
                 out.append("### ✅ Учтено")
                 _emit_worklog_lines(out, r.entries, base)
+                out.append("")
+            if r.downtime_entries:
+                out.append("### 💤 Простой")
+                _emit_worklog_lines(out, r.downtime_entries, base, show_project=True)
                 out.append("")
             if r.out_of_scope_entries:
                 out.append("### ⚠️ Не учтено (проект вне аудита)")
@@ -342,13 +389,15 @@ async def _format_alina_messages(
         reps = sorted(by_manager[mgr], key=lambda x: x.name)
         total = sum(r.total_hours for r in reps)
         intern = sum(r.internal_hours for r in reps)
+        downtime = sum(r.downtime_hours for r in reps)
         under_norm = [r for r in reps if r.is_under_norm]
         bad = sum(len(r.bad_comments) for r in reps)
         mgr_display = full_names.get(mgr, mgr)
+        downtime_seg = f" · 💤 простой {downtime:.0f}h" if downtime > 0 else ""
         mgr_header = (
             f"— <b>{html.escape(mgr_display)}</b> — "
-            f"{len(reps)} разрабов · {total:.0f}h всего · внутр {intern:.0f}h · "
-            f"под нормой {len(under_norm)} · плохих коммов {bad}"
+            f"{len(reps)} разрабов · {total:.0f}h всего · внутр {intern:.0f}h"
+            f"{downtime_seg} · под нормой {len(under_norm)} · плохих коммов {bad}"
         )
         current = _append_block_to_messages(mgr_header, current, messages)
         for r in reps:
@@ -437,6 +486,31 @@ def _build_internal_breakdown(reports: list[DevReport]) -> str:
     return "\n\nВнутренние часы по задачам:\n" + "\n".join(pieces)
 
 
+def _build_downtime_breakdown(reports: list[DevReport]) -> str:
+    """Plain-text блок «Простой по задачам». Группировка per-dev, внутри —
+    суммирование по issue_key. Issue-keys Jira автолинкует."""
+    pieces: list[str] = []
+    for r in sorted(reports, key=lambda x: x.name):
+        if not r.downtime_entries:
+            continue
+        by_issue: dict[str, tuple[float, list[str]]] = {}
+        for e in r.downtime_entries:
+            hours, comments = by_issue.get(e.issue_key, (0.0, []))
+            c = (e.comment or "").strip().replace("\n", " ")
+            if c:
+                comments.append(c)
+            by_issue[e.issue_key] = (hours + e.hours, comments)
+        pieces.append(f"\n== {r.name} ({r.downtime_hours:.1f}h простоя) ==")
+        for ikey, (h, comments) in sorted(
+            by_issue.items(), key=lambda kv: -kv[1][0],
+        ):
+            joined = "; ".join(comments) if comments else "(без комментариев)"
+            pieces.append(f"* {ikey} — {h:.2f}h — {joined}")
+    if not pieces:
+        return ""
+    return "\n\nПростой по задачам:\n" + "\n".join(pieces)
+
+
 def _build_bad_comments_section(reports: list[DevReport]) -> str:
     """Plain-text блок «Плохие комментарии» по всем разработчикам менеджера.
     Issue-keys типа PQ-918 Jira автолинкует в описании задачи."""
@@ -517,6 +591,34 @@ async def _create_pq_tasks(
                     except Exception as e:
                         logger.warning("Hudson Jira create (mgr %s) failed: %s", mgr, e)
 
+                # Задача на ПРИЁМКУ ПРОСТОЯ — по менеджеру, если у кого-то есть простой
+                devs_with_downtime = [r for r in reports if r.downtime_hours > 0]
+                if devs_with_downtime:
+                    downtime_str = ", ".join(
+                        f"{r.name} ({r.downtime_hours:.1f}h)"
+                        for r in devs_with_downtime
+                    )
+                    summary = f"[Хадсон {period}] Принять простой — {mgr}"
+                    desc = (
+                        f"За период {since} → {until} списан простой (DCBE и пр.) у:\n\n"
+                        f"{downtime_str}\n\n"
+                        f"Простой — это НЕ внутренняя работа, а отсутствие задач. "
+                        f"Принять простой: подтвердить, что человек реально был на "
+                        f"скамейке, и при необходимости разобраться почему (нет проектов "
+                        f"/ ждёт согласований / др.)."
+                        f"{_build_downtime_breakdown(devs_with_downtime)}"
+                    )
+                    try:
+                        issue = await jira.create_issue(
+                            PQ_PROJECT_KEY, summary, desc,
+                            assignee_name=mgr_assignee,
+                        )
+                        created.append(issue["key"])
+                    except Exception as e:
+                        logger.warning(
+                            "Hudson Jira downtime (mgr %s) failed: %s", mgr, e,
+                        )
+
                 for r in reports:
                     if r.is_under_norm:
                         summary = (
@@ -567,6 +669,7 @@ async def _format_group_messages(
         reps = by_manager[mgr]
         total = sum(r.total_hours for r in reps)
         intern = sum(r.internal_hours for r in reps)
+        downtime = sum(r.downtime_hours for r in reps)
         under = sum(1 for r in reps if r.is_under_norm)
         on_leave = sum(1 for r in reps if r.on_leave)
         bad = sum(len(r.bad_comments) for r in reps)
@@ -577,10 +680,11 @@ async def _format_group_messages(
             mention = f'<a href="tg://user?id={tg_id}">{html.escape(display_name)}</a>'
         else:
             mention = f"<b>{html.escape(display_name)}</b>"
+        downtime_seg = f" · 💤 простой {downtime:.0f}h" if downtime > 0 else ""
         header_lines.append(
             f"{mention} — {len(reps)} разрабов · {total:.0f}h всего · "
-            f"внутр {intern:.0f}h · отгулов {under} · в отпуске {on_leave} · "
-            f"плохих коммов {bad}"
+            f"внутр {intern:.0f}h{downtime_seg} · отгулов {under} · "
+            f"в отпуске {on_leave} · плохих коммов {bad}"
         )
     header_lines.append("")
     header_lines.append(motivation)
@@ -652,6 +756,9 @@ async def notify(
     all_md_bytes = _build_all_worklogs_md(
         by_manager, full_names, since, until,
     ).encode("utf-8")
+    downtime_md_bytes = _build_downtime_md(
+        by_manager, full_names, since, until,
+    ).encode("utf-8")
 
     async def _send_with_md(chat_id: int, messages: list[str]) -> None:
         for text in messages:
@@ -669,6 +776,12 @@ async def notify(
         await bot.send_document(
             chat_id,
             BufferedInputFile(
+                downtime_md_bytes, filename=f"downtime_{period_tag}.md",
+            ),
+        )
+        await bot.send_document(
+            chat_id,
+            BufferedInputFile(
                 all_md_bytes, filename=f"all_worklogs_{period_tag}.md",
             ),
         )
@@ -681,7 +794,7 @@ async def notify(
         messages = await _format_manager_messages(mgr, reps, since, until)
         if dry_run:
             logger.info(
-                "[DRY-RUN] would send %d msg(s) + 3 .md to %s (tg=%s)",
+                "[DRY-RUN] would send %d msg(s) + 4 .md to %s (tg=%s)",
                 len(messages), mgr, tg_id,
             )
             sent_managers += 1
@@ -698,7 +811,7 @@ async def notify(
         alina_msgs = await _format_alina_messages(by_manager, since, until)
         if dry_run:
             logger.info(
-                "[DRY-RUN] would send %d msg(s) + 3 .md to Алина (tg=%s)",
+                "[DRY-RUN] would send %d msg(s) + 4 .md to Алина (tg=%s)",
                 len(alina_msgs), alina["telegram_id"],
             )
             sent_alina = True
@@ -721,7 +834,7 @@ async def notify(
         )
         if dry_run:
             logger.info(
-                "[DRY-RUN] would send %d group msg(s) + 3 .md to %s",
+                "[DRY-RUN] would send %d group msg(s) + 4 .md to %s",
                 len(group_msgs), settings.hudson_chat_id,
             )
             sent_group = True

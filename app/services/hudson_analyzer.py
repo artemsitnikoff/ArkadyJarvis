@@ -37,6 +37,15 @@ INTERNAL_HOURS_WARN = 8.0
 # загрузке — переживает пере-импорт DCJ.xlsx (который вернул бы направление «Маркетинг»).
 EXTRA_AUDIT_PROJECTS: dict[str, int] = {"COZYHOME": 0}
 
+# Проекты-инстансы ПРОСТОЯ (bench). Часы по ним — это «простой», НЕ внутренняя работа.
+# В DCJ.xlsx они помечены is_internal=1 → раньше ошибочно валились во внутренние часы
+# (ложный 🔴 «внутр выше 8h» у людей на простое). Выносим в отдельную категорию.
+# В Jira называются «Простой <роль> Digital Clouds» — детектим по имени + гарантируем
+# этот набор ключей (DCBE/DCFE = BE/FE-разработчики, DCAP = аналитики, DCQQ = QA,
+# DCDE = DevOps). Простой ИДЁТ в total (человек был доступен), но отдельной строкой
+# и с задачей менеджеру «принять простой».
+DOWNTIME_PROJECT_KEYS_FALLBACK: set[str] = {"DCBE", "DCFE", "DCAP", "DCQQ", "DCDE"}
+
 
 async def compute_weekly_norm(since: date, until: date) -> float:
     """Норма часов с учётом ТК РФ — берём производственный календарь из
@@ -56,12 +65,16 @@ class DevReport:
     email: str | None
     entries: list[WorklogEntry] = field(default_factory=list)
     internal_entries: list[WorklogEntry] = field(default_factory=list)
-    # Часы вне набора аудита (проект не WEB-ПиК и не в EXTRA_AUDIT_PROJECTS) —
+    # Простой (DCBE и пр.) — отдельная категория, НЕ внутренняя работа.
+    # Идёт в total_hours (человек был доступен), но не в internal/external.
+    downtime_entries: list[WorklogEntry] = field(default_factory=list)
+    # Часы вне набора аудита (проект не WEB-ПиК, не EXTRA_AUDIT_PROJECTS, не простой) —
     # НЕ считаются в total/internal/external, только для диагностического .md.
     out_of_scope_entries: list[WorklogEntry] = field(default_factory=list)
     total_hours: float = 0.0
     internal_hours: float = 0.0
     external_hours: float = 0.0
+    downtime_hours: float = 0.0
     out_of_scope_hours: float = 0.0
     bad_comments: list[tuple[WorklogEntry, str]] = field(default_factory=list)
     absence: str | None = None       # текст «🏖 Отпуск 15.05–15.05» / None
@@ -99,6 +112,18 @@ async def _load_web_pik_projects() -> dict[str, int]:
             row = await cur.fetchone()
         result[key] = row[0] if row else default_internal
     return result
+
+
+async def _load_downtime_keys() -> set[str]:
+    """Ключи проектов-простоя: в DCJ.xlsx названы «Простой <роль> Digital Clouds».
+    Берём по имени + гарантированный fallback-набор (на случай если проект не
+    в dcj_projects или переименован)."""
+    db = get_db()
+    async with db.execute(
+        "SELECT project_key FROM dcj_projects WHERE name LIKE 'Простой %'",
+    ) as cur:
+        keys = {row[0] for row in await cur.fetchall()}
+    return keys | DOWNTIME_PROJECT_KEYS_FALLBACK
 
 
 async def _load_devs() -> list[dict]:
@@ -240,6 +265,7 @@ async def build_reports(
     if not projects:
         logger.warning("Hudson: dcj_projects не содержит WEB-ПиК проектов")
         return []
+    downtime_keys = await _load_downtime_keys()
     devs = await _load_devs()
     if not devs:
         logger.warning("Hudson: нет разработчиков с jira_username")
@@ -273,10 +299,19 @@ async def build_reports(
     reports: list[DevReport] = []
     for d in devs:
         dev_entries = by_author.get(d["jira_username"], [])
-        # Учитываемые (проект в наборе аудита) vs вне-аудита — последние НЕ идут в часы,
-        # только в .md-сверку (и в счётчик out_of_scope_hours).
-        in_scope = [e for e in dev_entries if e.project_key in projects]
-        out_scope = [e for e in dev_entries if e.project_key not in projects]
+        # 3 корзины: учитываемая работа / простой (DCBE и пр.) / вне аудита.
+        # Простой проверяем ПЕРВЫМ — в dcj_projects он лежит как is_internal=1 WEB-ПиК,
+        # т.е. формально попал бы в `projects`, но это НЕ внутренняя работа.
+        in_scope: list[WorklogEntry] = []
+        downtime: list[WorklogEntry] = []
+        out_scope: list[WorklogEntry] = []
+        for e in dev_entries:
+            if e.project_key in downtime_keys:
+                downtime.append(e)
+            elif e.project_key in projects:
+                in_scope.append(e)
+            else:
+                out_scope.append(e)
         rep = DevReport(
             name=d["developer_pattern"],
             jira_username=d["jira_username"],
@@ -284,9 +319,11 @@ async def build_reports(
             bitrix_id=d.get("developer_bitrix_id"),
             email=d.get("developer_email"),
             entries=in_scope,
+            downtime_entries=downtime,
             out_of_scope_entries=out_scope,
             weekly_norm=week_norm,
         )
+        rep.downtime_hours = sum(e.hours for e in downtime)
         rep.out_of_scope_hours = sum(e.hours for e in out_scope)
         if d.get("developer_bitrix_id") and absences:
             dev_abs = absences.get(d["developer_bitrix_id"], [])
@@ -302,6 +339,7 @@ async def build_reports(
                 rep.internal_entries.append(e)
             else:
                 rep.external_hours += e.hours
+        rep.total_hours += rep.downtime_hours  # простой = доступное время, идёт в норму
         if not skip_comment_classification:
             rep.bad_comments = await _classify_comments(
                 in_scope, d["developer_pattern"], openrouter,
