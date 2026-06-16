@@ -33,7 +33,6 @@ def create_dispatcher() -> Dispatcher:
     from app.bot.routers.stirlitz import router as stirlitz_router
     from app.bot.routers.hudson import router as hudson_router
     from app.bot.routers.zabbix import router as zabbix_router
-    from app.bot.routers.auto_reply import router as auto_reply_router
     from app.bot.routers.group import router as group_router
     from app.bot.routers.buffer import router as buffer_router
 
@@ -55,7 +54,6 @@ def create_dispatcher() -> Dispatcher:
         stirlitz_router,
         hudson_router,
         zabbix_router,
-        auto_reply_router,  # пасхалка «ситников» → Аве, Цезарь + Сенека (перед buffer)
         group_router,
         buffer_router,  # catch-all — must be last
     )

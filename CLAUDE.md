@@ -47,7 +47,6 @@ app/
       glafira.py           # «Марфа» (AI офис-менеджер) — OpenClaw streaming. ВНИМАНИЕ: persona в UI = «Марфа», файл/класс остался Glafira
       recruiter.py         # «Глафира» (AI рекрутёр) — Potok.io скоринг + Telethon-рассылка + HH-fallback. Persona UI = «Глафира», класс = Recruiter
       zabbix.py            # channel_post handler для Zabbix-канала → SQLite
-      auto_reply.py        # пасхалка: «ситников» в тексте → «Аве, Цезарь!» + цитата Сенеки (Haiku). Перед buffer, после FSM-роутеров
       work.py              # work:* callback (dead code — кнопки удалены, файл оставлен)
       group.py             # on_bot_added/removed — track group_chats
       buffer.py            # Catch-all (LAST!) — буферизация всех group messages
@@ -143,6 +142,7 @@ scripts/
 - **PotokClient** — singleton, Bearer-токен через `POTOK_API_TOKEN`. In-memory cache вопросов (`_questions_cache`) — заполняется при `push_scoring`, читается при отправке вопросов в Telegram.
 - **PotokFrontendClient** — отдельный singleton для `/client_api/*` (HH-messaging). Auth через 3 заголовка DeviseTokenAuth (`access-token`, `client`, `uid`). Токены статичны (не ротируются), TTL ~5 месяцев. Получаются один раз из браузерной сессии (DevTools → Network → любой XHR на online.sbis... извини, на app.potok.io).
 - **UserbotClient** (Telethon) — `send_to_user(user_id, text)`, `resolve_phone(phone)` через `ImportContactsRequest` (+ автоматический cleanup). Слушает `events.NewMessage(incoming=True)`. В `main.py` регистрируется callback `_on_candidate_reply` — при входящем от tg_id из `recruiter_contacts` сообщение сохраняется в Potok + классифицируется на «отказ» через `rejection_classifier`. Если score > порог — `potok.set_applicant_active(active=False)` + audit-комментарий.
+  - **Пасхалка «ситников»** (`enable_seneca(ai_client)`, включается в `main.py` после старта): на входящее сообщение со словом «ситников» личный аккаунт отвечает «Аве, Цезарь!» + случайной цитатой Сенеки (Haiku). Кулдаун `SENECA_COOLDOWN_SECONDS=60` на чат — чтобы личный аккаунт не словил флуд-бан. Намеренно в **userbot** (ответ «под юзером»), не в боте. Работает только при живой Telethon-сессии.
 - **JiraClient** — async context manager. Auto-retry без assignee.
 - **DaDataClient** — `find_by_id(inn)` (точный поиск), `suggest(query)` (свободный поиск). 10k запросов/сутки бесплатно.
 - **GiroClient** — публичный API `bo.nalog.gov.ru`, без авторизации. `get_summary(inn)` → выручка/активы по годам.
@@ -154,7 +154,7 @@ scripts/
 
 Order matters — `buffer.py` ВСЕГДА последний (catch-all):
 
-1. start → 2. summarize → 3. meeting → 4. free_slots → 5. jira_task → 6. lead → 7. image → 8. ask_ai → 9. contract → 10. employee → 11. cicero → 12. socrates → 13. glafira → 14. recruiter → 15. stirlitz → 16. hudson → 17. zabbix → 18. auto_reply → 19. group → 20. **buffer**
+1. start → 2. summarize → 3. meeting → 4. free_slots → 5. jira_task → 6. lead → 7. image → 8. ask_ai → 9. contract → 10. employee → 11. cicero → 12. socrates → 13. glafira → 14. recruiter → 15. stirlitz → 16. hudson → 17. zabbix → 18. group → 19. **buffer**
 
 ⚠️ ВАЖНО про `hint:*` callbacks: общий обработчик `F.data.startswith("hint:")` в `start.py` ловит ВСЕ hint-клики первым. Узкие хендлеры в роутерах-фичах перебить его НЕ могут. Любая новая кнопка-открыватель FSM должна быть зарегистрирована в `_simple_fsm_hints()` внутри `start.py`.
 

@@ -1,4 +1,6 @@
 import logging
+import random
+import time
 from collections.abc import Callable, Coroutine
 from typing import Any
 
@@ -14,10 +16,34 @@ from telethon.tl.functions.contacts import DeleteContactsRequest, ImportContacts
 from telethon.tl.types import InputPhoneContact
 
 from app.config import settings
+from app.utils import strip_numbered_item
 
 logger = logging.getLogger("arkadyjarvis")
 
 ReplyHandler = Callable[[int, str], Coroutine[Any, Any, None]]
+
+# Пасхалка «ситников»: личный аккаунт салютует «Аве, Цезарь!» + цитата Сенеки.
+# Кулдаун на чат — чтобы личный аккаунт не улетел во флуд/бан Telegram.
+SENECA_COOLDOWN_SECONDS = 60
+
+SENECA_PROMPT = """\
+Напиши 3 цитаты Сенеки (Луций Анней Сенека, стоик). \
+Бери РАЗНЫЕ произведения: "Нравственные письма к Луцилию", "О краткости жизни", \
+"О блаженной жизни", "О гневе", "О стойкости мудреца", "О провидении" и др. \
+Цитаты должны быть глубокие, философские, про жизнь, время, смерть, мужество, судьбу. \
+НЕ повторяй самые заезженные ("Пока мы откладываем жизнь..." и т.п.). \
+Каждая цитата — 1-2 предложения. Формат:
+1. ...
+2. ...
+3. ...
+Без вступления, без указания источника, только сами цитаты. Каждый раз НОВЫЕ."""
+
+
+def _pick_one(text: str) -> str:
+    lines = [line.strip() for line in text.split("\n") if line.strip()]
+    if not lines:
+        return ""
+    return strip_numbered_item(random.choice(lines))
 
 
 def _normalize_phone(phone: str) -> str:
@@ -37,17 +63,48 @@ class UserbotClient:
             settings.telethon_api_hash,
         )
         self._reply_handler: ReplyHandler | None = None
+        self._ai_client: Any = None  # для пасхалки «ситников» → Аве, Цезарь + Сенека
+        self._seneca_cooldown: dict[int, float] = {}
 
         @self._client.on(events.NewMessage(incoming=True))
         async def _on_incoming(event: events.NewMessage.Event) -> None:
-            if self._reply_handler and event.raw_text:
+            text = event.raw_text or ""
+            if self._reply_handler and text:
                 try:
-                    await self._reply_handler(event.sender_id, event.raw_text)
+                    await self._reply_handler(event.sender_id, text)
                 except Exception as e:
                     logger.error("Userbot: reply handler error: %s", e, exc_info=True)
+            if self._ai_client and "ситников" in text.lower():
+                try:
+                    await self._maybe_seneca(event)
+                except Exception as e:
+                    logger.error("Userbot: seneca error: %s", e, exc_info=True)
 
     def set_reply_handler(self, handler: ReplyHandler) -> None:
         self._reply_handler = handler
+
+    def enable_seneca(self, ai_client: Any) -> None:
+        """Включить пасхалку: на «ситников» во входящих сообщениях личный аккаунт
+        отвечает «Аве, Цезарь!» + случайной цитатой Сенеки (Haiku)."""
+        self._ai_client = ai_client
+
+    async def _maybe_seneca(self, event: events.NewMessage.Event) -> None:
+        """Ответить «Аве, Цезарь!» + цитата Сенеки. Кулдаун на чат против флуда."""
+        chat_id = event.chat_id
+        now = time.monotonic()
+        if now - self._seneca_cooldown.get(chat_id, 0.0) < SENECA_COOLDOWN_SECONDS:
+            return
+        self._seneca_cooldown[chat_id] = now
+        logger.info("Userbot: seneca trigger 'ситников' in chat=%s", chat_id)
+        # Сразу — салют Цезарю (от лица пользователя).
+        await event.reply("Аве, Цезарь!")
+        # Затем — цитата Сенеки (генерация может занять пару секунд).
+        text = await self._ai_client.complete(
+            SENECA_PROMPT, model="claude-haiku-4-5-20251001",
+        )
+        quote = _pick_one(text)
+        if quote:
+            await event.respond(quote)
 
     async def start(self) -> None:
         await self._client.connect()
