@@ -192,6 +192,76 @@ def _build_internal_md(
     return "\n".join(out)
 
 
+def _emit_worklog_lines(
+    out: list[str], entries: list, base: str, *, show_project: bool = False,
+) -> None:
+    """Печатает каждую worklog-запись отдельной строкой, хронологически.
+    show_project=True — дописывает ключ проекта (для вне-аудитных записей)."""
+    for e in sorted(entries, key=lambda x: (x.started_at, x.issue_key)):
+        d = e.started_at.strftime("%d.%m")
+        link = f"[{e.issue_key}]({base}/browse/{e.issue_key})"
+        summ = (e.issue_summary or "").strip().replace("\n", " ")
+        comment = (e.comment or "").strip().replace("\n", " ") or "(без комментария)"
+        proj = f" · проект `{e.project_key}`" if show_project else ""
+        head = f"{link} {summ}".strip()
+        out.append(f"- {d} {head} — {e.hours:.2f}h — «{comment}»{proj}")
+
+
+def _build_all_worklogs_md(
+    by_manager: dict[str, list[DevReport]],
+    full_names: dict[str, str],
+    since: date, until: date,
+) -> str:
+    """Markdown-документ со ВСЕМИ worklog'ами каждого разработчика — для сверки.
+    Делит на «✅ учтено» (проект в наборе аудита) и «⚠️ не учтено» (проект вне
+    аудита — часы не считаются). Закрывает жалобы «мой лог не учтён»."""
+    period = f"{since.strftime('%d.%m')}–{until.strftime('%d.%m')}"
+    base = settings.jira_url.rstrip("/")
+    out = [
+        f"# Все worklog'и за {period} (для сверки)",
+        "",
+        "_Полный список списанного времени по каждому разработчику._",
+        "- **✅ учтено** — проект входит в аудит часов (направление WEB-ПиК "
+        "+ доп. проекты вроде COZYHOME). Эти часы идут в норму и в отчёт.",
+        "- **⚠️ не учтено** — проект вне аудита: часы по нему **не считаются**. "
+        "Если такой проект должен учитываться — напишите, добавим в аудит.",
+        "",
+    ]
+    has_any = False
+    for mgr in sorted(by_manager):
+        mgr_full = full_names.get(mgr, mgr)
+        for r in sorted(by_manager[mgr], key=lambda x: x.name):
+            if not r.entries and not r.out_of_scope_entries:
+                continue
+            has_any = True
+            counted_note = (
+                f" · ⚠️ не учтено {r.out_of_scope_hours:.2f}h"
+                if r.out_of_scope_hours > 0
+                else ""
+            )
+            out.append(f"## {mgr_full} → {r.name}")
+            out.append("")
+            out.append(
+                f"**Учтено {r.total_hours:.2f}h** "
+                f"(внутр {r.internal_hours:.2f}h / внеш {r.external_hours:.2f}h)"
+                f"{counted_note}"
+            )
+            out.append("")
+            if r.entries:
+                out.append("### ✅ Учтено")
+                _emit_worklog_lines(out, r.entries, base)
+                out.append("")
+            if r.out_of_scope_entries:
+                out.append("### ⚠️ Не учтено (проект вне аудита)")
+                _emit_worklog_lines(
+                    out, r.out_of_scope_entries, base, show_project=True,
+                )
+                out.append("")
+    if not has_any:
+        out.append("_За период никто ничего не списал._")
+    return "\n".join(out)
+
+
 TG_MAX = 3800  # Telegram cap 4096, оставляем запас на HTML-сущности (&amp; и т.п.)
 
 
@@ -579,6 +649,9 @@ async def notify(
     internal_md_bytes = _build_internal_md(
         by_manager, full_names, since, until,
     ).encode("utf-8")
+    all_md_bytes = _build_all_worklogs_md(
+        by_manager, full_names, since, until,
+    ).encode("utf-8")
 
     async def _send_with_md(chat_id: int, messages: list[str]) -> None:
         for text in messages:
@@ -593,6 +666,12 @@ async def notify(
                 internal_md_bytes, filename=f"internal_hours_{period_tag}.md",
             ),
         )
+        await bot.send_document(
+            chat_id,
+            BufferedInputFile(
+                all_md_bytes, filename=f"all_worklogs_{period_tag}.md",
+            ),
+        )
 
     # 1) DM каждому менеджеру — только его команда
     for mgr, reps in by_manager.items():
@@ -602,7 +681,7 @@ async def notify(
         messages = await _format_manager_messages(mgr, reps, since, until)
         if dry_run:
             logger.info(
-                "[DRY-RUN] would send %d msg(s) + 2 .md to %s (tg=%s)",
+                "[DRY-RUN] would send %d msg(s) + 3 .md to %s (tg=%s)",
                 len(messages), mgr, tg_id,
             )
             sent_managers += 1
@@ -619,7 +698,7 @@ async def notify(
         alina_msgs = await _format_alina_messages(by_manager, since, until)
         if dry_run:
             logger.info(
-                "[DRY-RUN] would send %d msg(s) + 2 .md to Алина (tg=%s)",
+                "[DRY-RUN] would send %d msg(s) + 3 .md to Алина (tg=%s)",
                 len(alina_msgs), alina["telegram_id"],
             )
             sent_alina = True
@@ -642,7 +721,7 @@ async def notify(
         )
         if dry_run:
             logger.info(
-                "[DRY-RUN] would send %d group msg(s) + 2 .md to %s",
+                "[DRY-RUN] would send %d group msg(s) + 3 .md to %s",
                 len(group_msgs), settings.hudson_chat_id,
             )
             sent_group = True

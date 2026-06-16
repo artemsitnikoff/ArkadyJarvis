@@ -30,6 +30,13 @@ HOURS_PER_DAY = 8.0
 # Порог внутренних часов — выше → требует подтверждения, светится красным
 INTERNAL_HOURS_WARN = 8.0
 
+# Проекты, попадающие в аудит часов ПОМИМО direction='WEB - ПиК'.
+# key → is_internal по умолчанию (если проекта нет в dcj_projects).
+# COZYHOME («CozyHome.ru Marketing») в DCJ.xlsx лежит под «Маркетинг», но ПиК-команда
+# списывает на него часы и они должны учитываться. Override применяется на лету при
+# загрузке — переживает пере-импорт DCJ.xlsx (который вернул бы направление «Маркетинг»).
+EXTRA_AUDIT_PROJECTS: dict[str, int] = {"COZYHOME": 0}
+
 
 async def compute_weekly_norm(since: date, until: date) -> float:
     """Норма часов с учётом ТК РФ — берём производственный календарь из
@@ -49,9 +56,13 @@ class DevReport:
     email: str | None
     entries: list[WorklogEntry] = field(default_factory=list)
     internal_entries: list[WorklogEntry] = field(default_factory=list)
+    # Часы вне набора аудита (проект не WEB-ПиК и не в EXTRA_AUDIT_PROJECTS) —
+    # НЕ считаются в total/internal/external, только для диагностического .md.
+    out_of_scope_entries: list[WorklogEntry] = field(default_factory=list)
     total_hours: float = 0.0
     internal_hours: float = 0.0
     external_hours: float = 0.0
+    out_of_scope_hours: float = 0.0
     bad_comments: list[tuple[WorklogEntry, str]] = field(default_factory=list)
     absence: str | None = None       # текст «🏖 Отпуск 15.05–15.05» / None
     absence_workdays: int = 0        # сколько рабочих (Пн-Пт) дней пропустил
@@ -70,13 +81,24 @@ class DevReport:
 
 
 async def _load_web_pik_projects() -> dict[str, int]:
-    """key → is_internal (0/1) для WEB-ПиК направления."""
+    """key → is_internal (0/1) для WEB-ПиК направления + EXTRA_AUDIT_PROJECTS."""
     db = get_db()
     async with db.execute(
         "SELECT project_key, is_internal FROM dcj_projects WHERE direction = ?",
         ("WEB - ПиК",),
     ) as cur:
-        return {row[0]: row[1] for row in await cur.fetchall()}
+        result = {row[0]: row[1] for row in await cur.fetchall()}
+    # Доп. проекты по ключу (другое направление, но часы учитываем) — напр. COZYHOME.
+    # is_internal берём из dcj_projects если есть, иначе дефолт из override.
+    for key, default_internal in EXTRA_AUDIT_PROJECTS.items():
+        if key in result:
+            continue
+        async with db.execute(
+            "SELECT is_internal FROM dcj_projects WHERE project_key = ?", (key,),
+        ) as cur:
+            row = await cur.fetchone()
+        result[key] = row[0] if row else default_internal
+    return result
 
 
 async def _load_devs() -> list[dict]:
@@ -224,9 +246,9 @@ async def build_reports(
         return []
 
     authors = [d["jira_username"] for d in devs]
-    entries = await fetch_worklogs(
-        authors, since, until, project_keys=set(projects.keys()),
-    )
+    # Тянем БЕЗ фильтра по проектам — нужно увидеть и часы вне WEB-ПиК, чтобы показать
+    # в .md-сверке «почему мой лог не учтён». Разбиваем на учитываемые / вне-аудита ниже.
+    entries = await fetch_worklogs(authors, since, until, project_keys=None)
 
     # group by author
     by_author: dict[str, list[WorklogEntry]] = {}
@@ -251,15 +273,21 @@ async def build_reports(
     reports: list[DevReport] = []
     for d in devs:
         dev_entries = by_author.get(d["jira_username"], [])
+        # Учитываемые (проект в наборе аудита) vs вне-аудита — последние НЕ идут в часы,
+        # только в .md-сверку (и в счётчик out_of_scope_hours).
+        in_scope = [e for e in dev_entries if e.project_key in projects]
+        out_scope = [e for e in dev_entries if e.project_key not in projects]
         rep = DevReport(
             name=d["developer_pattern"],
             jira_username=d["jira_username"],
             manager_name=d["manager_name"],
             bitrix_id=d.get("developer_bitrix_id"),
             email=d.get("developer_email"),
-            entries=dev_entries,
+            entries=in_scope,
+            out_of_scope_entries=out_scope,
             weekly_norm=week_norm,
         )
+        rep.out_of_scope_hours = sum(e.hours for e in out_scope)
         if d.get("developer_bitrix_id") and absences:
             dev_abs = absences.get(d["developer_bitrix_id"], [])
             rep.absence = _format_absence(dev_abs)
@@ -267,7 +295,7 @@ async def build_reports(
             rep.weekly_norm = max(
                 0.0, week_norm - rep.absence_workdays * HOURS_PER_DAY,
             )
-        for e in dev_entries:
+        for e in in_scope:
             rep.total_hours += e.hours
             if projects.get(e.project_key) == 1:
                 rep.internal_hours += e.hours
@@ -276,7 +304,7 @@ async def build_reports(
                 rep.external_hours += e.hours
         if not skip_comment_classification:
             rep.bad_comments = await _classify_comments(
-                dev_entries, d["developer_pattern"], openrouter,
+                in_scope, d["developer_pattern"], openrouter,
             )
         reports.append(rep)
     return reports

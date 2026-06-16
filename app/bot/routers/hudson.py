@@ -38,6 +38,7 @@ async def enter_hudson(
 
     from app.services.hudson_analyzer import build_reports
     from app.services.hudson_notifier import (
+        _build_all_worklogs_md,
         _build_bad_comments_md,
         _build_internal_md,
         _format_alina_messages,
@@ -89,6 +90,7 @@ async def enter_hudson(
     period_tag = f"{since.isoformat()}_{until.isoformat()}"
     bad_md = _build_bad_comments_md(by_manager, full_names, since, until).encode("utf-8")
     intl_md = _build_internal_md(by_manager, full_names, since, until).encode("utf-8")
+    all_md = _build_all_worklogs_md(by_manager, full_names, since, until).encode("utf-8")
     await bot.send_document(
         user_id,
         BufferedInputFile(bad_md, filename=f"bad_comments_{period_tag}.md"),
@@ -96,4 +98,8 @@ async def enter_hudson(
     await bot.send_document(
         user_id,
         BufferedInputFile(intl_md, filename=f"internal_hours_{period_tag}.md"),
+    )
+    await bot.send_document(
+        user_id,
+        BufferedInputFile(all_md, filename=f"all_worklogs_{period_tag}.md"),
     )

@@ -280,9 +280,9 @@ docker compose exec bot python scripts/test_sales_report.py <bitrix_user_id> [da
 Еженедельный аудит worklog'ов отдела Production&Quality. Cron Пн 11:00 Нск.
 
 **Что считает**:
-- Тянет `dcj_projects` где `direction = "WEB - ПиК"` (289 проектов из DCJ.xlsx).
-- Для каждого разработчика из `hudson_managers` (15 человек, 4 менеджера) — Jira worklog за прошлую полную неделю (Пн-Вс) через `services/jira_worklog.py` (`fetch_worklogs(jira_authors, since, until, project_keys)` — JQL `worklogAuthor in (…) AND worklogDate >= … AND <= …` + per-issue worklog для деталей).
-- Суммирует часы → `total / internal / external` (internal по `dcj_projects.is_internal=1`).
+- Набор проектов аудита = `dcj_projects` где `direction = "WEB - ПиК"` (≈288 из DCJ.xlsx) **плюс** `EXTRA_AUDIT_PROJECTS` (`hudson_analyzer.py`) — проекты по ключу из других направлений, которые тоже считаем. Сейчас там `COZYHOME` («CozyHome.ru Marketing», в DCJ.xlsx под «Маркетинг»). Override применяется на лету при загрузке → переживает пере-импорт DCJ.xlsx. Хочешь добавить проект в учёт — допиши его ключ туда.
+- Для каждого разработчика из `hudson_managers` (15 человек, 4 менеджера) — Jira worklog за прошлую полную неделю (Пн-Вс) через `services/jira_worklog.py`. **Тянем БЕЗ фильтра по проектам** (`project_keys=None`), потом бьём на in-scope / out-of-scope — иначе часы вне набора молча выпадали (причина жалоб «мой лог не учтён»).
+- Суммирует часы → `total / internal / external` (internal по `is_internal=1`) **только по in-scope**. Часы вне набора → `out_of_scope_entries` / `out_of_scope_hours` (в total НЕ идут, только в .md-сверку).
 - Норма по ТК РФ — `compute_weekly_norm()`:
   - База `WEEKLY_HOURS_NORM=32h` минус 8h за каждый рабочий (Пн-Пт) праздник из производственного календаря РФ (`services/holidays_api.py` — `isdayoff.ru`, кэш в памяти).
   - Минус 8h за каждый рабочий день отпуска/больничного/командировки (`bitrix.get_absences()` — `absence.list`, fallback на `calendar.event.get` по ключевым словам когда HR-модуль не установлен; флаг `_ABSENCE_LIST_DEAD` кэширует 404).
@@ -293,7 +293,7 @@ docker compose exec bot python scripts/test_sales_report.py <bitrix_user_id> [da
 - Менеджерам (DM): краткий per-dev summary (`🔴 Гусев: 32.0h/<b>17.2h</b> (внутр выше 8h)` + счётчик плохих коммов).
 - Алине Васьковой (РОП P&Q, `HUDSON_DEPT_HEAD_BITRIX_ID=37`): то же.
 - В группу `HUDSON_CHAT_ID`: шапка с тэгами менеджеров (`tg://user?id=…`) + AI-мотивашка от Claude CLI (1 вызов/нед, опускается на subscription) + per-manager блоки.
-- Всем — **2 .md аттачмента**: `bad_comments_<period>.md` (все плохие комменты с кликабельными Jira-ссылками `[PQ-918](jira.dclouds.ru/browse/PQ-918)`) и `internal_hours_<period>.md` (внутренние часы по задачам, сгруппированы per-dev). Полные данные в .md, в Telegram только сводка чтобы не упереться в лимит 4096 байт (`TG_MAX=3800` + `_split_block` режет по строкам).
+- Всем — **3 .md аттачмента**: `bad_comments_<period>.md` (все плохие комменты с кликабельными Jira-ссылками `[PQ-918](jira.dclouds.ru/browse/PQ-918)`), `internal_hours_<period>.md` (внутренние часы по задачам, сгруппированы per-dev) и `all_worklogs_<period>.md` (**ВСЕ** worklog'и каждого разработчика для сверки — каждая запись отдельной строкой: дата, issue-ссылка, часы, коммент; разбито на «✅ Учтено» / «⚠️ Не учтено (проект вне аудита)» с ключом проекта — чтобы человек видел, почему его лог не зачёлся). Полные данные в .md, в Telegram только сводка чтобы не упереться в лимит 4096 байт (`TG_MAX=3800` + `_split_block` режет по строкам).
 
 **Jira-задачи в проекте `PQ`** (если `HUDSON_SKIP_JIRA=false`):
 - «Подтвердить внутренние часы» — на каждого менеджера, assignee = его Jira-username (из `hudson_managers.manager_jira_username`, резолвится через email при seed). Description содержит per-dev разбивку внутренних часов по issue и список плохих коммов.
@@ -301,7 +301,7 @@ docker compose exec bot python scripts/test_sales_report.py <bitrix_user_id> [da
 
 **Кнопка «🏠 Мисис Хадсон» в меню**:
 - Доступ через `HUDSON_ALLOWED` (TG IDs).
-- При клике — полный отчёт **в личку нажавшему** (не в общий чат). Сообщения + 2 .md.
+- При клике — полный отчёт **в личку нажавшему** (не в общий чат). Сообщения + 3 .md.
 - Если у юзера DM с ботом закрыт — пишет в группу что надо открыть `/start` в личке.
 
 **Маппинг менеджер↔разработчики**:
