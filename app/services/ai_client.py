@@ -34,18 +34,6 @@ class AIClient:
             model=model,
         )
 
-    # CRITICAL: disable all tools. Otherwise the CLI executes shell commands,
-    # reads/writes files, fetches URLs etc. when the user prompt looks like
-    # an instruction ("сделай cd ..., ls ..."). For our use case the CLI is
-    # a stateless prompt→answer model, no agentic behaviour is wanted.
-    DISALLOWED_TOOLS = (
-        "Bash,BashOutput,KillShell,"
-        "Read,Write,Edit,MultiEdit,NotebookEdit,"
-        "Glob,Grep,"
-        "WebFetch,WebSearch,"
-        "Task,Agent,SlashCommand,TodoWrite,ExitPlanMode"
-    )
-
     async def _call_cli(
         self,
         prompt: str,
@@ -60,22 +48,21 @@ class AIClient:
         env = os.environ.copy()
         env.pop("CLAUDECODE", None)
 
-        # If allowed_tools given — remove them from the DISALLOWED list, keep rest banned
-        disallowed = self.DISALLOWED_TOOLS
-        if allowed_tools:
-            allowed_set = {t.strip() for t in allowed_tools.split(",") if t.strip()}
-            disallowed = ",".join(
-                t for t in self.DISALLOWED_TOOLS.split(",") if t not in allowed_set
-            )
-
+        # Whitelist tools via --tools, never a deny-list. "" disables ALL
+        # built-in tools (prompt-only — no shell/file/web, so no RCE when a
+        # user prompt looks like an instruction "сделай cd ..., ls ...").
+        # A deny-list (--disallowed-tools) breaks the moment the CLI renames or
+        # removes a tool: e.g. "MultiEdit" → CLI exits code 1 with "matches no
+        # known tool", killing EVERY AI call on a newer CLI build — and it also
+        # silently misses any newly-added tool. Whitelisting is robust across
+        # CLI versions and strictly safer. allowed_tools (read-only, e.g.
+        # "WebSearch,WebFetch" for Stirlitz) passes through verbatim.
         args = [
             settings.claude_cli_path,
             "--print",
             "--output-format", "text",
-            "--disallowed-tools", disallowed,
+            "--tools", allowed_tools or "",
         ]
-        if allowed_tools:
-            args.extend(["--allowed-tools", allowed_tools])
 
         chosen_model = model or settings.claude_model
         if chosen_model:
@@ -85,8 +72,9 @@ class AIClient:
 
         # Don't log full args if system_prompt is huge — keep diagnostic short.
         logger.info(
-            "claude CLI argv (model=%s, tools_disabled=yes, system_prompt=%s)",
+            "claude CLI argv (model=%s, tools=%s, system_prompt=%s)",
             chosen_model or "default",
+            allowed_tools or "none",
             f"{len(system_prompt)} chars" if system_prompt else "no",
         )
 
