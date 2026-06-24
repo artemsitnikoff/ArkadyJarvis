@@ -1,7 +1,9 @@
+import html
 import io
 import logging
 
 from aiogram import Bot, F, Router
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import BufferedInputFile, Message
@@ -77,21 +79,37 @@ async def handle_contract_document(message: Message, state: FSMContext, bot: Bot
         return
 
     html_answer = md_to_telegram_html(answer)
-    header = f"📄 <b>Проверка договора:</b> {filename}\n\n"
+    header = f"📄 <b>Проверка договора:</b> {html.escape(filename)}\n\n"
     body = header + html_answer
+
+    async def _send_as_md() -> None:
+        # Фолбэк: отдаём сырой ответ .md-файлом. Нужен и для длинных ответов,
+        # и когда Telegram отверг HTML — md_to_telegram_html на «грязном»
+        # markdown от AI может выдать перекрывающиеся <b>/<i> теги
+        # ("can't parse entities"). Главное — не потерять результат проверки.
+        try:
+            await wait_msg.delete()
+        except Exception:
+            pass
+        preview = answer[:300].rstrip() + ("..." if len(answer) > 300 else "")
+        doc_file = BufferedInputFile(answer.encode("utf-8"), filename="contract_check.md")
+        await message.answer_document(
+            doc_file,
+            caption=f"📄 Проверка договора: {filename}\n\n{preview}",
+            parse_mode=None,
+            reply_markup=MENU_KB,
+        )
+
     if len(body) <= TELEGRAM_MSG_LIMIT:
-        await wait_msg.edit_text(body, reply_markup=MENU_KB)
+        try:
+            await wait_msg.edit_text(body, reply_markup=MENU_KB)
+        except TelegramBadRequest:
+            logger.warning("Contract: Telegram отверг HTML, шлю .md", exc_info=True)
+            await _send_as_md()
         return
 
-    # Long answer — send as a .md file to avoid breaking HTML entities across chunks
-    await wait_msg.delete()
-    preview = answer[:300].rstrip() + ("..." if len(answer) > 300 else "")
-    file = BufferedInputFile(answer.encode("utf-8"), filename="contract_check.md")
-    await message.answer_document(
-        file,
-        caption=f"{header.strip()}\n\n{preview}",
-        reply_markup=MENU_KB,
-    )
+    # Длинный ответ — сразу файлом, не чанкуем HTML.
+    await _send_as_md()
 
 
 @router.message(ContractCheck.waiting_for_document)
