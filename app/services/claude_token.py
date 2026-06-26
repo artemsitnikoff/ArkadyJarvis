@@ -109,6 +109,16 @@ async def ensure_fresh_token() -> None:
     other callers wait on the lock and then see the fresh token in the
     file without triggering another refresh.
     """
+    # Long-lived token mode: a static CLAUDE_CODE_OAUTH_TOKEN with no refresh
+    # token (e.g. from `claude setup-token`, valid ~1y) is used directly from
+    # the env. We deliberately do NOT read data/.claude_token.json here —
+    # that file may be shared via symlink with OTHER projects that run their
+    # own auth and can overwrite/rotate it; reading it would let them break the
+    # bot (seen in the wild: a neighbour project clobbered the token → 401).
+    # With a long-lived token there is nothing to refresh, so env is enough.
+    if os.environ.get("CLAUDE_CODE_OAUTH_TOKEN") and not os.environ.get("CLAUDE_REFRESH_TOKEN"):
+        return
+
     async with _refresh_lock:
         data = _load()
         now_ms = time.time() * 1000
