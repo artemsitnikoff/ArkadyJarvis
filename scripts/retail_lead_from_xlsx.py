@@ -421,6 +421,8 @@ async def main() -> None:
     ap.add_argument("--force", action="store_true", help="игнорировать чекпоинт")
     ap.add_argument("--recon-file", help="JSON {state_key: recon} — готовая разведка "
                     "вместо вызова Claude (нужно если WebSearch недоступен локально)")
+    ap.add_argument("--require-recon", action="store_true",
+                    help="пропускать (не создавать) контакты, которых нет в --recon-file")
     args = ap.parse_args()
 
     if not Path(XLSX_PATH).exists():
@@ -465,6 +467,9 @@ async def main() -> None:
             if key in recon_override:
                 recon = recon_override[key] or {}
                 logger.info("recon из override для %s", c["company"])
+            elif args.require_recon:
+                print(f"  ⏭ пропуск {c['company']} — нет разведки (--require-recon)")
+                continue
             else:
                 recon = await _recon_one(c, ai)
             fields = _build_lead_fields(c, recon, source_id)
