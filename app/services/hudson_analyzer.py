@@ -30,14 +30,27 @@ HOURS_PER_DAY = 8.0
 # Порог внутренних часов — выше → требует подтверждения, светится красным
 INTERNAL_HOURS_WARN = 8.0
 
-# Проекты, попадающие в аудит часов ПОМИМО direction='WEB - ПиК'.
-# key → is_internal по умолчанию (если проекта нет в dcj_projects).
-# Проекты, учитываемые помимо direction='WEB - ПиК'. Значение = is_internal по умолчанию
-# (0 внешний / 1 внутренний) — используется если ключа нет в dcj_projects; если есть,
-# берётся флаг из dcj_projects. COZYHOME («Маркетинг») и MZNN (нет в dcj_projects) —
-# внешние; DCNEW («Новый корпсайт DC», в dcj_projects под АУП, is_internal=1) — внутренний.
-# Override применяется на лету при загрузке — переживает пере-импорт DCJ.xlsx.
-EXTRA_AUDIT_PROJECTS: dict[str, int] = {"COZYHOME": 0, "MZNN": 0, "DCNEW": 1}
+# Неполная ставка: developer_pattern → (недельная норма часов, «вес» одного рабочего
+# дня для вычета за праздник/отлучку). Полная ставка = (WEEKLY_HOURS_NORM, HOURS_PER_DAY).
+# Осицын — полставки: 25h/нед, рабочий день ≈5h (5 дн × 5h), поэтому день праздника или
+# отпуска вычитает 5h, а не 8h. Ключ = developer_pattern из hudson_managers (стабилен
+# при смене менеджера). Применяется в build_reports на лету — DB-сид не нужен.
+PART_TIME_NORMS: dict[str, tuple[float, float]] = {"Осицын": (25.0, 5.0)}
+
+# Проекты, учитываемые в аудите часов ПОМИМО direction='WEB - ПиК'.
+# Значение = is_internal (0 внешний / 1 внутренний). Это АВТОРИТЕТНЫЙ оверлей: заданный
+# здесь флаг ПЕРЕБИВАЕТ dcj_projects и переживает пере-импорт DCJ.xlsx (см.
+# _load_web_pik_projects). Поэтому классификация проекта фиксируется тут, в коде.
+#   COZYHOME (Маркетинг), MZNN (нет в dcj_projects) — внешние;
+#   DCNEW (АУП «Новый корпсайт DC») — внутренний;
+#   DA / HRD / SHR (АУП — DC Admin / HR Department / Стратегия и развитие HR) — внутренние;
+#   TSTM / TSS — внешние клиентские (нет в dcj_projects);
+#   TSAI / EA уже WEB-ПиК и внешние — перечислены явно, чтобы зафиксировать классификацию.
+EXTRA_AUDIT_PROJECTS: dict[str, int] = {
+    "COZYHOME": 0, "MZNN": 0, "DCNEW": 1,
+    "DA": 1, "HRD": 1, "SHR": 1,
+    "TSAI": 0, "TSTM": 0, "TSS": 0, "EA": 0,
+}
 
 # Проекты-инстансы ПРОСТОЯ (bench). Часы по ним — это «простой», НЕ внутренняя работа.
 # В DCJ.xlsx они помечены is_internal=1 → раньше ошибочно валились во внутренние часы
@@ -96,23 +109,16 @@ class DevReport:
 
 
 async def _load_web_pik_projects() -> dict[str, int]:
-    """key → is_internal (0/1) для WEB-ПиК направления + EXTRA_AUDIT_PROJECTS."""
+    """key → is_internal (0/1): все проекты direction='WEB - ПиК' + EXTRA_AUDIT_PROJECTS.
+    EXTRA_AUDIT_PROJECTS — авторитетный оверлей: его флаг перебивает значение из
+    dcj_projects (и переживает пере-импорт DCJ.xlsx)."""
     db = get_db()
     async with db.execute(
         "SELECT project_key, is_internal FROM dcj_projects WHERE direction = ?",
         ("WEB - ПиК",),
     ) as cur:
         result = {row[0]: row[1] for row in await cur.fetchall()}
-    # Доп. проекты по ключу (другое направление, но часы учитываем) — напр. COZYHOME.
-    # is_internal берём из dcj_projects если есть, иначе дефолт из override.
-    for key, default_internal in EXTRA_AUDIT_PROJECTS.items():
-        if key in result:
-            continue
-        async with db.execute(
-            "SELECT is_internal FROM dcj_projects WHERE project_key = ?", (key,),
-        ) as cur:
-            row = await cur.fetchone()
-        result[key] = row[0] if row else default_internal
+    result.update(EXTRA_AUDIT_PROJECTS)
     return result
 
 
@@ -294,9 +300,12 @@ async def build_reports(
         except Exception as e:
             logger.warning("Hudson: не смог получить absences из Bitrix: %s", e)
 
-    week_norm = await compute_weekly_norm(since, until)
-    if week_norm != WEEKLY_HOURS_NORM:
-        logger.info("Hudson: норма недели = %.0fh (учли производственный календарь)", week_norm)
+    from app.services.holidays_api import count_holidays_in_workweek
+    holidays = await count_holidays_in_workweek(since, until)
+    if holidays:
+        logger.info(
+            "Hudson: в неделе %d праздничных рабочих дн. — норма уменьшена", holidays,
+        )
 
     reports: list[DevReport] = []
     for d in devs:
@@ -314,6 +323,12 @@ async def build_reports(
                 in_scope.append(e)
             else:
                 out_scope.append(e)
+        # Норма: полная ставка (32h/8h) либо неполная из PART_TIME_NORMS (Осицын 25h/5h).
+        # Праздники вычитаются «весом» одного рабочего дня этой ставки.
+        base_norm, per_day = PART_TIME_NORMS.get(
+            d["developer_pattern"], (WEEKLY_HOURS_NORM, HOURS_PER_DAY),
+        )
+        dev_week_norm = max(0.0, base_norm - holidays * per_day)
         rep = DevReport(
             name=d["developer_pattern"],
             jira_username=d["jira_username"],
@@ -323,7 +338,7 @@ async def build_reports(
             entries=in_scope,
             downtime_entries=downtime,
             out_of_scope_entries=out_scope,
-            weekly_norm=week_norm,
+            weekly_norm=dev_week_norm,
         )
         rep.downtime_hours = sum(e.hours for e in downtime)
         rep.out_of_scope_hours = sum(e.hours for e in out_scope)
@@ -332,7 +347,7 @@ async def build_reports(
             rep.absence = _format_absence(dev_abs)
             rep.absence_workdays = _count_absence_workdays(dev_abs, since, until)
             rep.weekly_norm = max(
-                0.0, week_norm - rep.absence_workdays * HOURS_PER_DAY,
+                0.0, dev_week_norm - rep.absence_workdays * per_day,
             )
         for e in in_scope:
             rep.total_hours += e.hours
