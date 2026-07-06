@@ -2,63 +2,20 @@ import re
 from typing import TYPE_CHECKING
 
 from app.services.potok_models import Applicant, Job, ScoringResult
+from app.services.prompts import load_prompt
 from app.utils import parse_json_response
 
 if TYPE_CHECKING:
     from app.services.ai_client import AIClient
 
-SCORING_PROMPT = """Ты — эксперт по подбору персонала в IT-компании. Оцени, насколько кандидат подходит под вакансию.
+# Промт скоринга вынесен в prompts/recruiter_scoring.md — редактируется как файл,
+# как остальные промты проекта. Плейсхолдеры ({job_name}, {recruiter_instructions}
+# и т.д.) подставляются в _build_prompt одним regex-проходом, поэтому литеральные
+# фигурные скобки JSON-примера в .md одинарные (без .format()-экранирования {{ }}).
+SCORING_PROMPT = load_prompt("recruiter_scoring")
 
-## Вакансия
-Название: {job_name}
-Описание: {job_description}
-Ключевые навыки: {job_skills}
-Зарплатная вилка: {job_salary}
-Требуемый опыт: {job_experience}
-
-## Кандидат
-Имя: {applicant_name}
-Должность: {resume_title}
-Зарплатные ожидания: {applicant_salary}
-Город: {applicant_city}
-
-### Опыт работы:
-{experience}
-
-### Образование:
-{education}
-
-### Навыки:
-{skills}
-
-### О себе:
-{about_me}
-
-## Задача
-Оцени кандидата по шкале от 0 до 100. Раздели оценку на критерии — выдели ключевые навыки и требования из вакансии и оцени кандидата по каждому отдельно. Сумма баллов по критериям = итоговый балл.
-
-Примерные категории критериев (адаптируй под конкретную вакансию):
-- Ключевые технические навыки (каждый важный навык отдельно)
-- Релевантный опыт работы (годы, должности)
-- Стабильность (частота смены работы)
-- Образование
-- Локация / готовность к переезду
-- Зарплатные ожидания vs вилка вакансии
-{recruiter_instructions}
-Ответь СТРОГО в формате JSON (без markdown, без ```):
-{{
-  "score": <число 0-100>,
-  "reasoning": "<краткое обоснование на русском, 1-2 предложения>",
-  "breakdown": [
-    {{"criterion": "<название критерия>", "score": <баллы>, "comment": "<почему столько>"}},
-    ...
-  ],
-  "strengths": ["<сильная сторона 1>", ...],
-  "weaknesses": ["<слабая сторона 1>", ...],
-  "questions": ["<вопрос для первого контакта в Telegram 1>", ...]
-}}
-
-Для поля "questions": сгенерируй 3-5 конкретных вопросов для первого контакта с кандидатом в Telegram. Вопросы должны уточнять пробелы или неясности в резюме, проверять ключевые навыки вакансии и помогать лучше понять реальный опыт кандидата."""
+# {placeholder} -> значение; неизвестный плейсхолдер остаётся как есть (m.group(0)).
+_PLACEHOLDER_RE = re.compile(r"\{(\w+)\}")
 
 
 def _format_experience(cv_params) -> str:
@@ -136,27 +93,30 @@ def _build_prompt(job: Job, applicant: Applicant) -> str:
     if instructions:
         recruiter_block = f"\n\n## ОСОБЫЕ УКАЗАНИЯ РЕКРУТЕРА (обязательно учти!):\n{instructions}\n"
 
-    return SCORING_PROMPT.format(
-        job_name=job.name,
-        job_description=clean_desc,
-        recruiter_instructions=recruiter_block,
-        job_skills=", ".join(job.key_skills) if job.key_skills else "Не указаны",
-        job_salary=f"{job.salary_from or '?'} — {job.salary_to or '?'}"
+    values = {
+        "job_name": job.name,
+        "job_description": clean_desc,
+        "recruiter_instructions": recruiter_block,
+        "job_skills": ", ".join(job.key_skills) if job.key_skills else "Не указаны",
+        "job_salary": f"{job.salary_from or '?'} — {job.salary_to or '?'}"
         if job.salary_from or job.salary_to
         else "Не указана",
-        job_experience=job.experience_type or "Не указан",
-        applicant_name=applicant.display_name,
-        resume_title=applicant.title
+        "job_experience": job.experience_type or "Не указан",
+        "applicant_name": applicant.display_name,
+        "resume_title": applicant.title
         or (cv_params.title if cv_params else None)
         or "Не указан",
-        applicant_salary=applicant.salary
+        "applicant_salary": applicant.salary
         or (cv_params.salary if cv_params else None)
         or "Не указана",
-        applicant_city=applicant.city.display_name if applicant.city else "Не указан",
-        experience=_format_experience(cv_params),
-        education=_format_education(cv_params),
-        skills=_format_skills(cv_params),
-        about_me=(cv_params.about_me or "Не указано")[:500] if cv_params else "Не указано",
+        "applicant_city": applicant.city.display_name if applicant.city else "Не указан",
+        "experience": _format_experience(cv_params),
+        "education": _format_education(cv_params),
+        "skills": _format_skills(cv_params),
+        "about_me": (cv_params.about_me or "Не указано")[:500] if cv_params else "Не указано",
+    }
+    return _PLACEHOLDER_RE.sub(
+        lambda m: str(values.get(m.group(1), m.group(0))), SCORING_PROMPT
     )
 
 
