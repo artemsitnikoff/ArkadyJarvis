@@ -19,6 +19,7 @@ logger = logging.getLogger("arkadyjarvis")
 class WorklogEntry:
     issue_key: str
     project_key: str
+    project_name: str
     issue_summary: str
     author: str
     started_at: datetime
@@ -82,7 +83,9 @@ async def fetch_worklogs(
         entries: list[WorklogEntry] = []
         for issue in issues:
             ikey = issue["key"]
-            project_key = issue["fields"]["project"]["key"]
+            project = issue["fields"]["project"]
+            project_key = project["key"]
+            project_name = (project.get("name") or "").strip()
             if project_keys is not None and project_key not in project_keys:
                 continue
             summary = (issue["fields"].get("summary") or "").strip()
@@ -108,6 +111,7 @@ async def fetch_worklogs(
                     WorklogEntry(
                         issue_key=ikey,
                         project_key=project_key,
+                        project_name=project_name,
                         issue_summary=summary,
                         author=author,
                         started_at=started_dt,

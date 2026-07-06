@@ -42,6 +42,8 @@ async def enter_hudson(
         _build_bad_comments_md,
         _build_downtime_md,
         _build_internal_md,
+        _build_unknown_projects_md,
+        _collect_unknown_projects,
         _format_alina_messages,
         _manager_full_names,
     )
@@ -109,3 +111,14 @@ async def enter_hudson(
         user_id,
         BufferedInputFile(all_md, filename=f"all_worklogs_{period_tag}.md"),
     )
+    unknown_projects = _collect_unknown_projects(reports)
+    if unknown_projects:
+        unknown_md = _build_unknown_projects_md(
+            unknown_projects, since, until,
+        ).encode("utf-8")
+        await bot.send_document(
+            user_id,
+            BufferedInputFile(
+                unknown_md, filename=f"unknown_projects_{period_tag}.md",
+            ),
+        )

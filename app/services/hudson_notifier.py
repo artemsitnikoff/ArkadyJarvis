@@ -309,6 +309,77 @@ def _build_all_worklogs_md(
     return "\n".join(out)
 
 
+def _collect_unknown_projects(reports: list[DevReport]) -> dict[str, dict]:
+    """Агрегирует out-of-scope записи всех разработчиков по project_key.
+
+    Возвращает {key: {name, hours, entries, devs:set[str], sample_issue}}.
+    Это проекты, по которым списывали часы, но которых нет ни в WEB-ПиК, ни в
+    EXTRA_AUDIT_PROJECTS, ни в простое — кандидаты на добавление в аудит."""
+    agg: dict[str, dict] = {}
+    for r in reports:
+        for e in r.out_of_scope_entries:
+            info = agg.setdefault(
+                e.project_key,
+                {"name": "", "hours": 0.0, "entries": 0,
+                 "devs": set(), "sample_issue": e.issue_key},
+            )
+            if not info["name"]:
+                info["name"] = getattr(e, "project_name", "") or ""
+            info["hours"] += e.hours
+            info["entries"] += 1
+            info["devs"].add(r.name)
+    return agg
+
+
+def _build_unknown_projects_md(
+    unknown: dict[str, dict], since: date, until: date,
+) -> str:
+    """Markdown-todo по неизвестным проектам — чтобы потихоньку вносить их в
+    EXTRA_AUDIT_PROJECTS. По каждому: ключ, название, часы, разработчики, пример
+    задачи и готовая строка для вставки. Плюс общий блок для копипаста.
+    Отсортировано по убыванию часов (сверху — где больше времени сожгли)."""
+    period = f"{since.strftime('%d.%m')}–{until.strftime('%d.%m')}"
+    base = settings.jira_url.rstrip("/")
+    out = [
+        f"# Неизвестные проекты за {period}",
+        "",
+        "_Проекты, по которым списывали часы, но которых нет в аудите (ни WEB-ПиК, "
+        "ни EXTRA_AUDIT_PROJECTS, ни простой). Часы по ним **не учтены**. Для "
+        "каждого реши: внешний (`0`) или внутренний (`1`) — и добавь строку в "
+        "`EXTRA_AUDIT_PROJECTS` в `app/services/hudson_analyzer.py`. Сверху — где "
+        "больше часов._",
+        "",
+    ]
+    ranked = sorted(
+        unknown.items(), key=lambda kv: (-kv[1]["hours"], kv[0]),
+    )
+    for key, info in ranked:
+        name = info["name"] or "(название не пришло из Jira)"
+        devs = ", ".join(sorted(info["devs"]))
+        out.append(f"## {key} — {name}")
+        out.append(
+            f"- **{info['hours']:.2f}h** · {info['entries']} зап. · {devs}"
+        )
+        out.append(
+            f"- пример: [{info['sample_issue']}]"
+            f"({base}/browse/{info['sample_issue']})"
+        )
+        out.append(f'- вставить: `"{key}": 0,  # {name}`')
+        out.append("")
+    out.append("---")
+    out.append("")
+    out.append(
+        "### Всё блоком для `EXTRA_AUDIT_PROJECTS` (проставь `0`=внешний / `1`=внутренний):"
+    )
+    out.append("")
+    out.append("```python")
+    for key, info in ranked:
+        name = info["name"] or "?"
+        out.append(f'    "{key}": 0,  # {name} — {info["hours"]:.2f}h')
+    out.append("```")
+    return "\n".join(out)
+
+
 TG_MAX = 3800  # Telegram cap 4096, оставляем запас на HTML-сущности (&amp; и т.п.)
 
 
@@ -759,6 +830,15 @@ async def notify(
     downtime_md_bytes = _build_downtime_md(
         by_manager, full_names, since, until,
     ).encode("utf-8")
+    # Неизвестные проекты (out-of-scope) — отдельный .md только если они есть,
+    # чтобы не слать «пустышку» каждую неделю.
+    unknown_projects = _collect_unknown_projects(reports)
+    unknown_md_bytes = (
+        _build_unknown_projects_md(unknown_projects, since, until).encode("utf-8")
+        if unknown_projects
+        else b""
+    )
+    n_md = 4 + (1 if unknown_md_bytes else 0)
 
     async def _send_with_md(chat_id: int, messages: list[str]) -> None:
         for text in messages:
@@ -785,6 +865,13 @@ async def notify(
                 all_md_bytes, filename=f"all_worklogs_{period_tag}.md",
             ),
         )
+        if unknown_md_bytes:
+            await bot.send_document(
+                chat_id,
+                BufferedInputFile(
+                    unknown_md_bytes, filename=f"unknown_projects_{period_tag}.md",
+                ),
+            )
 
     # 1) DM каждому менеджеру — только его команда
     for mgr, reps in by_manager.items():
@@ -794,8 +881,8 @@ async def notify(
         messages = await _format_manager_messages(mgr, reps, since, until)
         if dry_run:
             logger.info(
-                "[DRY-RUN] would send %d msg(s) + 4 .md to %s (tg=%s)",
-                len(messages), mgr, tg_id,
+                "[DRY-RUN] would send %d msg(s) + %d .md to %s (tg=%s)",
+                len(messages), n_md, mgr, tg_id,
             )
             sent_managers += 1
             continue
@@ -811,8 +898,8 @@ async def notify(
         alina_msgs = await _format_alina_messages(by_manager, since, until)
         if dry_run:
             logger.info(
-                "[DRY-RUN] would send %d msg(s) + 4 .md to Алина (tg=%s)",
-                len(alina_msgs), alina["telegram_id"],
+                "[DRY-RUN] would send %d msg(s) + %d .md to Алина (tg=%s)",
+                len(alina_msgs), n_md, alina["telegram_id"],
             )
             sent_alina = True
         else:
@@ -834,8 +921,8 @@ async def notify(
         )
         if dry_run:
             logger.info(
-                "[DRY-RUN] would send %d group msg(s) + 4 .md to %s",
-                len(group_msgs), settings.hudson_chat_id,
+                "[DRY-RUN] would send %d group msg(s) + %d .md to %s",
+                len(group_msgs), n_md, settings.hudson_chat_id,
             )
             sent_group = True
         else:
