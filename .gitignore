@@ -10,3 +10,13 @@ dist/
 build/
 .mypy_cache/
 .ruff_cache/
+
+# macOS
+.DS_Store
+
+# Локальные входные данные / скрап-дампы (не для репо)
+retail.xlsx
+industries.txt
+
+# Claude Code local lock (не трекаем)
+.claude/scheduled_tasks.lock
