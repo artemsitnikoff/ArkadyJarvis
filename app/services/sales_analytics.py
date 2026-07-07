@@ -72,6 +72,8 @@ class DailySalesActivity:
     month_won_sum: float = 0.0
     month_won_count: int = 0
     monthly_plan: float = 0.0
+    # Расшифровка факта: какие сделки засчитаны (id, title, amount, company, closedate)
+    month_won_deals: list[dict] = field(default_factory=list)
 
     # Дела/активность
     activities_done: int = 0
@@ -387,13 +389,37 @@ async def collect_user_activity(
                 "STAGE_SEMANTIC_ID": "S",   # successful (WON)
                 **cat_filter,
             },
-            "select": ["ID", "OPPORTUNITY"],
+            "select": ["ID", "TITLE", "OPPORTUNITY", "CURRENCY_ID",
+                       "COMPANY_ID", "CONTACT_ID", "CLOSEDATE"],
         },
         activity.errors,
     )
     activity.month_won_count = len(won_month)
     activity.month_won_sum = sum(float(d.get("OPPORTUNITY") or 0) for d in won_month)
     activity.monthly_plan = float(settings.sales_report_monthly_plan)
+    # Расшифровка факта: по каждой засчитанной сделке — юрлицо (COMPANY) или контакт.
+    wname_cache: dict[tuple[str, int], str | None] = {}
+
+    async def _counterparty(deal: dict) -> str:
+        for etype, fld in (("COMPANY", "COMPANY_ID"), ("CONTACT", "CONTACT_ID")):
+            eid = deal.get(fld)
+            if eid and str(eid) != "0":
+                key = (etype, int(eid))
+                if key not in wname_cache:
+                    wname_cache[key] = await _resolve_entity_name(bitrix, etype, int(eid))
+                if wname_cache[key]:
+                    return wname_cache[key]
+        return "—"
+
+    for d in won_month:
+        activity.month_won_deals.append({
+            "id": d.get("ID"),
+            "title": d.get("TITLE") or "(без названия)",
+            "amount": float(d.get("OPPORTUNITY") or 0),
+            "currency": d.get("CURRENCY_ID") or "RUB",
+            "company": await _counterparty(d),
+            "closedate": (d.get("CLOSEDATE") or "")[:10],
+        })
 
     # Переходы сделок по этапам за период — crm.stagehistory.list по каждой сделке менеджера
     deal_ids = set()
