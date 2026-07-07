@@ -212,13 +212,15 @@ Defined в `start.py`. Текущая раскладка:
 
 **Адресаты:** `SALES_REPORT_RECIPIENTS` (Telegram IDs через запятую; группы — с минусом, например `-4729014928`). Бот должен быть участником группы.
 
+⚠️ **Пагинация обязательна**: Bitrix `*.list` отдаёт **максимум 50 строк за запрос**. Раньше все счётчики делали `len(result)` без пагинации → любая метрика с >50 записей молча упиралась в 50 (симптом: «в работе 50» у менеджера неделями как константа). Теперь: `_list_all()` идёт по `resp['next']` через все страницы (cap 40 стр = 2000, логирует при переполнении), `_list_total()` берёт точное число из поля `resp['total']` одним запросом (для чистых счётчиков — active-лиды, комментарии). Любой новый `.list` — только через эти хелперы, НЕ `len(_safe_call(...).result)`.
+
 **Метрики (`sales_analytics.collect_user_activity`):**
-- **Лиды**: `created` (за период), `active` — фильтр `!STATUS_SEMANTIC_ID IN [S, F]` (Bitrix сам определяет «в работе» через семантику статусов)
+- **Лиды**: `created` (за период, `_list_all`), `active` (`_list_total` — точное число, НЕ обрезано) — фильтр `!STATUS_SEMANTIC_ID IN [S, F]` (Bitrix сам определяет «в работе» через семантику статусов)
 - **Сделки**: `created`/`active`/`modified`/`won` (+`won_sum`)/`hot` (+`hot_sum`)/`avg_deal_age_days`
-  - `deals_active` = все open в разрешённых воронках (`SALES_REPORT_DEAL_CATEGORIES`, default `27,31,33` — Услуги Б24, Общая, ПиК; исключает «Счета 1С» cat 0, «Продление Битрикс» cat 29, «Квал» cat 23 — там «фантомные» сделки менеджера)
+  - Whitelist воронок `cat_filter = {"CATEGORY_ID": allowed_cats}` (из `SALES_REPORT_DEAL_CATEGORIES`, default `27,31,33` — Услуги Б24, Общая, ПиК; исключает «Счета 1С» cat 0, «Продление Битрикс» cat 29, «Квал» cat 23) применяется КО ВСЕМ запросам сделок: `active`, `modified`, `won`, план/факт. Т.е. «Счета 1С» не попадают НИ в одну цифру сделок. Cat 0 — дубли-фантомы автодвижений 1С.
   - `deals_hot` = subset где имя стадии совпадает с `SALES_REPORT_ACTIVE_DEAL_PATTERNS` (default `кп,договор,счёт,счет,переговор,согласи,кэв провед,отработк,оплат`). Имена стадий тянутся через `crm.dealcategory.stage.list`
-- **План/факт за календарный месяц**: `month_won_sum` + `monthly_plan` (env `SALES_REPORT_MONTHLY_PLAN`, default 220000₽). WON считается через `STAGE_SEMANTIC_ID=S` + `>=CLOSEDATE start_of_month`
-- **Дела**: `activities_done` (звонки/встречи/задачи через `crm.activity.list`), `stage_changes` через `crm.stagehistory.list` — N+1 fetch по каждой сделке менеджера (фильтра по user в API нет, только OWNER_ID=deal_id), параллелится sem(5)
+- **План/факт за календарный месяц**: `month_won_sum` + `monthly_plan` (env `SALES_REPORT_MONTHLY_PLAN`, default 220000₽). WON считается через `STAGE_SEMANTIC_ID=S` + `>=CLOSEDATE start_of_month` **+ `cat_filter`** — счета 1С в план НЕ идут.
+- **Дела**: `activities_done` (звонки/встречи/задачи через `crm.activity.list`), `stage_changes` через `crm.stagehistory.list` — N+1 fetch по каждой сделке менеджера (фильтра по user в API нет, только OWNER_ID=deal_id), параллелится sem(5). `deal_ids` для stage_changes = `modified_deals` (уже отфильтрованы по воронкам) + `active_deals` → **«движения счетов» (автопереходы cat 0) в 🔄 переходы НЕ считаются**. `activities_done` (✅ дела) фильтруется по `RESPONSIBLE_ID`, к воронке не привязан — реальные звонки/встречи менеджера на любых сущностях (не автодвижения счетов, те идут через stagehistory).
 - **Комментарии**: `crm.timeline.comment.list` (AUTHOR_ID=user_id)
 - **Звонки** (voximplant.statistic.get):
   - Раздельно in/out/missed/callback по `CALL_TYPE` (1/2/3/4)

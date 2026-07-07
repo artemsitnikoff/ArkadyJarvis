@@ -127,6 +127,47 @@ async def _safe_call(bitrix, method: str, params: dict, errors: list[str]):
         return None
 
 
+async def _list_all(
+    bitrix, method: str, params: dict, errors: list[str], *, max_pages: int = 40,
+) -> list[dict]:
+    """Все страницы list-метода Bitrix. `*.list` отдаёт максимум 50 строк за раз —
+    без этого любой `len(result)` молча упирался в 50 (баг «всегда 50 в работе»).
+    Идём по `resp['next']` (offset следующей страницы). max_pages — защита от
+    бесконечного цикла (40*50 = 2000 строк)."""
+    items: list[dict] = []
+    start = 0
+    for _ in range(max_pages):
+        p = dict(params)
+        if start:
+            p["start"] = start
+        resp = await _safe_call(bitrix, method, p, errors)
+        if not resp:
+            break
+        batch = resp.get("result") or []
+        items.extend(batch)
+        nxt = resp.get("next")
+        if not nxt or not batch:
+            break
+        start = nxt
+    else:
+        logger.warning(
+            "Sales analytics: %s достиг max_pages=%d — данные могут быть обрезаны",
+            method, max_pages,
+        )
+    return items
+
+
+async def _list_total(bitrix, method: str, params: dict, errors: list[str]) -> int:
+    """Точное число записей через поле `total` первой страницы (list-методы Bitrix
+    его всегда возвращают). Одним запросом, без вытягивания всех строк — для
+    метрик, где нужно только количество."""
+    resp = await _safe_call(bitrix, method, params, errors)
+    if not resp:
+        return 0
+    total = resp.get("total")
+    return int(total) if total is not None else len(resp.get("result") or [])
+
+
 async def collect_user_activity(
     bitrix,
     user_id: int,
@@ -150,6 +191,17 @@ async def collect_user_activity(
         period_label=_period_label(period_days),
     )
 
+    # Разрешённые воронки сделок (default 27,31,33 — Услуги Б24 / Общая / ПиК).
+    # Исключает «Счета 1С» (cat 0 — дубли-фантомы автодвижений 1С), «Продление
+    # Битрикс» (29), «Квал» (23). Применяется КО ВСЕМ метрикам сделок: активные,
+    # модифицированные, WON, план/факт и переходы по этапам — чтобы движения
+    # счетов не попадали ни в цифры сделок, ни в «действия».
+    allowed_cats = {
+        int(c.strip()) for c in settings.sales_report_deal_categories.split(",")
+        if c.strip().isdigit()
+    }
+    cat_filter = {"CATEGORY_ID": list(allowed_cats)} if allowed_cats else {}
+
     # Имя сотрудника + последний вход
     user_resp = await _safe_call(
         bitrix, "user.get", {"ID": user_id}, activity.errors,
@@ -160,7 +212,7 @@ async def collect_user_activity(
         activity.last_login = u.get("LAST_LOGIN")
 
     # Лиды созданные / назначенные на сегодня
-    leads_resp = await _safe_call(
+    leads = await _list_all(
         bitrix, "crm.lead.list",
         {
             "filter": {
@@ -172,16 +224,14 @@ async def collect_user_activity(
         },
         activity.errors,
     )
-    if leads_resp:
-        leads = leads_resp.get("result") or []
-        activity.leads_created = len(leads)
-        activity.leads_examples = [
-            {"id": x.get("ID"), "title": x.get("TITLE"), "status": x.get("STATUS_ID")}
-            for x in leads[:5]
-        ]
+    activity.leads_created = len(leads)
+    activity.leads_examples = [
+        {"id": x.get("ID"), "title": x.get("TITLE"), "status": x.get("STATUS_ID")}
+        for x in leads[:5]
+    ]
 
     # CRM-дела (звонки/встречи/задачи) — выполненные сегодня
-    activities_resp = await _safe_call(
+    items = await _list_all(
         bitrix, "crm.activity.list",
         {
             "filter": {
@@ -194,16 +244,14 @@ async def collect_user_activity(
         },
         activity.errors,
     )
-    if activities_resp:
-        items = activities_resp.get("result") or []
-        activity.activities_done = len(items)
-        type_names = {1: "Встреча", 2: "Звонок", 3: "Задача", 4: "Email"}
-        for it in items:
-            t = type_names.get(int(it.get("TYPE_ID", 0)), f"type{it.get('TYPE_ID')}")
-            activity.activity_types[t] = activity.activity_types.get(t, 0) + 1
+    activity.activities_done = len(items)
+    type_names = {1: "Встреча", 2: "Звонок", 3: "Задача", 4: "Email"}
+    for it in items:
+        t = type_names.get(int(it.get("TYPE_ID", 0)), f"type{it.get('TYPE_ID')}")
+        activity.activity_types[t] = activity.activity_types.get(t, 0) + 1
 
     # Комментарии на ленте CRM (timeline)
-    comments_resp = await _safe_call(
+    activity.comments_count = await _list_total(
         bitrix, "crm.timeline.comment.list",
         {
             "filter": {
@@ -215,26 +263,23 @@ async def collect_user_activity(
         },
         activity.errors,
     )
-    if comments_resp:
-        activity.comments_count = len(comments_resp.get("result") or [])
 
-    # Сделки модифицированы за период
-    deals_resp = await _safe_call(
+    # Сделки модифицированы за период (только разрешённые воронки — без «Счетов 1С»)
+    modified_deals = await _list_all(
         bitrix, "crm.deal.list",
         {
             "filter": {
                 ">=DATE_MODIFY": day_start,
                 "<=DATE_MODIFY": day_end,
                 "ASSIGNED_BY_ID": user_id,
+                **cat_filter,
             },
             "select": ["ID", "TITLE", "STAGE_ID", "OPPORTUNITY", "CURRENCY_ID",
                        "DATE_CREATE", "CLOSED", "CLOSEDATE"],
         },
         activity.errors,
     )
-    modified_deals: list[dict] = []
-    if deals_resp:
-        modified_deals = deals_resp.get("result") or []  # noqa
+    if modified_deals:
         activity.deals_modified = len(modified_deals)
         # Созданные за период
         activity.deals_created = sum(
@@ -255,31 +300,20 @@ async def collect_user_activity(
             } for d in modified_deals[:5]
         ]
 
-    # Все открытые (активные) сделки менеджера — для счёта горячих / среднего возраста
-    active_resp = await _safe_call(
+    # Все открытые (активные) сделки менеджера в разрешённых воронках (без «Счетов
+    # 1С») — для счёта горячих / среднего возраста. Пагинация обязательна: без неё
+    # «в работе» упиралось в 50.
+    in_cat = await _list_all(
         bitrix, "crm.deal.list",
         {
-            "filter": {"ASSIGNED_BY_ID": user_id, "CLOSED": "N"},
+            "filter": {"ASSIGNED_BY_ID": user_id, "CLOSED": "N", **cat_filter},
             "select": ["ID", "TITLE", "STAGE_ID", "CATEGORY_ID", "OPPORTUNITY", "DATE_CREATE"],
         },
         activity.errors,
     )
-    active_deals: list[dict] = []
-    if active_resp:
-        all_active = active_resp.get("result") or []
-
-        # 1) Фильтр по разрешённым воронкам (исключаем 1С-фантомы / автопродления)
-        allowed_cats = {
-            int(c.strip()) for c in settings.sales_report_deal_categories.split(",")
-            if c.strip().isdigit()
-        }
-        if allowed_cats:
-            in_cat = [d for d in all_active if int(d.get("CATEGORY_ID") or 0) in allowed_cats]
-        else:
-            in_cat = all_active
-
+    active_deals: list[dict] = in_cat
+    if in_cat:
         # «В работе» = все сделки в разрешённых воронках (без фильтра стадий)
-        active_deals = in_cat
         activity.deals_active = len(active_deals)
 
         # 2) Фетчим имена стадий для этих воронок — нужно для «горячих»
@@ -327,7 +361,7 @@ async def collect_user_activity(
 
     # Активные лиды — все где статус НЕ "успех" (S=CONVERTED) и НЕ "отказ" (F=JUNK/Дубль/Дорого/...)
     # Bitrix хранит семантику статуса в STATUS_SEMANTIC_ID: NULL=в работе, S=success, F=fail.
-    active_leads_resp = await _safe_call(
+    activity.leads_active = await _list_total(
         bitrix, "crm.lead.list",
         {
             "filter": {
@@ -338,29 +372,27 @@ async def collect_user_activity(
         },
         activity.errors,
     )
-    if active_leads_resp:
-        activity.leads_active = len(active_leads_resp.get("result") or [])
 
     # План/факт — WON за календарный месяц
     tz = ZoneInfo(tz_name)
     now = datetime.now(tz)
     month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0).isoformat()
-    month_won_resp = await _safe_call(
+    # WON только в разрешённых воронках — «Счета 1С» (cat 0) в план/факт НЕ идут.
+    won_month = await _list_all(
         bitrix, "crm.deal.list",
         {
             "filter": {
                 "ASSIGNED_BY_ID": user_id,
                 ">=CLOSEDATE": month_start,
                 "STAGE_SEMANTIC_ID": "S",   # successful (WON)
+                **cat_filter,
             },
             "select": ["ID", "OPPORTUNITY"],
         },
         activity.errors,
     )
-    if month_won_resp:
-        won_month = month_won_resp.get("result") or []
-        activity.month_won_count = len(won_month)
-        activity.month_won_sum = sum(float(d.get("OPPORTUNITY") or 0) for d in won_month)
+    activity.month_won_count = len(won_month)
+    activity.month_won_sum = sum(float(d.get("OPPORTUNITY") or 0) for d in won_month)
     activity.monthly_plan = float(settings.sales_report_monthly_plan)
 
     # Переходы сделок по этапам за период — crm.stagehistory.list по каждой сделке менеджера
