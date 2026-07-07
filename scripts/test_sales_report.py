@@ -107,9 +107,15 @@ async def main() -> None:
             bundle_bytes = bundle.encode("utf-8") if bundle.strip() else None
             print(f"\n=== SENDING to {len(recipients)} recipients ===")
             from aiogram.types import BufferedInputFile
+
+            from app.utils import split_telegram_html
+            parts = split_telegram_html(text)
+            if len(parts) > 1:
+                print(f"  (отчёт длинный — разбит на {len(parts)} сообщений)")
             for tg_id in recipients:
                 try:
-                    await bot.send_message(tg_id, text)
+                    for part in parts:
+                        await bot.send_message(tg_id, part, disable_web_page_preview=True)
                     if bundle_bytes:
                         file = BufferedInputFile(
                             bundle_bytes,

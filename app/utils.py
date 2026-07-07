@@ -171,6 +171,34 @@ def parse_json_response(raw: str) -> dict:
     raise ValueError(f"Cannot parse JSON from AI response: {raw[:200]}")
 
 
+def split_telegram_html(text: str, limit: int = 4000) -> list[str]:
+    """Бьёт длинный текст на куски ≤ limit по границам строк — чтобы уложиться в
+    лимит Telegram (4096). Инлайновые теги (`<b>…</b>` в пределах одной строки)
+    не рвутся, т.к. режем только по `\\n`. Строку длиннее limit режем жёстко.
+    limit=4000 — запас под HTML-сущности (&amp; и т.п.)."""
+    if len(text) <= limit:
+        return [text]
+    chunks: list[str] = []
+    cur = ""
+    for line in text.split("\n"):
+        while len(line) > limit:
+            if cur:
+                chunks.append(cur)
+                cur = ""
+            chunks.append(line[:limit])
+            line = line[limit:]
+        candidate = (cur + "\n" + line) if cur else line
+        if len(candidate) <= limit:
+            cur = candidate
+        else:
+            if cur:
+                chunks.append(cur)
+            cur = line
+    if cur:
+        chunks.append(cur)
+    return chunks
+
+
 def merge_intervals(intervals: list[tuple[datetime, datetime]]) -> list[tuple[datetime, datetime]]:
     """Merge overlapping/adjacent intervals. Returns sorted, non-overlapping list."""
     if not intervals:

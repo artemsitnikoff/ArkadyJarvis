@@ -270,9 +270,12 @@ async def sales_dept_summary_job(
     bundle = build_transcripts_bundle(activities)
     bundle_bytes = bundle.encode("utf-8") if bundle.strip() else None
 
+    from app.utils import split_telegram_html
+    parts = split_telegram_html(text)
     for tg_id in recipients:
         try:
-            await bot.send_message(tg_id, text)
+            for part in parts:
+                await bot.send_message(tg_id, part, disable_web_page_preview=True)
             if bundle_bytes:
                 file = BufferedInputFile(
                     bundle_bytes,
