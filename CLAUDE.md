@@ -376,6 +376,7 @@ screen -S b24 -dm bash -c 'docker compose exec -T bot python scripts/b24_lead_fr
 - Content-Type check на ответе после редиректов — если text/html, abort
 - ffmpeg → mono 16kHz opus 24kbps; `MEETING_MAX_MINUTES` (default 90)
 - Gemini (диаризация) → Claude×2 (review + brief). 3 артефакта `.md`
+- **Чанковая транскрипция длинных записей** (`meeting_pipeline._transcribe`): Gemini не проглатывает длинную запись одним запросом — виснет и падает с `provider_overloaded (timeout)`. Записи длиннее `_CHUNK_IF_LONGER_THAN` (22 мин) режутся `ffmpeg_tool.split_audio` (stream-copy, `-f segment`) на куски по `_CHUNK_SECONDS` (20 мин), транскрибируются **последовательно** (параллель снова словит overload), сегменты склеиваются со сквозными таймкодами (смещение `i * _CHUNK_SECONDS`), `speakers_count` = max по кускам. Длительность для решения о нарезке: ffprobe, иначе оценка по размеру опуса (24 кбит/с ≈ 3000 Б/с). Короткие (≤22 мин) — один запрос, как раньше. Провал любого куска → вся транскрипция падает с указанием номера части.
 - OpenRouter: **retry один раз** при `provider_overloaded` (HTTP 200 + embedded 503 in choice payload) и любом 5xx через `_transcribe_once` → возвращает `TranscriptionResult(retryable=True)` → wrapper повторяет через 5с
 
 ### Daily Summary / Wed Frog / Mon Poster

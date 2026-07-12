@@ -104,3 +104,52 @@ async def convert_to_opus(input_path: str | Path, output_path: str | Path) -> No
             f"ffmpeg failed: {stderr.decode(errors='replace')[-500:]}"
         )
     logger.info("ffmpeg: %s -> %s OK", input_path, output_path)
+
+
+async def split_audio(
+    input_path: str | Path, out_dir: str | Path, segment_seconds: int,
+) -> list[Path]:
+    """Режет аудио на куски по `segment_seconds` (stream copy, без перекодирования).
+
+    Нужно для чанковой транскрипции: Gemini/OpenRouter не тянет длинную запись
+    одним запросом (provider_overloaded/timeout), поэтому режем на части и
+    транскрибируем по кускам. Вход уже наш opus/ogg — потому `-c:a copy`
+    (быстро, без потерь). Возвращает пути кусков по порядку (chunk_000.ogg …).
+    """
+    input_path = str(input_path)
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_pattern = str(out_dir / "chunk_%03d.ogg")
+    args = [
+        settings.ffmpeg_bin,
+        "-y",
+        "-i", input_path,
+        "-vn",
+        "-c:a", "copy",
+        "-f", "segment",
+        "-segment_time", str(int(segment_seconds)),
+        out_pattern,
+    ]
+    logger.info("ffmpeg split argv: %s", args)
+    proc = await asyncio.create_subprocess_exec(
+        *args,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    try:
+        _, stderr = await asyncio.wait_for(
+            proc.communicate(), timeout=FFMPEG_TIMEOUT_SEC,
+        )
+    except asyncio.TimeoutError:
+        proc.kill()
+        await proc.wait()
+        raise FFmpegError(
+            f"ffmpeg split не уложился в {FFMPEG_TIMEOUT_SEC}с — процесс убит",
+        ) from None
+    if proc.returncode != 0:
+        raise FFmpegError(
+            f"ffmpeg split failed: {stderr.decode(errors='replace')[-500:]}"
+        )
+    chunks = sorted(out_dir.glob("chunk_*.ogg"))
+    logger.info("ffmpeg split: %s -> %d кусков", input_path, len(chunks))
+    return chunks

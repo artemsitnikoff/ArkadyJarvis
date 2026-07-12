@@ -7,13 +7,23 @@ and a pre-computed `duration_sec` from ffprobe.
 
 import inspect
 import logging
+import math
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+from app.services.ffmpeg_tool import FFmpegError, split_audio
+from app.services.openrouter_client import TranscriptionResult, _build_full_text
 from app.services.prompts import load_prompt
 
 logger = logging.getLogger("arkadyjarvis")
+
+# Длинную запись Gemini/OpenRouter не проглатывает одним запросом
+# (provider_overloaded / timeout). Записи длиннее порога режем на куски и
+# транскрибируем по частям — каждый запрос маленький и быстрый.
+_CHUNK_SECONDS = 20 * 60          # куски по 20 мин
+_CHUNK_IF_LONGER_THAN = 22 * 60   # ≤22 мин — шлём одним запросом (как раньше)
+_OPUS_BYTES_PER_SEC = 3000        # 24 кбит/с ≈ 3000 Б/с — оценка длит. по размеру
 
 
 @dataclass
@@ -48,6 +58,66 @@ def _build_transcript_md(
 ProgressCallback = Callable[[str], Awaitable[None] | None] | None
 
 
+async def _transcribe(
+    ogg_path: Path, *, openrouter, duration_sec: float, tick,
+) -> TranscriptionResult:
+    """Транскрипция с авто-нарезкой длинных записей.
+
+    Короткая (≤ порога) — одним запросом, как раньше. Длинная — режем на куски
+    по `_CHUNK_SECONDS`, транскрибируем последовательно (последовательно, чтобы
+    не ловить provider_overloaded из-за параллельных запросов), склеиваем
+    сегменты со сквозными таймкодами (смещаем на `i * _CHUNK_SECONDS`)."""
+    # Оценка длительности: probe, иначе по размеру опуса.
+    est = duration_sec
+    if est <= 0:
+        try:
+            est = ogg_path.stat().st_size / _OPUS_BYTES_PER_SEC
+        except OSError:
+            est = 0.0
+
+    if est <= 0 or est <= _CHUNK_IF_LONGER_THAN:
+        return await openrouter.transcribe_voice(str(ogg_path))
+
+    n = math.ceil(est / _CHUNK_SECONDS)
+    await tick(
+        f"Запись длинная (~{est / 60:.0f} мин) — режу на {n} частей "
+        "и транскрибирую по частям..."
+    )
+    try:
+        chunks = await split_audio(ogg_path, ogg_path.parent / "chunks", _CHUNK_SECONDS)
+    except FFmpegError as e:
+        logger.warning("split_audio failed (%s) — fallback на один запрос", e)
+        return await openrouter.transcribe_voice(str(ogg_path))
+    if not chunks:
+        return await openrouter.transcribe_voice(str(ogg_path))
+
+    merged: list[dict] = []
+    max_speakers = 0
+    for i, chunk in enumerate(chunks):
+        await tick(f"Транскрибирую часть {i + 1}/{len(chunks)}...")
+        res = await openrouter.transcribe_voice(str(chunk))
+        if not res.success:
+            return TranscriptionResult(
+                success=False, error=f"часть {i + 1}/{len(chunks)}: {res.error}",
+            )
+        offset = i * _CHUNK_SECONDS
+        for seg in res.segments:
+            seg = dict(seg)
+            seg["start"] = float(seg.get("start", 0) or 0) + offset
+            seg["end"] = float(seg.get("end", seg["start"]) or seg["start"]) + offset
+            merged.append(seg)
+        max_speakers = max(max_speakers, res.speakers_count)
+
+    full_text = _build_full_text(merged)
+    if not full_text:
+        return TranscriptionResult(
+            success=False, error="пустая расшифровка после склейки частей",
+        )
+    return TranscriptionResult(
+        success=True, speakers_count=max_speakers, segments=merged, full_text=full_text,
+    )
+
+
 async def process_meeting(
     ogg_path: str | Path,
     *,
@@ -72,9 +142,11 @@ async def process_meeting(
             except Exception as e:
                 logger.warning("progress callback failed: %s", e)
 
-    # ── Stage 1: transcribe ─────────────────────────────────────
+    # ── Stage 1: transcribe (с авто-нарезкой длинных записей) ────
     await _tick("Транскрибирую запись (диаризация)...")
-    result = await openrouter.transcribe_voice(str(ogg_path))
+    result = await _transcribe(
+        Path(ogg_path), openrouter=openrouter, duration_sec=duration_sec, tick=_tick,
+    )
     if not result.success:
         raise RuntimeError(f"Транскрипция не удалась: {result.error}")
 
