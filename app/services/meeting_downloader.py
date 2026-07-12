@@ -46,6 +46,10 @@ _GDRIVE_ID_CHARSET = re.compile(r"^[A-Za-z0-9_-]+$")
 # anchored at start: also matches domain-aware links like
 # `/a/{domain}/file/d/{ID}/view`.
 _GDRIVE_FILE_PATH_RE = re.compile(r"/file/d/([A-Za-z0-9_-]+)")
+# `/drive/folders/{ID}` or `/folders/{ID}` — a FOLDER link, not a file. We
+# can't download a folder (no direct URL; listing needs Drive API + a file
+# is ambiguous when there are several), so we detect it to give a clear hint.
+_GDRIVE_FOLDER_RE = re.compile(r"/folders/([A-Za-z0-9_-]+)")
 
 # Anything resolving into these ranges is considered internal and blocked.
 # Covers loopback, link-local, RFC1918, Tailscale CGNAT, IPv6 unique-local & link-local.
@@ -70,6 +74,11 @@ class DownloadError(RuntimeError):
 def _is_yandex_disk(url: str) -> bool:
     host = urlparse(url).hostname or ""
     return host.lower() in YANDEX_DISK_HOSTS
+
+
+def _is_gdrive_folder(url: str) -> bool:
+    """True для ссылок на папку Google Drive (`/drive/folders/{ID}`)."""
+    return bool(_GDRIVE_FOLDER_RE.search(urlparse(url).path))
 
 
 def _is_google_drive(url: str) -> bool:
@@ -190,6 +199,15 @@ def _resolve_google_drive(public_url: str) -> str:
     """
     file_id = _extract_gdrive_id(public_url)
     if not file_id:
+        if _is_gdrive_folder(public_url):
+            raise DownloadError(
+                "Это ссылка на ПАПКУ Google Drive, а не на файл — Сократ "
+                "разбирает одну запись за раз и папку скачать не может.\n\n"
+                "Открой внутри папки саму запись (двойной клик), затем «⋮» → "
+                "«Открыть в новом окне», и скопируй ссылку из адресной строки — "
+                "она будет вида drive.google.com/file/d/…/view. Пришли её.\n\n"
+                "И проверь, что доступ открыт «Всем, у кого есть ссылка»."
+            )
         raise DownloadError(
             "Не смог извлечь Google Drive file ID из URL. "
             "Поддерживаются ссылки вида drive.google.com/file/d/{ID}/view, "
