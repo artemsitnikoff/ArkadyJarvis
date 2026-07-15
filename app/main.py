@@ -122,9 +122,6 @@ async def lifespan(app: FastAPI):
                         )
 
             userbot.set_reply_handler(_on_candidate_reply)
-            # Пасхалка: «ситников» во входящих → личный аккаунт салютует «Аве, Цезарь!»
-            # + цитата Сенеки.
-            userbot.enable_seneca(ai_client)
         except Exception as e:
             logger.warning("Userbot disabled: %s", e)
             userbot = None
