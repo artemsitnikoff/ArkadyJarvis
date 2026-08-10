@@ -51,7 +51,7 @@ EXTRA_AUDIT_PROJECTS: dict[str, int] = {
     "COZYHOME": 0, "MZNN": 0, "DCNEW": 1,
     "DA": 1, "HRD": 1, "SHR": 1,
     "TSAI": 0, "TSTM": 0, "TSS": 0, "EA": 0,
-    "DFSH": 0, "VMP": 0,
+    "DFSH": 0, "VMP": 0, "RMED": 0,
 }
 
 # Проекты-инстансы ПРОСТОЯ (bench). Часы по ним — это «простой», НЕ внутренняя работа.
