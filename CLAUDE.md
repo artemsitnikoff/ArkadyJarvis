@@ -353,7 +353,7 @@ docker compose exec bot python scripts/test_sales_report.py <bitrix_user_id> [da
 
 **Что считает**:
 - Набор проектов аудита = `dcj_projects` где `direction = "WEB - ПиК"` (287 из 638 в DCJ.xlsx) **плюс** `EXTRA_AUDIT_PROJECTS` (`hudson_analyzer.py`) — **авторитетный оверлей**: его `is_internal` **перебивает** `dcj_projects` (`_load_web_pik_projects` делает `result.update(...)`) → классификация зафиксирована в коде и переживает пере-импорт DCJ.xlsx. Сейчас: `COZYHOME`/`MZNN` (внешние), `DCNEW` (внутренний, АУП); `DA`/`HRD`/`SHR` (внутренние, АУП); `TSAI`/`TSTM`/`TSS`/`EA` (внешние); `DFSH`/`VMP`/`RMED`/`VIN` (внешние). Добавить/переклассифицировать — допиши `ключ: 0|1` (0 внешний / 1 внутренний), читается на лету, DB-сид не нужен. Кандидаты приходят в `unknown_projects_<period>.md`.
-- Для каждого разработчика из `hudson_managers` (4 менеджера / 15 разработчиков) — Jira worklog за неделю через `services/jira_worklog.py`. **Тянем БЕЗ фильтра по проектам** (`project_keys=None`), потом бьём на in-scope / out-of-scope — иначе часы вне набора молча выпадали (жалобы «мой лог не учтён»).
+- Для каждого разработчика из `hudson_managers` (4 менеджера / 13 разработчиков) — Jira worklog за неделю через `services/jira_worklog.py`. **Тянем БЕЗ фильтра по проектам** (`project_keys=None`), потом бьём на in-scope / out-of-scope — иначе часы вне набора молча выпадали (жалобы «мой лог не учтён»).
   - ⚠️ `_load_devs` берёт `WHERE jira_username IS NOT NULL` — разработчик без резолвнутого логина выпадает целиком (ни строки в отчёте, ни в `all_worklogs.md`, ни Jira-задачи). Warning только если логина нет у ВСЕХ 15.
   - `jira_username` в этом Jira Server физически **равен email**. JQL: `worklogAuthor in ("...@dclouds.ru")`. Не «чинить» на «настоящий username».
 - Суммирует часы → `total / internal / external` (internal по `is_internal=1`) **только по in-scope**. Часы вне набора → `out_of_scope_entries` / `out_of_scope_hours` (в total НЕ идут, только в .md-сверку).
@@ -395,7 +395,7 @@ docker compose exec bot python scripts/test_sales_report.py <bitrix_user_id> [da
 
 **Маппинг менеджер↔разработчики**:
 - В `services/hudson_repo.py:DEFAULT_MANAGER_MAPPING` (hardcoded, потому что в Bitrix у групп разработки head=NULL).
-- 4 менеджера / 15 разработчиков. Реорг 2026-06: Даниленко упразднён, его люди разведены (Геливанов/Присяжнюк → Бешеля; Овсянников/Осицын/Сердюков/Ушаков → Кузнецова Юлия). Ключ менеджера может быть «Имя Фамилия» — резолв разбивает на слова.
+- 4 менеджера / 13 разработчиков. Реорг 2026-06: Даниленко упразднён, его люди разведены (Геливанов/Присяжнюк → Бешеля; Овсянников/Осицын/Сердюков/Ушаков → Кузнецова Юлия). 2026-08: Гусев и Зеленских (Марк) уволены — убраны из Васильевой (у неё осталось 3). Ключ менеджера может быть «Имя Фамилия» — резолв разбивает на слова.
 - Seed резолвит Bitrix ID/email/full_name/jira_username — `_find_user_by_last_name` (LAST_NAME filter + LIKE fallback, потому что у Осицына в Bitrix `LAST_NAME='Осицын '` с trailing-пробелом).
   - ⚠️ Берёт **ПЕРВОГО активного**. Однофамильцы резолвятся молча и неверно (`%Кузнецов%` матчит и Кузнецова, и Кузнецову Юлию).
 - **Seed идемпотентен**: после upsert реконсиляция — удаляет пары, которых больше нет в маппинге. Возвращает `(upserted, removed_pairs, warnings)`.
@@ -707,4 +707,4 @@ Docker: `docker compose up --build` (port 8002), logs: `docker compose logs -f b
 - **Bitrix `absence.list` 404** — требует HR-модуль (платный). Fallback через `calendar.event.get` + ключевые слова. `_ABSENCE_LIST_DEAD` (глобал модуля, живёт до рестарта) кэширует 404, ловит **только** подстроку «method not found». `get_absences` возвращает даты в ДВУХ форматах (absence.list → ISO, fallback → `DD.MM.YYYY`), а downstream требует ISO → иначе **молча** пустые списки.
 - **APScheduler НЕ догоняет пропущенные cron'ы после рестарта** — ребут после 11:00 Пн вайпает hudson_weekly до следующего понедельника. Руками `scripts/run_hudson_now.py` или `misfire_grace_time` (не сделали).
 - **Industries для B24** — Claude каждый раз даёт уникальную формулировку (1409 уникальных из 1479 лидов). Keyword-классификация в 18 категорий (`INDUSTRY_GROUPS`), порядок важен — узкие (Стоматология, Риелторы, Промышленное оборудование) РАНЬШЕ широких (Медицина, Застройщики, B2B-сервис), первое совпадение выигрывает. Докстринги скрипта говорят «14 категорий» — устарели.
-- **Локальная `data/arkadyjarvis.db` протухла** — 14 строк в `hudson_managers`, всё ещё Даниленко. Код (4/15) и БД расходятся до прогона `init_hudson_db.py`.
+- **Локальная `data/arkadyjarvis.db` протухла** — 14 строк в `hudson_managers`, всё ещё Даниленко. Код (4/13) и БД расходятся до прогона `init_hudson_db.py`.
