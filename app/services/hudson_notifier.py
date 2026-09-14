@@ -114,6 +114,14 @@ def _format_dev_block(rep: DevReport) -> str:
         bits.append(
             f"   💤 простой: {rep.downtime_hours:.1f}h — нужна приёмка менеджером (см. .md)",
         )
+    if rep.out_of_scope_hours > 0:
+        # Часы вне набора аудита в норму НЕ идут — показываем прямо в строке, чтобы
+        # менеджер видел, куда делись часы, не открывая .md (кейс Теплодар/TPDR).
+        keys = sorted({e.project_key for e in rep.out_of_scope_entries})
+        bits.append(
+            f"   ⚠️ вне аудита: {rep.out_of_scope_hours:.1f}h "
+            f"({html.escape(', '.join(keys))}) — в норму не идут, см. unknown_projects .md",
+        )
     if rep.is_under_norm:
         bits.append(
             f"   ⚠️ ниже нормы {rep.weekly_norm:.0f}h — поставим задачу на отгул",
