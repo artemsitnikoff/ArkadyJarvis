@@ -155,6 +155,12 @@ def md_to_telegram_html(text: str) -> str:
     return "\n".join(result).strip()
 
 
+def strip_emoji(s: str) -> str:
+    """Bitrix CRM COMMENTS — MySQL utf8 (3-байтовый): символы за пределами BMP
+    (emoji U+10000+) обрезают всё поле начиная с первого такого символа. Чистим."""
+    return "".join(c for c in s if ord(c) <= 0xFFFF)
+
+
 def parse_json_response(raw: str) -> dict:
     """Extract JSON object from AI response — handles markdown fences and embedded text."""
     raw = raw.strip()

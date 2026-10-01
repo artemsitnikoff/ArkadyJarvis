@@ -26,7 +26,7 @@ app/
                            #   muted_groups, recruiter_contacts, zabbix_problems, dcj_projects,
                            #   hudson_managers, schema_version)
   utils.py                 # parse_meeting_time/attendees, md_to_telegram_html, parse_json_response,
-                           #   merge_intervals, split_telegram_html, strip_numbered_item
+                           #   merge_intervals, split_telegram_html, strip_numbered_item, strip_emoji
   summarizer.py            # Claude-суммаризация чатов и daily overview
   version.py               # __version__ (единственный источник версии — тегов в git нет)
   bot/
@@ -40,7 +40,10 @@ app/
       free_slots.py        # FSM BookSlot — поиск слотов + бронирование
       _attendee_picker.py  # Общий attendee-search для meeting/free_slots
       jira_task.py         # FSM CreateTask — Claude reformat → Jira issue
-      lead.py              # FSM CreateLead (текст/voice через OpenRouter → Bitrix CRM lead)
+      lead.py              # FSM CreateLead (текст / voice / фото визитки → Bitrix CRM lead).
+                           #   Визитка: photo или document image/* → Gemini vision
+                           #   (openrouter.describe_image + prompts/business_card.md) → поля
+                           #   напрямую, без Claude. Не визитка → state не сбрасывается
       image.py             # FSM ImageGen — Gemini 3 Pro Image (текст или photo+caption)
       ask_ai.py            # FSM AskAI — Claude с персонажем «Джарвис Аркадия» (prompts/ask_ai_system.md)
       contract.py          # FSM ContractCheck — PDF/DOCX/TXT → Claude по prompts/contract_check.md
@@ -82,6 +85,7 @@ app/
     meeting_pipeline.py    # Socrates orchestration
     openclaw_client.py     # OpenClawClient — HTTP SSE, per-user agent isolation
     openrouter_client.py   # generate_image + transcribe_voice(format=...) + complete_text (текстовый путь)
+                           #   + describe_image (vision: промпт + картинка → JSON; OCR визиток)
     prompts.py             # load_prompt(name) — чтение prompts/<name>.md
     potok_client.py        # PotokClient — Potok.io REST (Bearer): jobs, applicants, scoring push,
                            #   stage move, кэш questions, post comments
@@ -102,11 +106,13 @@ app/
                            #   hudson_weekly_job
   api/
     routes.py              # GET /api/health, POST /api/bitrix/notify, POST /api/bitrix/broadcast
-prompts/                   # 22 файла
+prompts/                   # 23 файла
   contract_check.md        # Чек-лист проверки договора
   cicero.md                # Юрист-консультант (ГК, КоАП, АПК, НК)
   jira_task_template.md    # Reformat задачи под наш шаблон
   voice_transcribe.md      # Diarization (Lead voice + Socrates stage 1)
+  business_card.md         # OCR визитки → JSON (LAST_NAME/NAME/POST/PHONES/EMAILS/WEB/IM/RAW_TEXT),
+                           #   IS_BUSINESS_CARD=false если на фото не визитка
   wednesday_frog.md        # Мем-лягушка с {style}
   monday_poster.md         # Constructivist IT-плакат
   meeting_review.md        # Socrates stage 2
@@ -185,7 +191,7 @@ scripts/
   - **Legacy auto-refresh**: `CLAUDE_REFRESH_TOKEN` задан → чтение/запись `data/.claude_token.json`, `asyncio.Lock`, single-use refresh, `_sync_cli_credentials()` пишет `~/.claude/credentials.json`.
   - Чтобы включить long-lived — **убрать** `CLAUDE_REFRESH_TOKEN` из .env (не добавить флаг). Читается `os.environ` напрямую → нужен `up -d --force-recreate`.
 - **BitrixClient** — singleton, миксины (`_base`, `_users`, `_calendar`, `_crm`, `_timeman`). File-based OAuth (`data/bitrix_tokens.json`), auto-refresh. `_get_tokens` читает и парсит файл **на каждый запрос** (плюс: токен от другого процесса подхватывается сразу). `_BitrixBase.__init__` не зовёт `super().__init__()` → `__init__` в миксине не выполнится.
-- **OpenRouterClient** — singleton. `generate_image(prompt, image_b64?)`, `transcribe_voice(path, audio_format="ogg")` (mp3 для записей звонков), `complete_text(prompt, model=...)` — текстовый путь мимо subscription-квоты.
+- **OpenRouterClient** — singleton. `generate_image(prompt, image_b64?)`, `transcribe_voice(path, audio_format="ogg")` (mp3 для записей звонков), `complete_text(prompt, model=...)` — текстовый путь мимо subscription-квоты, `describe_image(prompt, image_b64, mime=, json_mode=True)` — vision на `settings.openrouter_model` (Gemini 2.5 Pro), OCR визиток для «Лид».
 - **PotokClient** — singleton, Bearer-токен через `POTOK_API_TOKEN`. In-memory cache вопросов (`_questions_cache`) — заполняется при `push_scoring`, читается при отправке вопросов. После рестарта — парсинг событий по маркеру.
 - **PotokFrontendClient** — отдельный singleton для `/client_api/*` (HH-messaging). Auth через 3 заголовка DeviseTokenAuth (`access-token`, `client`, `uid`). Получаются один раз из браузерной сессии (DevTools → Network → любой XHR на app.potok.io). При пустых токенах **не падает** — тихо ставит `_client = None`; проверять через `is_configured`.
 - **UserbotClient** (Telethon) — `send_to_user(user_id, text)`, `resolve_phone(phone)` через `ImportContactsRequest`. Слушает `events.NewMessage(incoming=True)`. В `main.py` регистрируется callback `_on_candidate_reply` — при входящем от tg_id из `recruiter_contacts` сообщение сохраняется в Potok + классифицируется на «отказ». Если score > порог — `potok.set_applicant_active(active=False)` + audit-комментарий.
@@ -628,7 +634,7 @@ schema_version (version INTEGER NOT NULL)
 - **No hardcoded secrets** — `.env` через pydantic-settings
 - **JSON from AI** — `utils.parse_json_response()`
 - **OpenClaw isolation** — всегда `user_id` в `openclaw.stream_chat()`
-- **Lead creation** — `SOURCE_ID`/`SOURCE_DESCRIPTION` + creator's Telegram contact в COMMENTS
+- **Lead creation** — `SOURCE_ID`/`SOURCE_DESCRIPTION` + creator's Telegram contact в COMMENTS; COMMENTS через `utils.strip_emoji` (`lead._append_creator`). Визитка → `_card_to_fields` (чистая функция, тестируется без бота): TITLE = «Компания — Фамилия Имя», мультиполя PHONE/EMAIL/WEB/IM, POST, ADDRESS, в COMMENTS полный RAW_TEXT
 - **HTML-escape user strings** — всегда `html.escape()` для user-controlled (имена, компании, AI-output). Telegram default parse_mode = HTML.
 - **Длинные AI-ответы — два разных паттерна**:
   - Интерактивные ответы в FSM-роутерах (Штирлиц, Цицерон, договор) → `.md` attachment при >4000 символов
@@ -674,7 +680,6 @@ Docker: `docker compose up --build` (port 8002), logs: `docker compose logs -f b
 - 🟡 **Лейблы спикеров не ремапятся между чанками**: каждый чанк — отдельное аудио для Gemini, «один голос — один номер» гарантируется только внутри куска. Реплики после 20-й минуты могут приписываться не тому человеку; «Обнаружено спикеров: N» = максимум по одному куску (4 участника по двое в чанке → покажет 2).
 - 🟡 **Отправка вопросов кандидату молча двигает стадию назад** в «Скриннинг резюме» (без `allowed_source_stages`).
 - 🟡 **«📊 Суммаризация» в личке**: проверка членства обёрнута в try/except с `pass` → при ошибке API группа **ВКЛЮЧАЕТСЯ** в обзор → юзер может увидеть саммари чата, где его нет.
-- 🟡 **`lead.py:119` пишет в Bitrix COMMENTS сырой AI-вывод без `_strip_emoji`** — тот самый utf8mb3-случай. Стрипалка есть только в recon-скриптах (`b24_lead_from_xlsx.py`, `retail_lead_from_xlsx.py`), в роутерах её нет.
 - 🟢 **Васькова получает два комплекта .md** (8-10 файлов вместо 4-5) — нет дедупа между циклом менеджеров и веткой РОПа.
 - 🟢 **`resolve_phone` не чистит контакты** — `DeleteContactsRequest` импортирован и не используется; контакт-лист личного аккаунта рекрутёра растёт бесконечно.
 - 🟢 **`/api/bitrix/notify` возвращает 200** с `{ok: false, error}` при ненайденном юзере и ошибке отправки — бизнес-процесс Б24 по HTTP-коду ошибку не увидит.

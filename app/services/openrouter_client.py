@@ -113,6 +113,51 @@ class OpenRouterClient:
             content = "".join(p.get("text", "") for p in content if p.get("type") == "text")
         return (content or "").strip()
 
+    async def describe_image(
+        self,
+        prompt: str,
+        image_b64: str,
+        *,
+        mime: str = "image/jpeg",
+        model: str | None = None,
+        json_mode: bool = True,
+        timeout: float = 120.0,
+    ) -> str:
+        """Vision-запрос: текстовый промпт + картинка → текст (по умолчанию JSON).
+        Модель — settings.openrouter_model (Gemini 2.5 Pro, умеет картинки).
+        Используется для OCR визиток в «Лид» (prompts/business_card.md)."""
+        content = [
+            {"type": "text", "text": prompt},
+            {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{image_b64}"}},
+        ]
+        payload: dict = {
+            "model": model or settings.openrouter_model,
+            "messages": [{"role": "user", "content": content}],
+        }
+        if json_mode:
+            payload["response_format"] = {"type": "json_object"}
+        resp = await self._client.post(BASE_URL, json=payload, timeout=timeout)
+        if resp.status_code >= 400:
+            body = resp.text[:300]
+            logger.error("OpenRouter describe_image %d: %s", resp.status_code, body)
+            raise ValueError(f"OpenRouter {resp.status_code}: {body}")
+        data = resp.json()
+        choices = data.get("choices") or []
+        if not choices:
+            err = data.get("error", {}).get("message", "no choices")
+            raise ValueError(f"OpenRouter: {err}")
+        msg = choices[0].get("message") or {}
+        text = msg.get("content")
+        if isinstance(text, list):
+            text = "".join(p.get("text", "") for p in text if p.get("type") == "text")
+        text = (text or "").strip()
+        if not text:
+            raise ValueError(
+                "OpenRouter: empty content "
+                + _explain_empty_content(choices[0].get("finish_reason"), msg.get("refusal"))
+            )
+        return text
+
     async def generate_image(self, prompt: str, image_b64: str | None = None) -> bytes:
         """Generate an image via Gemini through OpenRouter. Returns raw PNG bytes.
 
