@@ -270,23 +270,43 @@ async def sales_dept_summary_job(
     bundle = build_transcripts_bundle(activities)
     bundle_bytes = bundle.encode("utf-8") if bundle.strip() else None
 
+    from aiogram.exceptions import TelegramMigrateToChat
+
     from app.utils import split_telegram_html
     parts = split_telegram_html(text)
+
+    async def _deliver(chat_id: int) -> None:
+        for part in parts:
+            await bot.send_message(chat_id, part, disable_web_page_preview=True)
+        if bundle_bytes:
+            file = BufferedInputFile(
+                bundle_bytes, filename=f"calls_transcripts_{period_days}d.md",
+            )
+            await bot.send_document(chat_id, file)
+
+    sent = 0
     for tg_id in recipients:
         try:
-            for part in parts:
-                await bot.send_message(tg_id, part, disable_web_page_preview=True)
-            if bundle_bytes:
-                file = BufferedInputFile(
-                    bundle_bytes,
-                    filename=f"calls_transcripts_{period_days}d.md",
-                )
-                await bot.send_document(tg_id, file)
+            await _deliver(tg_id)
+            sent += 1
+        except TelegramMigrateToChat as e:
+            # Группу перевели в супергруппу — Telegram даёт новый ID. Шлём туда и
+            # просим поправить .env (иначе каждый прогон будет ловить это заново).
+            new_id = e.migrate_to_chat_id
+            logger.warning(
+                "=== sales_dept_summary_job: группа %s переехала в супергруппу %s — "
+                "обнови SALES_REPORT_RECIPIENTS в .env", tg_id, new_id,
+            )
+            try:
+                await _deliver(new_id)
+                sent += 1
+            except Exception as e2:
+                logger.error("=== sales_dept_summary_job: send to %s failed: %s", new_id, e2)
         except Exception as e:
             logger.error("=== sales_dept_summary_job: send to %s failed: %s", tg_id, e)
     logger.info(
-        "=== sales_dept_summary_job(days=%s): sent to %d recipients (bundle=%s)",
-        period_days, len(recipients), bool(bundle_bytes),
+        "=== sales_dept_summary_job(days=%s): sent to %d/%d recipients (bundle=%s)",
+        period_days, sent, len(recipients), bool(bundle_bytes),
     )
 
 
