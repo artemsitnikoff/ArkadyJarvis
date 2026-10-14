@@ -488,7 +488,7 @@ screen -S b24 -dm bash -c 'docker compose exec -T bot python scripts/b24_lead_fr
   - Хвостовой кусок может быть крошечным (n считается по ОЦЕНКЕ) → на тишине Gemini вернёт пусто → падает ВСЯ транскрипция.
   - `meeting_pipeline.py:16` тянет `_build_full_text` из `openrouter_client` **по приватному имени**.
 - OpenRouter: **retry один раз** при `provider_overloaded` (HTTP 200 + embedded 503 in choice payload) и любом 5xx через `_transcribe_once` → `TranscriptionResult(retryable=True)` → wrapper повторяет через 5с.
-  - **НЕ retryable**: пустой content, refusal, провал `parse_json_response` — сразу финал.
+  - **НЕ retryable**: пустой content, refusal, обрезка по `finish_reason=length`. Битый JSON (провал `parse_json_response`) с v4.42.1 **retryable** — один повтор. Перед парсингом `_normalize_clock_timestamps` чинит таймкоды `"start": 4:32.2` / `"1:02:05.5"` → секунды (Gemini после первой минуты уезжает на мм:сс — прецедент 2026-10-14, звонок 4.5 мин), а `_clock_to_seconds` принимает их и в уже распарсенных сегментах.
   - `choice.get("error")` проверяется ТОЛЬКО при пустом content → вернул и текст, и error → error молча игнорируется.
 - Бюджеты времени нигде не сходятся в общий дедлайн: ffmpeg 1800с, транскрипция до 300с × 2 попытки × 5 кусков (~50 мин), review + brief по 600с. Общего таймаута на пайплайн нет.
 

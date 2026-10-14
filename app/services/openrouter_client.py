@@ -27,6 +27,38 @@ class TranscriptionResult:
     retryable: bool = False
 
 
+# Gemini после первой минуты записи иногда уезжает с секунд на «часы»: `"start": 4:32.2`
+# (невалидный JSON) или `"start": "1:02:05.5"` (строка). Ловим оба варианта ТОЛЬКО у
+# ключей start/end — внутрь "text" не лезем.
+_CLOCK_TS_RE = re.compile(
+    r'("(?:start|end)"\s*:\s*)"?((?:\d+:)?\d{1,3}:\d{1,2}(?:\.\d+)?)"?(?=\s*[,}\]\n])'
+)
+
+
+def _clock_to_seconds(value) -> float:
+    """12.3 / "12.3" / "4:32.2" / "1:02:05.5" → секунды. Мусор → 0.0."""
+    if isinstance(value, (int, float)):
+        return float(value)
+    s = str(value or "").strip().strip('"')
+    if not s:
+        return 0.0
+    parts = s.split(":")
+    try:
+        if len(parts) == 1:
+            return float(parts[0])
+        total = 0.0
+        for part in parts:
+            total = total * 60 + float(part)
+        return total
+    except ValueError:
+        return 0.0
+
+
+def _normalize_clock_timestamps(content: str) -> str:
+    """`"start": 4:32.2` → `"start": 272.2` прямо в сыром JSON-тексте, чтобы json.loads прошёл."""
+    return _CLOCK_TS_RE.sub(lambda m: f"{m.group(1)}{_clock_to_seconds(m.group(2)):.1f}", content)
+
+
 def _format_time(seconds: float) -> str:
     seconds = max(0, int(seconds))
     return f"{seconds // 60}:{seconds % 60:02d}"
@@ -392,7 +424,7 @@ class OpenRouterClient:
                     error=f"модель не вернула текст{reason_hint}",
                 )
 
-            parsed = parse_json_response(content)
+            parsed = parse_json_response(_normalize_clock_timestamps(content))
         except Exception as e:
             # Dump enough of the raw content to diagnose truncation vs. malformed JSON.
             head = (content[:500] if isinstance(content, str) else str(content)[:500])
@@ -409,15 +441,18 @@ class OpenRouterClient:
             hint = ""
             if finish_reason == "length":
                 hint = " (ответ обрезан по лимиту токенов — попробуй более короткую запись)"
+            # Битый JSON — стохастика модели, второй заход обычно чистый. Обрезку по
+            # лимиту токенов повтор не вылечит — её не повторяем.
             return TranscriptionResult(
                 success=False, error=f"не смог разобрать ответ: {e}{hint}",
+                retryable=finish_reason != "length",
             )
 
         segments = parsed.get("segments") or []
         # Sanity: ensure monotonic timestamps and end >= start
         for seg in segments:
-            seg["start"] = max(0.0, float(seg.get("start", 0) or 0))
-            seg["end"] = max(seg["start"], float(seg.get("end", seg["start"]) or seg["start"]))
+            seg["start"] = max(0.0, _clock_to_seconds(seg.get("start", 0)))
+            seg["end"] = max(seg["start"], _clock_to_seconds(seg.get("end", seg["start"])))
 
         full_text = _build_full_text(segments)
         if not full_text:
