@@ -730,14 +730,14 @@ async def _count_comments(
     # Bitrix ИГНОРИРУЕТ >=CREATED/<=CREATED в этом методе (проверено: сделка 32917 отдала
     # все 6 комментов за историю при окне в один день). Даты сравниваем сами, aware-датами:
     # Bitrix отдаёт CREATED в поясе портала (+03:00), окно — в settings.timezone (+07:00).
-    start_dt = _dt.fromisoformat(day_start)
-    end_dt = _dt.fromisoformat(day_end)
+    start_dt = datetime.fromisoformat(day_start)
+    end_dt = datetime.fromisoformat(day_end)
 
     def _in_window(c: dict) -> bool:
         if str(c.get("AUTHOR_ID")) != uid:
             return False
         try:
-            created = _dt.fromisoformat(str(c.get("CREATED") or "").replace("Z", "+00:00"))
+            created = datetime.fromisoformat(str(c.get("CREATED") or "").replace("Z", "+00:00"))
         except ValueError:
             return False
         if created.tzinfo is None:
