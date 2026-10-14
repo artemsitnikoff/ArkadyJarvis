@@ -727,6 +727,22 @@ async def _count_comments(
         return 0
     sem = asyncio.Semaphore(3)
     uid = str(user_id)
+    # Bitrix ИГНОРИРУЕТ >=CREATED/<=CREATED в этом методе (проверено: сделка 32917 отдала
+    # все 6 комментов за историю при окне в один день). Даты сравниваем сами, aware-датами:
+    # Bitrix отдаёт CREATED в поясе портала (+03:00), окно — в settings.timezone (+07:00).
+    start_dt = _dt.fromisoformat(day_start)
+    end_dt = _dt.fromisoformat(day_end)
+
+    def _in_window(c: dict) -> bool:
+        if str(c.get("AUTHOR_ID")) != uid:
+            return False
+        try:
+            created = _dt.fromisoformat(str(c.get("CREATED") or "").replace("Z", "+00:00"))
+        except ValueError:
+            return False
+        if created.tzinfo is None:
+            return False
+        return start_dt <= created <= end_dt
 
     async def _chunk(chunk: list[tuple[str, str]]) -> int:
         cmds = {
@@ -754,7 +770,7 @@ async def _count_comments(
         n = 0
         for items in res.values():
             if isinstance(items, list):
-                n += sum(1 for c in items if str(c.get("AUTHOR_ID")) == uid)
+                n += sum(1 for c in items if _in_window(c))
         return n
 
     chunks = [entities[i:i + 50] for i in range(0, len(entities), 50)]
