@@ -252,20 +252,6 @@ async def collect_user_activity(
         t = type_names.get(int(it.get("TYPE_ID", 0)), f"type{it.get('TYPE_ID')}")
         activity.activity_types[t] = activity.activity_types.get(t, 0) + 1
 
-    # Комментарии на ленте CRM (timeline)
-    activity.comments_count = await _list_total(
-        bitrix, "crm.timeline.comment.list",
-        {
-            "filter": {
-                ">=CREATED": day_start,
-                "<=CREATED": day_end,
-                "AUTHOR_ID": user_id,
-            },
-            "select": ["ID"],
-        },
-        activity.errors,
-    )
-
     # Сделки модифицированы за период (только разрешённые воронки — без «Счетов 1С»)
     modified_deals = await _list_all(
         bitrix, "crm.deal.list",
@@ -363,7 +349,8 @@ async def collect_user_activity(
 
     # Активные лиды — все где статус НЕ "успех" (S=CONVERTED) и НЕ "отказ" (F=JUNK/Дубль/Дорого/...)
     # Bitrix хранит семантику статуса в STATUS_SEMANTIC_ID: NULL=в работе, S=success, F=fail.
-    activity.leads_active = await _list_total(
+    # _list_all, а не _list_total: ID активных лидов нужны ниже для счёта комментариев.
+    open_leads = await _list_all(
         bitrix, "crm.lead.list",
         {
             "filter": {
@@ -374,6 +361,7 @@ async def collect_user_activity(
         },
         activity.errors,
     )
+    activity.leads_active = len(open_leads)
 
     # План/факт — WON за календарный месяц
     tz = ZoneInfo(tz_name)
@@ -433,6 +421,43 @@ async def collect_user_activity(
         activity.stage_changes = await _count_stage_changes(
             bitrix, list(deal_ids), day_start, day_end,
         )
+
+    # Комментарии на ленте CRM (timeline). `crm.timeline.comment.list` БЕЗ ENTITY_ID
+    # молча отдаёт пусто (проверено на проде 2026-10-14: фильтр AUTHOR_ID + CREATED →
+    # total=0 при живых комментах; список в ENTITY_ID тоже не работает) → N+1 по
+    # сущностям, упакованный в batch по 50. Набор сущностей: открытые сделки менеджера
+    # ВО ВСЕХ воронках (комментируют и вне whitelist'а), сделки, менявшиеся за период,
+    # активные лиды и лиды, созданные за период. Комментарий НЕ двигает DATE_MODIFY
+    # сделки — поэтому нельзя ограничиться modified_deals.
+    comment_entities: dict[tuple[str, str], None] = {}
+    for d in modified_deals + active_deals:
+        if d.get("ID"):
+            comment_entities[("deal", str(d["ID"]))] = None
+    all_open_deals = await _list_all(
+        bitrix, "crm.deal.list",
+        {"filter": {"ASSIGNED_BY_ID": user_id, "CLOSED": "N"}, "select": ["ID"]},
+        activity.errors,
+    )
+    touched_deals = await _list_all(
+        bitrix, "crm.deal.list",
+        {
+            "filter": {
+                "ASSIGNED_BY_ID": user_id,
+                ">=DATE_MODIFY": day_start, "<=DATE_MODIFY": day_end,
+            },
+            "select": ["ID"],
+        },
+        activity.errors,
+    )
+    for d in all_open_deals + touched_deals:
+        if d.get("ID"):
+            comment_entities[("deal", str(d["ID"]))] = None
+    for x in open_leads + leads:
+        if x.get("ID"):
+            comment_entities[("lead", str(x["ID"]))] = None
+    activity.comments_count = await _count_comments(
+        bitrix, user_id, list(comment_entities), day_start, day_end,
+    )
 
     # Звонки voximplant — может не быть включено
     calls_resp = await _safe_call(
@@ -684,6 +709,62 @@ def build_transcripts_bundle(activities: list[DailySalesActivity]) -> str:
             out.append("---")
             out.append("")
     return "\n".join(out)
+
+
+async def _count_comments(
+    bitrix, user_id: int, entities: list[tuple[str, str]], day_start: str, day_end: str,
+) -> int:
+    """Сколько комментариев в ленте CRM менеджер написал за период по указанным
+    сущностям [("deal", id), ("lead", id), ...].
+
+    `crm.timeline.comment.list` работает только с ENTITY_TYPE+ENTITY_ID (без них —
+    пустой ответ без ошибки), поэтому один вызов на сущность, упакованные в batch
+    по 50 (один HTTP-запрос). Фильтр AUTHOR_ID и CREATED уходит в Bitrix, автор
+    дополнительно перепроверяется в Python. Ошибка батча → его сущности не считаются
+    (fail-open, как у stagehistory).
+    """
+    if not entities:
+        return 0
+    sem = asyncio.Semaphore(3)
+    uid = str(user_id)
+
+    async def _chunk(chunk: list[tuple[str, str]]) -> int:
+        cmds = {
+            f"c{i}": (
+                "crm.timeline.comment.list",
+                {
+                    "filter": {
+                        "ENTITY_TYPE": etype,
+                        "ENTITY_ID": eid,
+                        "AUTHOR_ID": user_id,
+                        ">=CREATED": day_start,
+                        "<=CREATED": day_end,
+                    },
+                    "select": ["ID", "AUTHOR_ID", "CREATED"],
+                },
+            )
+            for i, (etype, eid) in enumerate(chunk)
+        }
+        async with sem:
+            try:
+                res = await bitrix._batch_request(cmds)
+            except Exception as e:
+                logger.warning("timeline.comment batch (%d entities) failed: %s", len(chunk), e)
+                return 0
+        n = 0
+        for items in res.values():
+            if isinstance(items, list):
+                n += sum(1 for c in items if str(c.get("AUTHOR_ID")) == uid)
+        return n
+
+    chunks = [entities[i:i + 50] for i in range(0, len(entities), 50)]
+    counts = await asyncio.gather(*[_chunk(c) for c in chunks])
+    total = sum(counts)
+    logger.info(
+        "timeline comments: %d by user %s across %d entities (%s..%s)",
+        total, user_id, len(entities), day_start[:10], day_end[:10],
+    )
+    return total
 
 
 async def _count_stage_changes(
