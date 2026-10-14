@@ -2,12 +2,14 @@
 
 User flow:
   1. Press "🎓 Сократ" → enter FSM waiting_for_url.
-  2. Send a URL (Yandex.Disk public link or direct download URL).
-  3. Bot downloads → ffmpeg → transcribe → review → brief.
+  2. Send a URL (Yandex.Disk / Google Drive / direct download URL — видео ИЛИ
+     аудио, mp3 в том числе) или аудиофайл прямо в чат (mp3/m4a/ogg/voice,
+     ≤ 20 MB — это лимит Telegram Bot API на скачивание ботом).
+  3. Bot downloads → ffmpeg (-vn, любой контейнер → mono 16 kHz opus) →
+     transcribe → review → brief. Формат источника пайплайну безразличен.
   4. Three .md files are attached to the chat.
 
-Telegram Bot API caps uploads at 20 MB, so direct file uploads are not
-supported — the recording MUST be shared via a link.
+Видео крупнее 20 MB напрямую не принимается — только ссылкой.
 
 Open to every authorised user (no allow-list). Per-user concurrency
 lock prevents the same user from stacking pipelines.
@@ -70,31 +72,94 @@ class _StageAbort(Exception):
 # ── Handlers ──────────────────────────────────────────────────
 
 
+# Telegram Bot API отдаёт ботам файлы только до 20 MB (getFile). Крупнее — только ссылкой.
+TELEGRAM_BOT_FILE_LIMIT = 20 * 1024 * 1024
+
+_HINT_SOURCES = (
+    "Пришли ссылку на запись (Яндекс.Диск / Google Drive / прямой URL — видео или "
+    "mp3) либо аудиофайл прямо сюда (mp3/m4a/ogg/голосовое до 20 МБ)."
+)
+
+
 @router.message(Socrates.waiting_for_url, F.text)
 async def handle_meeting_url(
     message: Message, state: FSMContext, openrouter, ai_client,
 ):
     url = (message.text or "").strip()
     if not URL_RE.match(url):
+        await message.reply(_HINT_SOURCES)
+        return
+    logger.info("*** SOCRATES: url=%s from user=%s", url[:120], message.from_user.id)
+
+    async def _fetch(dest: Path) -> int:
+        return await download_meeting(url, dest)
+
+    await _run(message, state, openrouter, ai_client,
+               source_name=_source_name_from_url(url), fetch=_fetch)
+
+
+@router.message(
+    Socrates.waiting_for_url,
+    F.audio | F.voice | F.video | F.video_note | F.document,
+)
+async def handle_meeting_file(
+    message: Message, state: FSMContext, openrouter, ai_client,
+):
+    """Аудио/видео присланное файлом (≤ 20 MB). mp3 через Telegram-«музыку» (F.audio),
+    голосовое (F.voice), документ с audio/* или video/* mime."""
+    media = (
+        message.audio or message.voice or message.video
+        or message.video_note or message.document
+    )
+    mime = (getattr(media, "mime_type", None) or "").lower()
+    if message.document and not mime.startswith(("audio/", "video/")):
+        await message.reply("Это не аудио и не видео. " + _HINT_SOURCES)
+        return
+    size = getattr(media, "file_size", None) or 0
+    if size > TELEGRAM_BOT_FILE_LIMIT:
         await message.reply(
-            "Пришли ссылку на запись (http(s)://...). "
-            "Yandex.Диск / Telemost или прямой URL."
+            f"Файл {size / (1024 * 1024):.0f} МБ — Telegram отдаёт ботам файлы только "
+            "до 20 МБ. Залей на Яндекс.Диск / Google Drive и пришли ссылку.",
         )
         return
+    source_name = (
+        getattr(media, "file_name", None)
+        or ("voice.ogg" if message.voice else f"telegram_{media.file_unique_id}")
+    )
+    logger.info(
+        "*** SOCRATES: file=%s mime=%s size=%s from user=%s",
+        source_name, mime or "?", size, message.from_user.id,
+    )
 
+    async def _fetch(dest: Path) -> int:
+        await message.bot.download(media, destination=str(dest))
+        return dest.stat().st_size
+
+    await _run(message, state, openrouter, ai_client, source_name=source_name, fetch=_fetch)
+
+
+@router.message(Socrates.waiting_for_url)
+async def handle_meeting_other(message: Message):
+    await message.reply(_HINT_SOURCES)
+
+
+async def _run(
+    message: Message, state: FSMContext, openrouter, ai_client, *,
+    source_name: str, fetch,
+) -> None:
+    """Общий прогон для ссылки и для файла. `fetch(dest) -> bytes` кладёт источник
+    в dest (скачивание по URL либо bot.download)."""
     user_lock = await _get_user_lock(message.from_user.id)
     if user_lock.locked():
         await state.clear()
         await message.reply(
             "⏳ Уже обрабатываю твою предыдущую запись. Дождись окончания "
-            "и пришли следующую ссылку.",
+            "и пришли следующую.",
             reply_markup=MENU_KB,
         )
         return
 
     await state.clear()
-    logger.info("*** SOCRATES: url=%s from user=%s", url[:120], message.from_user.id)
-
     async with user_lock:
         wait_msg = await message.reply("📥 Скачиваю запись...")
         tmpdir = Path(tempfile.mkdtemp(prefix="socrates_"))
@@ -102,12 +167,12 @@ async def handle_meeting_url(
         ogg_path = tmpdir / "audio.ogg"
 
         try:
-            size_mb = await _download_stage(url, raw_path, wait_msg)
+            size_mb = await _download_stage(fetch, raw_path, wait_msg)
             duration_sec = await _convert_and_probe_stage(
                 raw_path, ogg_path, size_mb, wait_msg,
             )
             artifacts = await _run_pipeline_stage(
-                ogg_path, duration_sec, url, openrouter, ai_client, wait_msg,
+                ogg_path, duration_sec, source_name, openrouter, ai_client, wait_msg,
             )
             await _deliver_artifacts(message, wait_msg, artifacts)
         except _StageAbort:
@@ -117,23 +182,19 @@ async def handle_meeting_url(
             shutil.rmtree(tmpdir, ignore_errors=True)
 
 
-@router.message(Socrates.waiting_for_url)
-async def handle_meeting_not_text(message: Message):
-    await message.reply(
-        "Пришли ссылку на запись (текстовым сообщением). "
-        "Файлы-видео напрямую не принимаю — Telegram режет upload на 20 МБ."
-    )
-
-
 # ── Stage helpers ─────────────────────────────────────────────
 
 
-async def _download_stage(url: str, raw_path: Path, wait_msg: Message) -> float:
-    """Stage 0a. Returns downloaded size in MiB. Aborts on failure."""
+async def _download_stage(fetch, raw_path: Path, wait_msg: Message) -> float:
+    """Stage 0a. `fetch(dest) -> bytes`. Returns downloaded size in MiB. Aborts on failure."""
     try:
-        size_bytes = await download_meeting(url, raw_path)
+        size_bytes = await fetch(raw_path)
     except DownloadError as e:
         await _abort(wait_msg, f"❌ Не смог скачать: {e}")
+    except Exception as e:
+        # bot.download: «file is too big» и прочие TelegramBadRequest — без внутренностей.
+        logger.error("socrates fetch failed: %s", e, exc_info=True)
+        await _abort(wait_msg, "❌ Не смог получить файл. Попробуй ссылкой на Яндекс.Диск / Google Drive.")
     size_mb = size_bytes / (1024 * 1024)
     await _safe_edit(wait_msg, f"🎚 Скачано {size_mb:.1f} МБ. Проверяю длительность...")
     return size_mb
@@ -153,6 +214,7 @@ async def _convert_and_probe_stage(
         logger.warning("probe_duration on raw file failed: %s — will retry on ogg", e)
         duration_sec = 0.0
 
+    duration_min = 0.0  # остаётся 0, если оба probe упали (раньше — UnboundLocalError ниже)
     if duration_sec > 0:
         await _reject_if_too_long(duration_sec, wait_msg)
 
@@ -195,7 +257,7 @@ async def _convert_and_probe_stage(
 
 
 async def _run_pipeline_stage(
-    ogg_path: Path, duration_sec: float, url: str, openrouter, ai_client,
+    ogg_path: Path, duration_sec: float, source_name: str, openrouter, ai_client,
     wait_msg: Message,
 ):
     """Stages 1-3. Returns MeetingArtifacts. Aborts on failure."""
@@ -208,7 +270,7 @@ async def _run_pipeline_stage(
             ogg_path,
             openrouter=openrouter,
             ai_client=ai_client,
-            source_name=_source_name_from_url(url),
+            source_name=source_name,
             duration_sec=duration_sec,
             on_progress=on_progress,
         )
