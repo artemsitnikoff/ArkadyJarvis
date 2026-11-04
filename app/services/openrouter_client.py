@@ -207,6 +207,7 @@ class OpenRouterClient:
             "model": "google/gemini-3-pro-image-preview",
             "messages": [{"role": "user", "content": content}],
             "modalities": ["image", "text"],
+            "usage": {"include": True},
         }
         resp = await self._client.post(BASE_URL, json=payload)
         if resp.status_code >= 400:
@@ -218,6 +219,12 @@ class OpenRouterClient:
             logger.error("OpenRouter HTTP %d: %s", resp.status_code, msg)
             raise ValueError(f"OpenRouter {resp.status_code}: {msg}")
         data = resp.json()
+        _u = data.get("usage") or {}
+        logger.info(
+            "OpenRouter image ← %s: in=%s out=%s cost=$%.4f",
+            payload["model"], _u.get("prompt_tokens"), _u.get("completion_tokens"),
+            float(_u.get("cost") or 0.0),
+        )
 
         for choice in data.get("choices", []):
             message = choice.get("message", {})
