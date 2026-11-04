@@ -576,7 +576,7 @@ schema_version (version INTEGER NOT NULL)
 - `RECRUITER_COMPANY` (default `Digital Clouds`), `RECRUITER_NAME` — для intro в первом сообщении кандидату
 
 ### Sales analytics
-- `SALES_REPORT_BITRIX_USER_IDS` — Bitrix IDs продажников через запятую
+- `SALES_REPORT_BITRIX_USER_IDS` — Bitrix IDs продажников через запятую. На проде с 2026-11-04: `697,4245,4363` (Карачев, Санин, Дудин); Евенко (3925) уволен — убран
 - `SALES_REPORT_RECIPIENTS` — TG IDs кому слать (можно группы с минусом). **Оба обязательны, иначе джоб не регистрируется.**
 - `SALES_REPORT_MONTHLY_PLAN` (default `220000` ₽)
 - `SALES_REPORT_DEAL_CATEGORIES` (default `27,31,33`) — какие воронки учитывать
