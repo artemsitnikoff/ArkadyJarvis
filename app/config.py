@@ -81,8 +81,7 @@ class Settings(BaseSettings):
     openrouter_web_search: bool = True
     openrouter_max_tokens: int = 16384
     # Генерация картинок (лягушка, плакат, «Картинка»). nano-banana-2.1 (2026-10): ~$0.04/картинка
-    # против ~$0.14 у gemini-3-pro-image-preview, русский текст на плакате без ошибок; preview
-    # на стиле «советский плакат» дважды вернул текст вместо картинки.
+    # против ~$0.14 у gemini-3-pro-image-preview, кириллица на картинке без ошибок.
     openrouter_image_model: str = "google/gemini-nano-banana-2.1"
 
     # Claude CLI (legacy backend)
