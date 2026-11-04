@@ -39,7 +39,7 @@ def _read_tokens_file() -> str | None:
 
 
 @router.get("/health")
-async def health():
+async def health(request: Request = None):
     checks: dict = {}
 
     # DB check
@@ -66,7 +66,17 @@ async def health():
         checks["bitrix_token"] = f"error: {e}"
 
     ok = all(v == "ok" for v in checks.values())
-    return {"status": "ok" if ok else "degraded", "checks": checks}
+    body: dict = {"status": "ok" if ok else "degraded", "checks": checks}
+    # AI-бэкенд и накопленная стоимость OpenRouter с момента старта процесса —
+    # отдельным ключом, чтобы не влиять на status.
+    ai_client = getattr(request.app.state, "ai_client", None) if request else None
+    if ai_client is not None:
+        body["ai"] = {
+            "backend": ai_client.backend,
+            "model": settings.openrouter_text_model,
+            **{k: (round(v, 4) if isinstance(v, float) else v) for k, v in ai_client.stats.items()},
+        }
+    return body
 
 
 # ── Webhook: Bitrix24 → Telegram ────────────────────────────────────────────

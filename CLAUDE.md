@@ -6,8 +6,8 @@ Multi-user Telegram bot (BotFather, NOT userbot) для команды Digital C
 
 - **Python 3.11+**, aiogram v3 (Telegram Bot API), FastAPI + Uvicorn
 - **AI**:
-  - Claude CLI (subscription, `--print` subprocess) — основной путь для текстовых задач. Модель по умолчанию — CLI-дефолт (Sonnet), т.к. `CLAUDE_MODEL` пуст. Haiku для дешёвых классификаторов передаётся **явно** per-call (`model="claude-haiku-4-5-20251001"`).
-  - OpenRouter — аудио/видео (Gemini 3 Pro Image для генерации, Gemini 2.5 Pro для транскрипции voice / mp3 со звонков) **и** текстовый `complete_text()` для массовых классификаторов мимо subscription-квоты (Хадсон, `anthropic/claude-haiku-4.5`, 150+ вызовов на прогон).
+  - **OpenRouter — всё.** Текстовые задачи (`AIClient`, с v4.43.0): Anthropic-модели по токенам, дефолт `OPENROUTER_TEXT_MODEL=anthropic/claude-sonnet-5` ($2/M in, $10/M out), классификаторы явно `model="claude-haiku-4-5-20251001"` → `OPENROUTER_HAIKU_MODEL=anthropic/claude-haiku-4.5`. Аудио/видео: Gemini 3 Pro Image (генерация), Gemini 2.5 Pro (транскрипция voice / mp3, OCR визиток). `complete_text()` — Хадсон (150+ вызовов Haiku на прогон).
+  - Claude CLI (`claude --print` по подписке) — **legacy-бэкенд `AI_BACKEND=claude_cli`**, код и установка в Dockerfile оставлены для отката. 2026-11-04 Anthropic отключил подписку для автоматизации («Your organization has disabled Claude subscription access for Claude Code · Use an Anthropic API key instead») — все `complete()` падали с exit 1, отсюда миграция.
 - **Userbot**: Telethon (StringSession) для чтения истории каналов (Zabbix backfill), отправки сообщений кандидатам с личного аккаунта рекрутёра
 - **Integrations**: Bitrix24 REST + Bitrix calendar-sharing короткие ссылки; Jira REST; Potok.io ATS (REST API + frontend `/client_api/*` через 3 статических заголовка DeviseTokenAuth — `access-token`/`client`/`uid` — для HH-messaging); OpenClaw (browser RPA); DaData (карточки ЮЛ по ИНН, бесплатный API key); ГИР БО ФНС (`bo.nalog.gov.ru` — бухотчётность, без авторизации); SBIS/Saby — рассматривали для разведки, отказались (нужна платная VOK-лицензия)
 - Uvicorn owns the event loop; aiogram polling запускается как `asyncio.create_task()` в FastAPI lifespan
@@ -63,9 +63,10 @@ app/
       group.py             # on_bot_added/removed + BotMentionFilter (@упоминание → MENU_KB)
       buffer.py            # Catch-all (LAST!) — буферизация group messages (кроме съеденных group.py/FSM)
   services/
-    ai_client.py           # AIClient — Claude CLI wrapper. Параметры: prompt, timeout, system_prompt,
-                           #   allowed_tools, model
-    claude_token.py        # Два режима: long-lived (ранний return) и legacy auto-refresh. См. «Claude token»
+    ai_client.py           # AIClient — текст через OpenRouter (default) или legacy Claude CLI
+                           #   (AI_BACKEND). complete(prompt, timeout, system_prompt, allowed_tools,
+                           #   model); логирует cost per call, stats → /api/health
+    claude_token.py        # Только для AI_BACKEND=claude_cli. Два режима: long-lived и auto-refresh
     bitrix_client/         # BitrixClient — пакет с миксинами
       __init__.py           # композиция миксинов
       _base.py              # _BitrixBase — OAuth file-based, httpx(timeout=30), auto-refresh, _batch_request
@@ -176,18 +177,10 @@ scripts/
 
 ### Architecture
 
-- **AIClient** (`services/ai_client.py`) — обёртка над `claude --print --output-format text`. Параметры:
-  - `prompt` — текст
-  - `timeout` (default 120)
-  - `system_prompt` — добавляется через `--append-system-prompt` (только AskAI его использует)
-  - `allowed_tools` — comma-separated **whitelist**, уходит в `--tools` verbatim
-  - `model` — override `settings.claude_model` per-call. `claude_model` по умолчанию `""` → флаг `--model` не добавляется → CLI-дефолт. Классификаторы передают `"claude-haiku-4-5-20251001"` явно.
-  - **Security**: `--tools <allowed_tools or "">` — **whitelist, НЕ deny-list**. Пустая строка = пустой whitelist = все встроенные тулзы выключены (prompt-only). Это защита от RCE: был critical bug, когда пользователь писал «сделай cd, ls» и CLI реально запускал шелл. Убрать флаг = вернуть дыру.
-  - **Почему whitelist, а не `--disallowed-tools`** (v4.33.0, 43dadae): deny-list ломался целиком, когда CLI переименовывал/удалял тулзу — `MultiEdit` → exit 1 «matches no known tool» → падали ВСЕ AI-вызовы. И он молча пропускал новые тулзы. Не возвращать.
-  - **Security**: subprocess запускается с `cwd="/tmp"` — иначе CLI подхватывает project CLAUDE.md как system context и считает все вопросы «вне темы».
-  - `env.pop("CLAUDECODE")` — чтобы дочерний CLI не считал себя внутри сессии Claude Code.
-  - ⚠️ **`--tools` даёт доступность, но НЕ разрешение** — WebSearch/WebFetch в проде не выполняются. См. Known Issues.
-- **Claude token** (`services/claude_token.py`) — **два режима, переключатель = наличие `CLAUDE_REFRESH_TOKEN`**:
+- **AIClient** (`services/ai_client.py`) — текстовые вызовы, **два бэкенда** по `AI_BACKEND` (default `openrouter`). Интерфейс один: `complete(prompt, timeout=120, system_prompt=None, allowed_tools=None, model=None)` → str; вызывающий код при миграции не менялся.
+  - **OpenRouter** (`_call_openrouter`): `POST /chat/completions`, `system_prompt` → system-message, `max_tokens=OPENROUTER_MAX_TOKENS` (16384), `usage.include=true` → в ответе `usage.cost`. Модель: `resolve_openrouter_model()` — пусто → `OPENROUTER_TEXT_MODEL`; содержит `/` → как есть; содержит «haiku» → `OPENROUTER_HAIKU_MODEL`; иное CLI-имя → дефолт + warning. `allowed_tools` с WebSearch/WebFetch → `plugins=[{"id":"web"}]` (поиск провайдера, ~$0.01/поиск + результаты попадают в prompt ≈ +10k токенов), выключается `OPENROUTER_WEB_SEARCH=false`. Повтор один раз через 3с на timeout/transport/429/5xx; timeout → `TimeoutError("AI не ответил за Nс")`, HTTP-ошибка/пустой ответ → `RuntimeError`. **Каждый вызов логирует** `in/out tokens, cost, finish_reason` + накопительно `ai_client.stats` (calls/errors/tokens/cost_usd с момента старта процесса) — видно в `GET /api/health` → ключ `ai` (вне `checks`, на `status` не влияет).
+  - **Claude CLI** (`_call_cli`, legacy): `claude --print --output-format text --tools <whitelist or "">`, `--append-system-prompt`, `--model`, `cwd=/tmp`, `env.pop("CLAUDECODE")`, `ensure_fresh_token()` перед вызовом. `init_token_file()` в lifespan зовётся только при `AI_BACKEND=claude_cli`. Правила эпохи CLI (whitelist, не deny-list; cwd=/tmp; `--tools` даёт доступность без разрешения) — в истории git v4.33.0/43dadae и ниже в Known Issues; актуальны только при откате.
+- **Claude token** (`services/claude_token.py`) — **только для `AI_BACKEND=claude_cli`**, при OpenRouter не читается и не пишется. Два режима, переключатель = наличие `CLAUDE_REFRESH_TOKEN`:
   - **Long-lived** (рекомендуемый, v4.34.0/c27123a): `CLAUDE_CODE_OAUTH_TOKEN` есть, `CLAUDE_REFRESH_TOKEN` **пуст/отсутствует** → `ensure_fresh_token()` делает ранний return, файл `data/.claude_token.json` не читается и не пишется. Токен из `claude setup-token` (~1 год). WARNING «token will not auto-refresh» на старте — ожидаемое поведение, не инцидент.
   - **Legacy auto-refresh**: `CLAUDE_REFRESH_TOKEN` задан → чтение/запись `data/.claude_token.json`, `asyncio.Lock`, single-use refresh, `_sync_cli_credentials()` пишет `~/.claude/credentials.json`.
   - Чтобы включить long-lived — **убрать** `CLAUDE_REFRESH_TOKEN` из .env (не добавить флаг). Читается `os.environ` напрямую → нужен `up -d --force-recreate`.
@@ -552,7 +545,12 @@ schema_version (version INTEGER NOT NULL)
 - `BOT_TOKEN` — Telegram BotFather
 
 ### AI
-- `CLAUDE_CODE_OAUTH_TOKEN` — **обязателен**. Long-lived (из `claude setup-token`, ~1 год) — рекомендуемый режим.
+- `AI_BACKEND` (default `openrouter`) — `openrouter` | `claude_cli`. Переключение требует `up -d --force-recreate`.
+- `OPENROUTER_TEXT_MODEL` (default `anthropic/claude-sonnet-5`) — дефолтная модель `AIClient`. Цены OpenRouter на 2026-11: Sonnet 5 / 5.5 $2/$10 за M in/out, Opus 5 / 4.8 $5/$25, Haiku 4.5 $1/$5, Haiku 5.5 $0.1/$0.5. Дефолт CLI-эпохи на проде был `claude-opus-4-8`.
+- `OPENROUTER_HAIKU_MODEL` (default `anthropic/claude-haiku-4.5`) — куда идут явные haiku-вызовы (Штирлиц intent, классификаторы).
+- `OPENROUTER_WEB_SEARCH` (default `true`) — web-плагин для `allowed_tools=WebSearch/WebFetch`.
+- `OPENROUTER_MAX_TOKENS` (default `16384`).
+- `CLAUDE_CODE_OAUTH_TOKEN` — нужен **только для `AI_BACKEND=claude_cli`**. Long-lived (из `claude setup-token`, ~1 год).
 - `CLAUDE_REFRESH_TOKEN` — **наличие включает legacy auto-refresh**. Для long-lived убрать/оставить пустым.
 - `CLAUDE_CLI_PATH` (default `claude`)
 - `CLAUDE_MODEL` — опц. override. По умолчанию `""` → флаг `--model` не передаётся → CLI-дефолт (Sonnet).
@@ -643,9 +641,9 @@ schema_version (version INTEGER NOT NULL)
 - **AIClient injection** — сервисы получают `ai_client` как параметр, не создают свой
 - **DB user в callbacks** — использовать middleware-инжекцию `db_user`, не fetcher. В message-хендлерах — только `db_user: DbUser | None = None`.
 - **Prompts in `prompts/`** — добавил `.md` → `load_prompt(name)`. Placeholders типа `{data_json}` / `{dc_context}` подставляет caller через `.replace()`. `load_prompt` с точкой в имени пробует только точный путь (fallback на .md/.txt не работает).
-- **CLI tools security** — `allowed_tools` = **whitelist** в `--tools`. Пробрасывать ТОЛЬКО read-only (WebSearch/WebFetch). НИКОГДА Bash/Read/Write/Edit — это RCE. Не возвращать deny-list.
-- **CLI cwd=/tmp** — иначе Claude CLI подхватит project CLAUDE.md как system context.
-- **Haiku для дешёвых классификаторов** — передавать **явно**: Claude CLI → `model="claude-haiku-4-5-20251001"` (полный ID, alias `haiku` может не разрешиться); OpenRouter → `anthropic/claude-haiku-4.5`. Без явного `model=` уйдёт CLI-дефолт (Sonnet).
+- **`allowed_tools`** — только `WebSearch`/`WebFetch` (на OpenRouter = web-плагин, платный ~$0.01/поиск + ~10k токенов результатов в prompt; на legacy CLI = whitelist `--tools`). НИКОГДА Bash/Read/Write/Edit — на CLI это RCE.
+- **CLI cwd=/tmp** (legacy) — иначе Claude CLI подхватит project CLAUDE.md как system context.
+- **Haiku для дешёвых классификаторов** — передавать **явно** `model="claude-haiku-4-5-20251001"` (AIClient маппит на `OPENROUTER_HAIKU_MODEL`; на legacy CLI это полный ID, alias `haiku` может не разрешиться). `complete_text()` у OpenRouterClient принимает OpenRouter-ID `anthropic/claude-haiku-4.5`. Без явного `model=` уйдёт `OPENROUTER_TEXT_MODEL` (Sonnet 5).
 - **Bitrix stage filtering** — для лидов `STATUS_SEMANTIC_ID` (`S`/`F`/null). Для сделок — `CATEGORY_ID` (whitelist воронок) + опц. NAME pattern на стадиях. `CLOSED=N` недостаточно — есть кастомные «парковочные» стадии с семантикой `P` но фактически не активные. **Для WON — `STAGE_SEMANTIC_ID=S`, а не суффикс `STAGE_ID`.**
 - **N+1 в API** — для `crm.stagehistory.list` и подобных нет фильтра по user, нужен N+1 fetch по `OWNER_ID=deal_id`. Параллелить через `asyncio.Semaphore(5)`.
 - **callback_data — 64 БАЙТА**, не символа. Кириллица = 2 байта/символ.
@@ -667,14 +665,14 @@ Docker: `docker compose up --build` (port 8002), logs: `docker compose logs -f b
 
 ### Подтверждённые баги (не «так задумано»)
 
-- 🔴 **WebSearch/WebFetch у Claude CLI фактически НЕ выполняются.** `--tools` даёт инструменту *доступность*, но не *разрешение* — для разрешения нужен `--allowedTools`, которого в репо нет. Плюс `cwd="/tmp"` отбрасывает проектный allow-list. Воспроизведено на CLI 2.1.210: из /tmp с прод-argv → «WebSearch отклонён (требуется разрешение)»; с `--allowedTools` → работает; из корня проекта → работает. **Это НЕ регрессия v4.33.0** — из /tmp поиск не работал никогда, argv эпохи `--disallowed-tools` отклоняется так же. Фикс — добавить `--allowedTools` рядом с `--tools`, не откатывать флаг. Радиус: Штирлиц (для `kind=person` карточка целиком из памяти модели, деградация тихая — промпт велит писать «свежих публикаций не нашёл»), `b24_lead_from_xlsx.py`, `retail_lead_from_xlsx.py`.
+- ✅ *(закрыто v4.43.0 переходом на OpenRouter: `allowed_tools` → web-плагин, Штирлиц реально ищет; актуально только при откате на `AI_BACKEND=claude_cli`)* **WebSearch/WebFetch у Claude CLI фактически НЕ выполняются.** `--tools` даёт инструменту *доступность*, но не *разрешение* — для разрешения нужен `--allowedTools`, которого в репо нет. Плюс `cwd="/tmp"` отбрасывает проектный allow-list. Воспроизведено на CLI 2.1.210: из /tmp с прод-argv → «WebSearch отклонён (требуется разрешение)»; с `--allowedTools` → работает; из корня проекта → работает. **Это НЕ регрессия v4.33.0** — из /tmp поиск не работал никогда, argv эпохи `--disallowed-tools` отклоняется так же. Фикс — добавить `--allowedTools` рядом с `--tools`, не откатывать флаг. Радиус: Штирлиц (для `kind=person` карточка целиком из памяти модели, деградация тихая — промпт велит писать «свежих публикаций не нашёл»), `b24_lead_from_xlsx.py`, `retail_lead_from_xlsx.py`.
 - 🔴 **Zabbix severity сравнивается регистрозависимо** — `ESCALATING_SEVERITIES = {"Warning", "Average", "High", "Disaster"}` матчится через `severity not in ...` **без нормализации регистра** (`zabbix_monitor.py:19,101`), скип уходит в `logger.debug`. Если шаблон отдаёт «warning» строчными — проблема не эскалируется вообще и молча. **Фактический регистр от нашего шаблона в репозитории не зафиксирован** (фикстур нет, таблица `zabbix_problems` локально пуста) — проверять на проде: `select distinct severity from zabbix_problems`. Дешёвая страховка независимо от ответа — `.casefold()` с обеих сторон. Плюс `Severity:\s*(\S+)` берёт только первое слово: «Not classified» → «Not» (это уже баг безусловно).
 - 🟡 **Звонки (voximplant) — единственная метрика без пагинации**: `len(calls_raw)` по 50 строкам. Каскад на `calls_count`, `calls_total_seconds`, `calls_by_direction` и выборку транскрипций (25 длиннейших из первых 50, а не из всех). Коммит e4b8b9e («фикс всегда 50») блок voximplant не тронул.
 - 🟡 **Хадсон: двойной вычет нормы.** `_count_absence_workdays` считает все Пн-Пт отпуска не исключая праздники, а `build_reports` вычитает праздники и отлучки последовательно из одной базы. Праздничный Пн внутри отпуска Пн-Ср: 32−8−24 = 0 → ложный `on_leave=True`, хотя человек работал Чт-Пт (корректно 32−8−16=8).
 - 🟡 **`get_absences` фильтрует вложенность, а не пересечение** (`>=DATE_ACTIVE_FROM: since` + `<=DATE_ACTIVE_TO: until`), тогда как downstream клампит под overlap → переходящий отпуск теряется. Маскируется тем, что пустой ответ проваливается в календарный fallback. Фикс: `<=DATE_ACTIVE_FROM: until`, `>=DATE_ACTIVE_TO: since`.
 - 🟡 **`deals_won` за период и месячный факт считаются по-разному**: период — `STAGE_ID.endswith("WON") and CLOSED=="Y"` по окну `DATE_MODIFY`; месяц — `STAGE_SEMANTIC_ID="S"` по `CLOSEDATE`. В одном сообщении рядом стоят «🏆 Закрыто WON за период» и «Факт», посчитанные по разным правилам. Кастомная успешная стадия без суффикса `WON` попадёт в факт и не попадёт в `deals_won`.
 - 🟡 **`_attendee_picker` callback_data**: `pick:{id}:{name[:40]}` — срез по символам, лимит Telegram 64 **байта**, кириллица 2 байта/символ → 40 символов = 80 байт → `BUTTON_DATA_INVALID`, вся клавиатура не отрисуется.
-- 🟡 **Rejection-классификатор идёт на Sonnet, не на Haiku** — `classify_rejection_intent` зовёт `ai_client.complete(prompt, timeout=30)` **без `model=`**. Вызывается на каждое входящее сообщение кандидата.
+- 🟡 **Rejection-классификатор идёт на Sonnet, не на Haiku** — `classify_rejection_intent` зовёт `ai_client.complete(prompt, timeout=30)` **без `model=`** → `OPENROUTER_TEXT_MODEL`. Вызывается на каждое входящее сообщение кандидата (копейки, но зачем).
 - 🟡 **Сократ: провал `split_audio` тихо откатывается** на один запрос ко всей записи (плюс ветка `if not chunks` вообще без лога) — ровно тот `provider_overloaded`, ради обхода которого v4.39.0 и делался. Пользователю уже ушёл тик «режу на N частей».
 - 🟡 **Лейблы спикеров не ремапятся между чанками**: каждый чанк — отдельное аудио для Gemini, «один голос — один номер» гарантируется только внутри куска. Реплики после 20-й минуты могут приписываться не тому человеку; «Обнаружено спикеров: N» = максимум по одному куску (4 участника по двое в чанке → покажет 2).
 - 🟡 **Отправка вопросов кандидату молча двигает стадию назад** в «Скриннинг резюме» (без `allowed_source_stages`).

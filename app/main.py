@@ -49,7 +49,8 @@ async def lifespan(app: FastAPI):
     await init_db()
     logger.info("Database ready")
 
-    init_token_file()
+    if settings.ai_backend == "claude_cli":
+        init_token_file()
 
     # Create service instances and inject into dispatcher
     ai_client = AIClient()
@@ -129,6 +130,7 @@ async def lifespan(app: FastAPI):
         logger.info("Userbot: TELETHON_SESSION not set, userbot disabled")
 
     dp["ai_client"] = ai_client
+    app.state.ai_client = ai_client  # для /api/health: бэкенд + накопленная стоимость
     dp["bitrix"] = bitrix
     dp["openrouter"] = openrouter
     dp["openclaw"] = openclaw

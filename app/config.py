@@ -62,7 +62,22 @@ class Settings(BaseSettings):
     potok_frontend_client: str = ""
     potok_frontend_uid: str = ""
 
-    # Claude CLI
+    # AI backend for text tasks (services/ai_client.AIClient):
+    #   "openrouter" (default) — Anthropic-модели через OpenRouter, оплата за токены;
+    #   "claude_cli" (legacy) — подписка Claude Code; Anthropic отключил её для
+    #   автоматизации 2026-11-04 («organization has disabled subscription access»).
+    ai_backend: str = "openrouter"
+    # OpenRouter-модель для дефолтных вызовов AIClient (в CLI-эпоху дефолт был Opus 4.8
+    # по подписке; на токенах Opus в 2.5× дороже Sonnet). Sonnet 5: $2/M in, $10/M out.
+    openrouter_text_model: str = "anthropic/claude-sonnet-5"
+    # Куда маппятся явные `model="claude-haiku-4-5-20251001"` у классификаторов.
+    openrouter_haiku_model: str = "anthropic/claude-haiku-4.5"
+    # Web-плагин OpenRouter для вызовов с allowed_tools=WebSearch/WebFetch (Штирлиц,
+    # recon-скрипты): поиск провайдера, ~$0.01/поиск. False → prompt-only, как раньше.
+    openrouter_web_search: bool = True
+    openrouter_max_tokens: int = 16384
+
+    # Claude CLI (legacy backend)
     claude_cli_path: str = "claude"
     claude_model: str = ""  # e.g. "claude-opus-4-6", empty = CLI default
     claude_oauth_client_id: str = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
