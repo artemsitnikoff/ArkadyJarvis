@@ -16,6 +16,7 @@ import logging
 from dataclasses import dataclass, field
 from datetime import date
 
+from app.config import settings
 from app.db import get_db
 from app.services.jira_worklog import WorklogEntry, fetch_worklogs
 from app.services.openrouter_client import OpenRouterClient
@@ -182,7 +183,7 @@ async def _classify_comments(
                 try:
                     resp = await openrouter.complete_text(
                         prompt,
-                        model="anthropic/claude-haiku-4.5",
+                        model=settings.openrouter_haiku_model,
                         json_mode=True,
                         timeout=60.0,
                     )

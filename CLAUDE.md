@@ -6,7 +6,7 @@ Multi-user Telegram bot (BotFather, NOT userbot) для команды Digital C
 
 - **Python 3.11+**, aiogram v3 (Telegram Bot API), FastAPI + Uvicorn
 - **AI**:
-  - **OpenRouter — всё.** Текстовые задачи (`AIClient`, с v4.43.0): Anthropic-модели по токенам, дефолт `OPENROUTER_TEXT_MODEL=anthropic/claude-sonnet-5` ($2/M in, $10/M out), классификаторы явно `model="claude-haiku-4-5-20251001"` → `OPENROUTER_HAIKU_MODEL=anthropic/claude-haiku-4.5`. Аудио/видео: Gemini 3 Pro Image (генерация), Gemini 2.5 Pro (транскрипция voice / mp3, OCR визиток). `complete_text()` — Хадсон (150+ вызовов Haiku на прогон).
+  - **OpenRouter — всё.** Текстовые задачи (`AIClient`, с v4.43.0): Anthropic-модели по токенам, дефолт `OPENROUTER_TEXT_MODEL=anthropic/claude-sonnet-5.5` ($2/M in, $10/M out), классификаторы явно `model="claude-haiku-4-5-20251001"` → `OPENROUTER_HAIKU_MODEL=anthropic/claude-haiku-5.5` ($0.1/$0.5). Аудио/vision `OPENROUTER_MODEL=google/gemini-4-argon` (транскрипция voice / mp3 с диаризацией, OCR визиток), картинки `OPENROUTER_IMAGE_MODEL=google/gemini-nano-banana-2.1` (~$0.04/шт). Выбор моделей — сравнение 2026-11-04 на реальных промптах бота, см. память `openrouter-text-migration`. `complete_text()` — Хадсон (150+ вызовов Haiku на прогон).
   - Claude CLI (`claude --print` по подписке) — **legacy-бэкенд `AI_BACKEND=claude_cli`**, код и установка в Dockerfile оставлены для отката. 2026-11-04 Anthropic отключил подписку для автоматизации («Your organization has disabled Claude subscription access for Claude Code · Use an Anthropic API key instead») — все `complete()` падали с exit 1, отсюда миграция.
 - **Userbot**: Telethon (StringSession) для чтения истории каналов (Zabbix backfill), отправки сообщений кандидатам с личного аккаунта рекрутёра
 - **Integrations**: Bitrix24 REST + Bitrix calendar-sharing короткие ссылки; Jira REST; Potok.io ATS (REST API + frontend `/client_api/*` через 3 статических заголовка DeviseTokenAuth — `access-token`/`client`/`uid` — для HH-messaging); OpenClaw (browser RPA); DaData (карточки ЮЛ по ИНН, бесплатный API key); ГИР БО ФНС (`bo.nalog.gov.ru` — бухотчётность, без авторизации); SBIS/Saby — рассматривали для разведки, отказались (нужна платная VOK-лицензия)
@@ -185,7 +185,7 @@ scripts/
   - **Legacy auto-refresh**: `CLAUDE_REFRESH_TOKEN` задан → чтение/запись `data/.claude_token.json`, `asyncio.Lock`, single-use refresh, `_sync_cli_credentials()` пишет `~/.claude/credentials.json`.
   - Чтобы включить long-lived — **убрать** `CLAUDE_REFRESH_TOKEN` из .env (не добавить флаг). Читается `os.environ` напрямую → нужен `up -d --force-recreate`.
 - **BitrixClient** — singleton, миксины (`_base`, `_users`, `_calendar`, `_crm`, `_timeman`). File-based OAuth (`data/bitrix_tokens.json`), auto-refresh. `_get_tokens` читает и парсит файл **на каждый запрос** (плюс: токен от другого процесса подхватывается сразу). `_BitrixBase.__init__` не зовёт `super().__init__()` → `__init__` в миксине не выполнится.
-- **OpenRouterClient** — singleton. `generate_image(prompt, image_b64?)`, `transcribe_voice(path, audio_format="ogg")` (mp3 для записей звонков), `complete_text(prompt, model=...)` — текстовый путь мимо subscription-квоты, `describe_image(prompt, image_b64, mime=, json_mode=True)` — vision на `settings.openrouter_model` (Gemini 2.5 Pro), OCR визиток для «Лид».
+- **OpenRouterClient** — singleton. `generate_image(prompt, image_b64?, model=)` (default `OPENROUTER_IMAGE_MODEL`, логирует cost), `transcribe_voice(path, audio_format="ogg")` (mp3 для записей звонков), `complete_text(prompt, model=...)` — текстовый путь мимо subscription-квоты, `describe_image(prompt, image_b64, mime=, json_mode=True)` — vision на `settings.openrouter_model` (Gemini 4 Argon), OCR визиток для «Лид».
 - **PotokClient** — singleton, Bearer-токен через `POTOK_API_TOKEN`. In-memory cache вопросов (`_questions_cache`) — заполняется при `push_scoring`, читается при отправке вопросов. После рестарта — парсинг событий по маркеру.
 - **PotokFrontendClient** — отдельный singleton для `/client_api/*` (HH-messaging). Auth через 3 заголовка DeviseTokenAuth (`access-token`, `client`, `uid`). Получаются один раз из браузерной сессии (DevTools → Network → любой XHR на app.potok.io). При пустых токенах **не падает** — тихо ставит `_client = None`; проверять через `is_configured`.
 - **UserbotClient** (Telethon) — `send_to_user(user_id, text)`, `resolve_phone(phone)` через `ImportContactsRequest`. Слушает `events.NewMessage(incoming=True)`. В `main.py` регистрируется callback `_on_candidate_reply` — при входящем от tg_id из `recruiter_contacts` сообщение сохраняется в Potok + классифицируется на «отказ». Если score > порог — `potok.set_applicant_active(active=False)` + audit-комментарий.
@@ -291,7 +291,7 @@ Defined в `start.py:24` — статическая константа, **без
 - **Звонки** (voximplant.statistic.get):
   - Раздельно in/out/missed/callback по `CALL_TYPE` (1/2/3/4)
   - `entity_type`/`entity_name` резолвится через `crm.lead.get|contact.get|company.get|deal.get` (cached в `_enrich_calls`, **последовательно**)
-  - **Транскрипция** (если `with_transcripts=True`): mp3 с Bitrix Disk через `disk.file.get` → Gemini 2.5 Pro `transcribe_voice(audio_format="mp3")` → Claude по `prompts/sales_call_analysis.md`. В промпт уходит `transcript[:6000]`, в `.md` — полный текст.
+  - **Транскрипция** (если `with_transcripts=True`): mp3 с Bitrix Disk через `disk.file.get` → `transcribe_voice(audio_format="mp3")` (`OPENROUTER_MODEL`) → Claude по `prompts/sales_call_analysis.md`. В промпт уходит `transcript[:6000]`, в `.md` — полный текст.
   - Параллельно sem(3), лимит max_transcripts=25 (топ по длительности). Звонки <15 сек не транскрибируются.
   - ⚠️ **Метрика без пагинации** — `len(calls_raw)` по первым 50 строкам (см. Known Issues). Формально не пагинируется и `crm.stagehistory.list` в `_count_stage_changes`, но там 50 строк = 50 переходов по ОДНОЙ сделке за период (на практике недостижимо); у звонков потолок упирается реально.
 - `collect_for_user_ids` — `asyncio.gather` **без семафора**: между менеджерами нагрузка не ограничена.
@@ -367,7 +367,7 @@ docker compose exec bot python scripts/test_sales_report.py <bitrix_user_id> [da
   - `compute_weekly_norm()` — хелпер «норма полной ставки», build_reports его не зовёт.
   - ⚠️ **Двойной вычет** праздника внутри отпуска — см. Known Issues.
   - `PART_TIME_NORMS` и `EXTRA_AUDIT_PROJECTS` матчатся **по точному ключу**. Опечатка = тихий откат на 32h или в out-of-scope.
-- Плохие комменты — **Haiku через OpenRouter** (`anthropic/claude-haiku-4.5`, не Claude CLI — 150+ вызовов на прогон сожгут квоту), классификатор `prompts/hudson_bad_comment.md` (мягкий: ≤30мин комменты «дейлик/викли» норма). Sem(5), 60с timeout + 1 повтор. **Fail-open**: после 2 неудач запись просто не попадает в `bad_comments` → счётчик тихо занижается при флапах OpenRouter.
+- Плохие комменты — **Haiku через OpenRouter** (`settings.openrouter_haiku_model`, 150+ вызовов на прогон), классификатор `prompts/hudson_bad_comment.md` (мягкий: ≤30мин комменты «дейлик/викли» норма). Sem(5), 60с timeout + 1 повтор. **Fail-open**: после 2 неудач запись просто не попадает в `bad_comments` → счётчик тихо занижается при флапах OpenRouter.
 
 **Рассылка** (`services/hudson_notifier.py`):
 - Менеджерам (DM): краткий per-dev summary (`🔴 Гусев: 32.0h/<b>17.2h</b> (внутр выше 8h)` + счётчик плохих коммов). Уходит только если менеджер есть в `users` (прошёл `/start`).
@@ -546,8 +546,9 @@ schema_version (version INTEGER NOT NULL)
 
 ### AI
 - `AI_BACKEND` (default `openrouter`) — `openrouter` | `claude_cli`. Переключение требует `up -d --force-recreate`.
-- `OPENROUTER_TEXT_MODEL` (default `anthropic/claude-sonnet-5`) — дефолтная модель `AIClient`. Цены OpenRouter на 2026-11: Sonnet 5 / 5.5 $2/$10 за M in/out, Opus 5 / 4.8 $5/$25, Haiku 4.5 $1/$5, Haiku 5.5 $0.1/$0.5. Дефолт CLI-эпохи на проде был `claude-opus-4-8`.
-- `OPENROUTER_HAIKU_MODEL` (default `anthropic/claude-haiku-4.5`) — куда идут явные haiku-вызовы (Штирлиц intent, классификаторы).
+- `OPENROUTER_TEXT_MODEL` (default `anthropic/claude-sonnet-5.5`) — дефолтная модель `AIClient`. Цены OpenRouter на 2026-11: Sonnet 5 / 5.5 $2/$10 за M in/out, Opus 5.5 $4/$20, Opus 5 / 4.8 $5/$25, Haiku 4.5 $1/$5, Haiku 5.5 $0.1/$0.5. Дефолт CLI-эпохи на проде был `claude-opus-4-8`.
+- `OPENROUTER_HAIKU_MODEL` (default `anthropic/claude-haiku-5.5`) — куда идут явные haiku-вызовы (Штирлиц intent, Хадсон bad-comment через `complete_text`).
+- `OPENROUTER_IMAGE_MODEL` (default `google/gemini-nano-banana-2.1`) — генерация картинок; `generate_image(..., model=)` переопределяет per-call.
 - `OPENROUTER_WEB_SEARCH` (default `true`) — web-плагин для `allowed_tools=WebSearch/WebFetch`.
 - `OPENROUTER_MAX_TOKENS` (default `16384`).
 - `CLAUDE_CODE_OAUTH_TOKEN` — нужен **только для `AI_BACKEND=claude_cli`**. Long-lived (из `claude setup-token`, ~1 год).
@@ -555,7 +556,7 @@ schema_version (version INTEGER NOT NULL)
 - `CLAUDE_CLI_PATH` (default `claude`)
 - `CLAUDE_MODEL` — опц. override. По умолчанию `""` → флаг `--model` не передаётся → CLI-дефолт (Sonnet).
 - `CLAUDE_OAUTH_CLIENT_ID` — default official Claude Code ID
-- `OPENROUTER_API_KEY`, `OPENROUTER_MODEL` (default `google/gemini-2.5-pro`), `OPENROUTER_TIMEOUT` (default 300s)
+- `OPENROUTER_API_KEY`, `OPENROUTER_MODEL` (default `google/gemini-4-argon` — аудио/vision; до 2026-11 был `google/gemini-2.5-pro`, в 3-10× медленнее), `OPENROUTER_TIMEOUT` (default 300s)
 
 ### Bitrix24
 - `BITRIX_CLIENT_ID`, `BITRIX_CLIENT_SECRET`, `BITRIX_DOMAIN`, `BITRIX_REFRESH_TOKEN` (используется только когда `data/bitrix_tokens.json` нет)
@@ -643,7 +644,7 @@ schema_version (version INTEGER NOT NULL)
 - **Prompts in `prompts/`** — добавил `.md` → `load_prompt(name)`. Placeholders типа `{data_json}` / `{dc_context}` подставляет caller через `.replace()`. `load_prompt` с точкой в имени пробует только точный путь (fallback на .md/.txt не работает).
 - **`allowed_tools`** — только `WebSearch`/`WebFetch` (на OpenRouter = web-плагин, платный ~$0.01/поиск + ~10k токенов результатов в prompt; на legacy CLI = whitelist `--tools`). НИКОГДА Bash/Read/Write/Edit — на CLI это RCE.
 - **CLI cwd=/tmp** (legacy) — иначе Claude CLI подхватит project CLAUDE.md как system context.
-- **Haiku для дешёвых классификаторов** — передавать **явно** `model="claude-haiku-4-5-20251001"` (AIClient маппит на `OPENROUTER_HAIKU_MODEL`; на legacy CLI это полный ID, alias `haiku` может не разрешиться). `complete_text()` у OpenRouterClient принимает OpenRouter-ID `anthropic/claude-haiku-4.5`. Без явного `model=` уйдёт `OPENROUTER_TEXT_MODEL` (Sonnet 5).
+- **Haiku для дешёвых классификаторов** — передавать **явно** `model="claude-haiku-4-5-20251001"` (AIClient маппит на `OPENROUTER_HAIKU_MODEL`; на legacy CLI это полный ID, alias `haiku` может не разрешиться). `complete_text()` у OpenRouterClient принимает OpenRouter-ID — брать `settings.openrouter_haiku_model`, не хардкодить. Без явного `model=` уйдёт `OPENROUTER_TEXT_MODEL` (Sonnet 5).
 - **Bitrix stage filtering** — для лидов `STATUS_SEMANTIC_ID` (`S`/`F`/null). Для сделок — `CATEGORY_ID` (whitelist воронок) + опц. NAME pattern на стадиях. `CLOSED=N` недостаточно — есть кастомные «парковочные» стадии с семантикой `P` но фактически не активные. **Для WON — `STAGE_SEMANTIC_ID=S`, а не суффикс `STAGE_ID`.**
 - **N+1 в API** — для `crm.stagehistory.list` и подобных нет фильтра по user, нужен N+1 fetch по `OWNER_ID=deal_id`. Параллелить через `asyncio.Semaphore(5)`.
 - **callback_data — 64 БАЙТА**, не символа. Кириллица = 2 байта/символ.

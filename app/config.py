@@ -8,8 +8,10 @@ class Settings(BaseSettings):
     bot_token: SecretStr
 
     openrouter_api_key: SecretStr = SecretStr("")
-    # Text/audio model for OpenRouter (used for voice transcription, etc.)
-    openrouter_model: str = "google/gemini-2.5-pro"
+    # Аудио/vision-модель OpenRouter: транскрипция voice и mp3 (диаризация), OCR визиток.
+    # 2026-11: gemini-4-argon — в 3-10× быстрее gemini-2.5-pro при той же/лучшей точности
+    # (сравнение на русских сэмплах, 2 спикера распознаны верно). Дешевле — gemini-3.8-flash.
+    openrouter_model: str = "google/gemini-4-argon"
     # HTTP timeout for OpenRouter calls. Long voice transcriptions may need
     # > 120s — crank this up if Gemini truncates replies on big audio files.
     openrouter_timeout: float = 300.0
@@ -68,14 +70,20 @@ class Settings(BaseSettings):
     #   автоматизации 2026-11-04 («organization has disabled subscription access»).
     ai_backend: str = "openrouter"
     # OpenRouter-модель для дефолтных вызовов AIClient (в CLI-эпоху дефолт был Opus 4.8
-    # по подписке; на токенах Opus в 2.5× дороже Sonnet). Sonnet 5: $2/M in, $10/M out.
-    openrouter_text_model: str = "anthropic/claude-sonnet-5"
+    # по подписке; на токенах Opus в 2-2.5× дороже Sonnet). Sonnet 5.5: $2/M in, $10/M out,
+    # на саммари чата судья (Opus 5.5) предпочёл её Sonnet 5 (8 vs 6), в 2× быстрее.
+    openrouter_text_model: str = "anthropic/claude-sonnet-5.5"
     # Куда маппятся явные `model="claude-haiku-4-5-20251001"` у классификаторов.
-    openrouter_haiku_model: str = "anthropic/claude-haiku-4.5"
+    # Haiku 5.5: $0.1/$0.5 за M — в 9× дешевле Haiku 4.5, на rejection-кейсах 16/16 у обеих.
+    openrouter_haiku_model: str = "anthropic/claude-haiku-5.5"
     # Web-плагин OpenRouter для вызовов с allowed_tools=WebSearch/WebFetch (Штирлиц,
     # recon-скрипты): поиск провайдера, ~$0.01/поиск. False → prompt-only, как раньше.
     openrouter_web_search: bool = True
     openrouter_max_tokens: int = 16384
+    # Генерация картинок (лягушка, плакат, «Картинка»). nano-banana-2.1 (2026-10): ~$0.04/картинка
+    # против ~$0.14 у gemini-3-pro-image-preview, русский текст на плакате без ошибок; preview
+    # на стиле «советский плакат» дважды вернул текст вместо картинки.
+    openrouter_image_model: str = "google/gemini-nano-banana-2.1"
 
     # Claude CLI (legacy backend)
     claude_cli_path: str = "claude"

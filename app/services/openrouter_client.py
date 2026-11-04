@@ -190,10 +190,13 @@ class OpenRouterClient:
             )
         return text
 
-    async def generate_image(self, prompt: str, image_b64: str | None = None) -> bytes:
+    async def generate_image(
+        self, prompt: str, image_b64: str | None = None, *, model: str | None = None,
+    ) -> bytes:
         """Generate an image via Gemini through OpenRouter. Returns raw PNG bytes.
 
         If image_b64 is provided, sends it alongside the prompt (edit/transform mode).
+        `model` — override settings.openrouter_image_model for this call.
         """
         if image_b64:
             content = [
@@ -204,7 +207,7 @@ class OpenRouterClient:
             content = prompt
 
         payload = {
-            "model": "google/gemini-3-pro-image-preview",
+            "model": model or settings.openrouter_image_model,
             "messages": [{"role": "user", "content": content}],
             "modalities": ["image", "text"],
             "usage": {"include": True},
